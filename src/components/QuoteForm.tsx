@@ -1113,7 +1113,7 @@ export default function QuoteForm() {
                         />
                       </div>
                     </div>
-                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1">
+                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
                       <input
                         type="number"
                         className="w-full text-center outline-none bg-transparent"
@@ -1122,7 +1122,7 @@ export default function QuoteForm() {
                         min="1"
                       />
                     </div>
-                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1">
+                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
                       <input
                         type="text"
                         className="w-full text-center outline-none bg-transparent"
@@ -1130,9 +1130,9 @@ export default function QuoteForm() {
                         onChange={e => updateItem(index, 'unit', e.target.value)}
                       />
                     </div>
-                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-start pt-1 font-mono ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
                       <div className="flex justify-between items-center w-full whitespace-nowrap">
-                        <span className="text-sm mr-1">SAR</span>
+                        <span>SAR</span>
                         <input
                           type="number"
                           className="w-full text-right outline-none bg-transparent"
@@ -1143,9 +1143,9 @@ export default function QuoteForm() {
                         />
                       </div>
                     </div>
-                    <div className={`px-2 py-0.5 font-mono font-medium h-full flex items-start pt-1 ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                    <div className={`px-2 py-0.5 font-mono font-medium h-full flex items-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
                       <div className="flex justify-between items-center w-full whitespace-nowrap">
-                        <span className="text-sm mr-1">SAR</span>
+                        <span>SAR</span>
                         <span>{item.net_price.toFixed(2)}</span>
                       </div>
                     </div>
