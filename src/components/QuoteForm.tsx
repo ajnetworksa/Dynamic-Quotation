@@ -86,7 +86,7 @@ export default function QuoteForm() {
   const [duration, setDuration] = useState('1-2 Working Days');
   const [durationAr, setDurationAr] = useState('أيام عمل 2-1');
   const [bankDetails, setBankDetails] = useState('ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
-  const [bankDetailsAr, setBankDetailsAr] = useState('');
+  const [bankDetailsAr, setBankDetailsAr] = useState('بنك الإنماء - الحساب: 68206662020000\nالأيبان: SA0305000068206662020000 عبدالمحسن\nعبدالعزيز الجبر للتجارة');
   const [footer, setFooter] = useState('Thank you for your business!');
   const [footerAr, setFooterAr] = useState('شكرا لتعاملكم معنا!');
 
@@ -263,7 +263,7 @@ export default function QuoteForm() {
       setDuration(data.duration || '1-2 Working Days');
       setDurationAr(data.duration_ar || 'أيام عمل 2-1');
       setBankDetails(data.bank_details || 'ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
-      setBankDetailsAr(data.bank_details_ar || '');
+      setBankDetailsAr(data.bank_details_ar || 'بنك الإنماء - الحساب: 68206662020000\nالأيبان: SA0305000068206662020000 عبدالمحسن\nعبدالعزيز الجبر للتجارة');
       setFooter(data.footer || 'Thank you for your business!');
       setFooterAr(data.footer_ar || 'شكرا لتعاملكم معنا!');
 
@@ -1290,36 +1290,38 @@ export default function QuoteForm() {
                 {showCustomField && customFields.length > 0 ? (
                   <div className="flex flex-col gap-2 mt-2">
                     {customFields.map((cf, index) => (
-                      <div key={cf.id} className="flex flex-col md:flex-row gap-2 md:items-start group relative">
-                        <span className="font-bold w-32 shrink-0 mt-1 bg-gray-200 px-2 py-1 flex items-center print:bg-transparent">
+                      <div key={cf.id} className="flex flex-col md:flex-row gap-2 group relative">
+                        <span className="font-bold w-32 shrink-0">
                           <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={cf.header} onChange={(e) => updateCustomField(index, 'header', e.target.value)} />
                         </span>
-                        <textarea
-                          className="flex-1 outline-none bg-transparent resize-none overflow-hidden"
-                          value={cf.value}
-                          onChange={e => updateCustomField(index, 'value', e.target.value)}
-                          onBlur={() => {
-                            if (!cf.value) return;
-                            fetch('/api/translate', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ text: cf.value })
-                            }).then(r => r.json()).then(d => {
-                              if (d.translation) updateCustomField(index, 'valueAr', d.translation);
-                            });
-                          }}
-                          rows={cf.value.split('\n').length || 2}
-                          placeholder="Enter custom details..."
-                        />
-                        <textarea
-                          dir="rtl"
-                          className="flex-1 outline-none bg-transparent resize-none overflow-hidden text-right"
-                          value={cf.valueAr}
-                          onChange={e => updateCustomField(index, 'valueAr', e.target.value)}
-                          rows={cf.valueAr.split('\n').length || 2}
-                          placeholder="التفاصيل المخصصة..."
-                        />
-                        <div className="print:hidden flex items-center gap-1 mx-1 mt-1 shrink-0">
+                        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <textarea
+                            className="w-full outline-none bg-transparent resize-none overflow-hidden"
+                            value={cf.value}
+                            onChange={e => updateCustomField(index, 'value', e.target.value)}
+                            onBlur={() => {
+                              if (!cf.value) return;
+                              fetch('/api/translate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ text: cf.value })
+                              }).then(r => r.json()).then(d => {
+                                if (d.translation) updateCustomField(index, 'valueAr', d.translation);
+                              });
+                            }}
+                            rows={cf.value.split('\n').length || 2}
+                            placeholder="Enter custom details..."
+                          />
+                          <textarea
+                            dir="rtl"
+                            className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
+                            value={cf.valueAr}
+                            onChange={e => updateCustomField(index, 'valueAr', e.target.value)}
+                            rows={cf.valueAr.split('\n').length || 2}
+                            placeholder="التفاصيل المخصصة..."
+                          />
+                        </div>
+                        <div className="print:hidden flex items-center gap-1 mx-1 mt-1 shrink-0 absolute right-[-30px] top-0 md:static">
                           <button onClick={() => removeCustomField(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Field">
                             <Trash2 size={16} />
                           </button>
