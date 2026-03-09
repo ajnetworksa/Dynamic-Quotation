@@ -25,6 +25,7 @@ interface Product {
 interface QuoteItem {
   id: string;
   product_id?: number;
+  original_price?: number; // DB price at the time of product selection
   description: string;
   description_ar?: string;
   qty: number;
@@ -359,6 +360,7 @@ export default function QuoteForm() {
         newItems[index] = {
           ...newItems[index],
           product_id: product.id,
+          original_price: product.unit_price,
           description: product.description,
           description_ar: product.description_ar || '',
           unit: product.unit,
@@ -707,9 +709,20 @@ export default function QuoteForm() {
       });
 
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
 
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
+        heightLeft -= pageHeight;
+      }
 
       const pdfBlob = pdf.output('blob');
       const url = URL.createObjectURL(pdfBlob);
@@ -935,7 +948,7 @@ export default function QuoteForm() {
             <div className="bg-gray-100 px-4 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
               CUSTOMER INFO
             </div>
-            <div className="p-4 grid grid-cols-[100px_1fr_100px_1fr] gap-y-2 text-sm items-center">
+            <div className="p-4 grid grid-cols-[100px_1fr_100px_1fr] gap-y-2 text-base items-center">
               <span className="font-bold flex items-center">Customer:</span>
               <div className="relative w-full z-50 flex items-center">
                 <input
@@ -1021,27 +1034,33 @@ export default function QuoteForm() {
             <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
               <div className={`min-w-[900px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
                 <div
-                  className="grid grid-cols-[50px_1fr_80px_80px_100px_120px_40px] border-b-2 font-bold text-sm text-center print:grid-cols-[50px_1fr_80px_80px_100px_120px]"
+                  className="grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
                   style={{ backgroundColor: '#dcfce7', borderColor: '#1f2937' }}
                 >
-                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">ITEM</div>
+                  <div className="pt-0 pb-4 px-1 border-r border-gray-800 h-full">ITEM</div>
                   <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">
                     DESCRIPTION
                   </div>
-                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">QTY</div>
-                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">UNIT</div>
+                  <div className="pt-0 pb-4 px-1 border-r border-gray-800 h-full">QTY</div>
+                  <div className="pt-0 pb-4 px-1 border-r border-gray-800 h-full">UNIT</div>
                   <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
                   <div className="pt-0 pb-4 px-2 h-full">NET PRICE</div>
-                  <div className="pt-0 pb-4 px-2 print:hidden"></div>
+                  <div className="pt-0 pb-4 px-1 print:hidden"></div>
                 </div>
 
                 {items.map((item, index) => (
-                  <div key={item.id} className={`grid grid-cols-[50px_1fr_80px_80px_100px_120px_40px] border-b border-gray-300 last:border-b-0 text-sm items-start group print:grid-cols-[50px_1fr_80px_80px_100px_120px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}>
-                    <div className="p-2 text-center border-r border-gray-300 h-full flex items-center justify-center">{index + 1}</div>
+                  <div key={item.id} className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}>
+                    <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
+                      {index + 1}
+                      {/* Price warning badge — UI only, hidden in PDF */}
+                      {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
+                        <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
+                      )}
+                    </div>
                     <div className="p-0 border-r border-gray-300 h-full flex relative group bg-white print:bg-transparent">
-                      <div className="p-2 w-1/2 flex flex-col relative">
+                      <div className="px-2 py-0.5 w-1/2 flex flex-col relative">
                         <textarea
-                          className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
+                          className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[24px] relative z-0"
                           value={item.description}
                           placeholder="Type to search product or enter custom description..."
                           onChange={e => updateItem(index, 'description', e.target.value)}
@@ -1063,7 +1082,6 @@ export default function QuoteForm() {
                                   onClick={() => {
                                     handleProductSelect(index, p.id.toString());
                                     setFocusedDescriptionIndex(null);
-                                    // Force auto-translate since we picked a known product without an arabic description yet
                                     handleProductAutoTranslate(index, p.description, '');
                                   }}
                                 >
@@ -1083,19 +1101,19 @@ export default function QuoteForm() {
                           {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
                         </select>
                       </div>
-                      <div className="w-px bg-gray-200 print:hidden shrink-0 my-2"></div>
-                      <div className="p-2 w-1/2 flex flex-col">
-                        <input
-                          type="text"
+                      <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
+                      <div className="px-2 py-0.5 w-1/2 flex flex-col">
+                        <textarea
                           dir="rtl"
-                          className="w-full outline-none bg-transparent text-right h-full"
+                          className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
                           value={item.description_ar || ''}
                           onChange={e => updateItem(index, 'description_ar', e.target.value)}
                           placeholder="الوصف بالعربية..."
+                          rows={(item.description_ar || '').split('\n').length || 1}
                         />
                       </div>
                     </div>
-                    <div className="p-2 border-r border-gray-300 h-full flex items-center">
+                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1">
                       <input
                         type="number"
                         className="w-full text-center outline-none bg-transparent"
@@ -1104,7 +1122,7 @@ export default function QuoteForm() {
                         min="1"
                       />
                     </div>
-                    <div className="p-2 border-r border-gray-300 h-full flex items-center">
+                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1">
                       <input
                         type="text"
                         className="w-full text-center outline-none bg-transparent"
@@ -1112,12 +1130,12 @@ export default function QuoteForm() {
                         onChange={e => updateItem(index, 'unit', e.target.value)}
                       />
                     </div>
-                    <div className="p-2 border-r border-gray-300 h-full flex items-center font-mono">
-                      <div className="flex justify-between items-center w-full">
-                        <span>SAR</span>
+                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-start pt-1 font-mono ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                      <div className="flex justify-between items-center w-full whitespace-nowrap">
+                        <span className="text-sm mr-1">SAR</span>
                         <input
                           type="number"
-                          className="w-full text-right outline-none bg-transparent ml-1"
+                          className="w-full text-right outline-none bg-transparent"
                           value={item.unit_price || ''}
                           onChange={e => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
                           min="0"
@@ -1125,21 +1143,21 @@ export default function QuoteForm() {
                         />
                       </div>
                     </div>
-                    <div className="p-2 font-mono font-medium h-full flex items-center">
-                      <div className="flex justify-between items-center w-full">
-                        <span>SAR</span>
+                    <div className={`px-2 py-0.5 font-mono font-medium h-full flex items-start pt-1 ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                      <div className="flex justify-between items-center w-full whitespace-nowrap">
+                        <span className="text-sm mr-1">SAR</span>
                         <span>{item.net_price.toFixed(2)}</span>
                       </div>
                     </div>
-                    <div className="p-2 text-center print:hidden flex flex-col items-center justify-center gap-2 h-full">
+                    <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
                       <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                        <ArrowUp size={14} />
+                        <ArrowUp size={12} />
                       </button>
                       <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                        <Trash2 size={16} />
+                        <Trash2 size={14} />
                       </button>
                       <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                        <ArrowDown size={14} />
+                        <ArrowDown size={12} />
                       </button>
                     </div>
                   </div>
@@ -1355,14 +1373,14 @@ export default function QuoteForm() {
 
             </div>
             <div className="w-full md:w-64 border-2 border-gray-800 shrink-0 h-fit">
-              <div className="grid grid-cols-2 border-b border-gray-300 p-2 text-sm">
+              <div className="grid grid-cols-2 border-b border-gray-300 p-2 text-base">
                 <div className="font-bold">SUBTOTAL</div>
                 <div className="flex justify-between items-center font-mono">
                   <span>SAR</span>
                   <span>{subtotal.toFixed(2)}</span>
                 </div>
               </div>
-              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-sm items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
+              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
                 <div className="font-bold flex items-center whitespace-nowrap">DISCOUNT <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span></div>
                 <div className="flex justify-between items-center font-mono">
                   <span>SAR</span>
@@ -1377,7 +1395,7 @@ export default function QuoteForm() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-sm items-center hover:bg-gray-50 transition-colors group">
+              <div className="grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-base items-center hover:bg-gray-50 transition-colors group">
                 <div className="font-bold flex items-center whitespace-nowrap">
                   VAT
                   <input
@@ -1394,9 +1412,9 @@ export default function QuoteForm() {
                   <span>{tax.toFixed(2)}</span>
                 </div>
               </div>
-              <div className="grid grid-cols-2 p-2 text-sm bg-green-100">
+              <div className="grid grid-cols-2 p-2 text-base bg-green-100">
                 <div className="font-bold">TOTAL PACKAGE</div>
-                <div className="flex justify-between items-center font-mono font-bold text-base text-green-800">
+                <div className="flex justify-between items-center font-mono font-bold text-lg text-green-800">
                   <span>SAR</span>
                   <span>{grandTotal.toFixed(2)}</span>
                 </div>
