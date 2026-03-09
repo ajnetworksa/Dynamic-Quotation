@@ -1,0 +1,1449 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
+import * as XLSX from 'xlsx-js-style';
+
+interface Customer {
+  id: number;
+  name: string;
+  address: string;
+  contact: string;
+  mobile: string;
+  email: string;
+}
+
+interface Product {
+  id: number;
+  description: string;
+  description_ar?: string;
+  unit: string;
+  unit_price: number;
+}
+
+interface QuoteItem {
+  id: string;
+  product_id?: number;
+  description: string;
+  description_ar?: string;
+  qty: number;
+  unit: string;
+  unit_price: number;
+  net_price: number;
+}
+
+interface CustomField {
+  id: string;
+  header: string;
+  value: string;
+  valueAr: string;
+}
+
+export default function QuoteForm() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const recallQuoteId = searchParams.get('recall');
+  const printRef = useRef<HTMLDivElement>(null);
+
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [footerImageUrl, setFooterImageUrl] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
+  const [logoSize, setLogoSize] = useState<number>(24);
+
+
+
+  const [quoteId, setQuoteId] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | ''>('');
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerFocused, setCustomerFocused] = useState(false);
+  const [focusedDescriptionIndex, setFocusedDescriptionIndex] = useState<number | null>(null);
+
+  const [subject, setSubject] = useState('');
+  const [subjectAr, setSubjectAr] = useState('');
+  const [items, setItems] = useState<QuoteItem[]>([]);
+  const [discount, setDiscount] = useState(0);
+  const [status, setStatus] = useState('Draft');
+  const [type, setType] = useState('Quotation');
+  const [vatRate, setVatRate] = useState(15);
+
+  const [noteHeader, setNoteHeader] = useState('NOTE:');
+  const [note, setNote] = useState('Any additional work|device will be considered Change Order\nInternet source is provided by the OWNER');
+  const [noteAr, setNoteAr] = useState('سيتم اعتبار أي عمل إضافي | جهاز بمثابة أمر تغيير\nيتم توفير مصدر الإنترنت من قبل المالك');
+  const [lastNoteTrigger, setLastNoteTrigger] = useState(note); // for debounced translation
+  const [payment, setPayment] = useState('Full Payment in ADVANCE');
+  const [paymentAr, setPaymentAr] = useState('الدفع الكامل مقدما');
+  const [warranty, setWarranty] = useState("2 YEARS limited warranty and/or supplier's recommendation");
+  const [warrantyAr, setWarrantyAr] = useState('ضمان محدود لمدة عامين و/أو توصية المورد');
+  const [manpower, setManpower] = useState('2 Technicians, 1 Supervisor');
+  const [manpowerAr, setManpowerAr] = useState('فنيين، 1 مشرف 2');
+  const [mobilization, setMobilization] = useState('3-4 days upon confirmation of payment');
+  const [mobilizationAr, setMobilizationAr] = useState('أيام بعد تأكيد الدفع 4-3');
+  const [duration, setDuration] = useState('1-2 Working Days');
+  const [durationAr, setDurationAr] = useState('أيام عمل 2-1');
+  const [bankDetails, setBankDetails] = useState('ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
+  const [bankDetailsAr, setBankDetailsAr] = useState('');
+  const [footer, setFooter] = useState('Thank you for your business!');
+  const [footerAr, setFooterAr] = useState('شكرا لتعاملكم معنا!');
+
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+
+  const addCustomField = () => {
+    setCustomFields([...customFields, { id: crypto.randomUUID(), header: 'CUSTOM FIELD:', value: '', valueAr: '' }]);
+    setShowCustomField(true);
+  };
+
+  const updateCustomField = (index: number, field: keyof CustomField, val: string) => {
+    const newFields = [...customFields];
+    newFields[index] = { ...newFields[index], [field]: val };
+    setCustomFields(newFields);
+  };
+
+  const removeCustomField = (index: number) => {
+    const newFields = customFields.filter((_, i) => i !== index);
+    setCustomFields(newFields);
+    if (newFields.length === 0) setShowCustomField(false);
+  };
+
+  // Visibility Toggles
+  const [showNote, setShowNote] = useState(true);
+  const [showPayment, setShowPayment] = useState(true);
+  const [showWarranty, setShowWarranty] = useState(true);
+  const [showManpower, setShowManpower] = useState(true);
+  const [showMobilization, setShowMobilization] = useState(true);
+  const [showDuration, setShowDuration] = useState(true);
+  const [showBankDetails, setShowBankDetails] = useState(true);
+  const [showCustomField, setShowCustomField] = useState(false);
+
+  useEffect(() => {
+    const init = async () => {
+      const dbCustomers = await fetchCustomers();
+      fetchProducts();
+      fetchLogo();
+      if (recallQuoteId) {
+        fetchQuote(recallQuoteId, dbCustomers);
+      } else if (!quoteId) {
+        // Only generate ID and reset items if we haven't already started a quote
+        // This prevents wiping out the form data when switching tabs (which triggers a re-render/re-mount)
+        generateQuoteId();
+        setItems([{ id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+      }
+    };
+    init();
+  }, [recallQuoteId]);
+
+  const fetchCustomers = async () => {
+    const res = await fetch('/api/customers');
+    const data = await res.json();
+    setCustomers(data);
+    return data;
+  };
+
+  const fetchProducts = async () => {
+    const res = await fetch('/api/products');
+    setProducts(await res.json());
+  };
+
+  const fetchLogo = async () => {
+    try {
+      const res = await fetch('/api/settings/logo');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.value) setLogoUrl(data.value);
+      }
+      const resSize = await fetch('/api/settings/logoSize');
+      if (resSize.ok) {
+        const dataSize = await resSize.json();
+        if (dataSize.value) setLogoSize(parseInt(dataSize.value, 10));
+      }
+
+      const resFooter = await fetch('/api/settings/footerImage');
+      if (resFooter.ok) {
+        const dataFooter = await resFooter.json();
+        if (dataFooter.value) setFooterImageUrl(dataFooter.value);
+      }
+
+
+    } catch (e) {
+      console.error('Failed to fetch logo settings', e);
+    }
+  };
+
+  const handleAutoTranslate = async (text: string, currentAr: string, setterAr: (val: string) => void) => {
+    if (!text) return; // Allow re-translating if there is text
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.translation) setterAr(data.translation);
+      }
+    } catch (e) {
+      console.error('Translation failed', e);
+    }
+  };
+
+  const handleProductAutoTranslate = async (index: number, text: string, currentAr: string) => {
+    if (!text) return; // Allow re-translating
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.translation) updateItem(index, 'description_ar', data.translation);
+      }
+    } catch (e) {
+      console.error('Translation failed', e);
+    }
+  };
+
+  // Auto-translate Debounced Effect for Notes
+  useEffect(() => {
+    if (note === lastNoteTrigger) return;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: note })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.translation) setNoteAr(data.translation);
+          setLastNoteTrigger(note);
+        }
+      } catch (e) {
+        console.error('Notes translation failed', e);
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [note, lastNoteTrigger]);
+
+  const fetchQuote = async (id: string, customersList: Customer[] = customers) => {
+    const res = await fetch(`/api/quotes/${id}`);
+    if (res.ok) {
+      const data = await res.json();
+      setQuoteId(data.quote_id);
+      setDate(data.date);
+      setSelectedCustomerId(data.customer_id || '');
+      // Update search field if customer found
+      const c = customersList.find(cust => cust.id === data.customer_id);
+      if (c) {
+        setSelectedCustomer(c);
+        setCustomerSearch(c.name);
+      }
+      setSubject(data.subject || '');
+      setSubjectAr(data.subject_ar || '');
+      setNoteHeader(data.note_header || 'NOTE:');
+      setNoteHeader(data.note_header || 'NOTE:');
+      setNote(data.note || 'Any additional work|device will be considered Change Order\nInternet source is provided by the OWNER');
+      setNoteAr(data.note_ar || 'سيتم اعتبار أي عمل إضافي | جهاز بمثابة أمر تغيير\nيتم توفير مصدر الإنترنت من قبل المالك');
+      setDiscount(data.discount || 0);
+      setStatus(data.status || 'Draft');
+      setType(data.type || 'Quotation');
+      setVatRate(data.vat_rate !== undefined ? data.vat_rate : 15);
+      setPayment(data.payment || 'Full Payment in ADVANCE');
+      setPaymentAr(data.payment_ar || 'الدفع الكامل مقدما');
+      setWarranty(data.warranty || "2 YEARS limited warranty and/or supplier's recommendation");
+      setWarrantyAr(data.warranty_ar || 'ضمان محدود لمدة عامين و/أو توصية المورد');
+      setManpower(data.manpower || '2 Technicians, 1 Supervisor');
+      setManpowerAr(data.manpower_ar || 'فنيين، 1 مشرف 2');
+      setMobilization(data.mobilization || '3-4 days upon confirmation of payment');
+      setMobilizationAr(data.mobilization_ar || 'أيام بعد تأكيد الدفع 4-3');
+      setDuration(data.duration || '1-2 Working Days');
+      setDurationAr(data.duration_ar || 'أيام عمل 2-1');
+      setBankDetails(data.bank_details || 'ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
+      setBankDetailsAr(data.bank_details_ar || '');
+      setFooter(data.footer || 'Thank you for your business!');
+      setFooterAr(data.footer_ar || 'شكرا لتعاملكم معنا!');
+
+      let parsedCustomFields: CustomField[] = [];
+      if (data.custom_field) {
+        try {
+          const parsed = JSON.parse(data.custom_field);
+          if (Array.isArray(parsed)) {
+            parsedCustomFields = parsed;
+          } else {
+            parsedCustomFields = [{
+              id: crypto.randomUUID(),
+              header: data.custom_field_header || 'CUSTOM FIELD:',
+              value: data.custom_field || '',
+              valueAr: data.custom_field_ar || ''
+            }];
+          }
+        } catch (e) {
+          parsedCustomFields = [{
+            id: crypto.randomUUID(),
+            header: data.custom_field_header || 'CUSTOM FIELD:',
+            value: data.custom_field || '',
+            valueAr: data.custom_field_ar || ''
+          }];
+        }
+      }
+      setCustomFields(parsedCustomFields);
+      setShowCustomField(parsedCustomFields.length > 0);
+
+      setItems(data.items.map((item: any) => ({
+        ...item,
+        id: crypto.randomUUID()
+      })));
+    }
+  };
+
+  const generateQuoteId = async () => {
+    try {
+      const res = await fetch('/api/quotes/next-id');
+      if (res.ok) {
+        const data = await res.json();
+        setQuoteId(data.nextId);
+      } else {
+        // Fallback
+        const randomNum = Math.floor(10000 + Math.random() * 90000);
+        setQuoteId(`AJ-${randomNum}`);
+      }
+    } catch (e) {
+      const randomNum = Math.floor(10000 + Math.random() * 90000);
+      setQuoteId(`AJ-${randomNum}`);
+    }
+  };
+
+  const clearForm = () => {
+    if (!confirm('Quote Form will be cleaned up. Do you confirm?')) return;
+    generateQuoteId();
+    setSearchParams({});
+    setDate(new Date().toISOString().split('T')[0]);
+    setSelectedCustomerId('');
+    setSelectedCustomer(null);
+    setCustomerSearch('');
+    setSubject('');
+    setSubjectAr('');
+    setNoteHeader('NOTE:');
+    setDiscount(0);
+    setStatus('Draft');
+    setType('Quotation');
+    setVatRate(15);
+    setNote('Any additional work|device will be considered Change Order\nInternet source is provided by the OWNER');
+    setNoteAr('سيتم اعتبار أي عمل إضافي | جهاز بمثابة أمر تغيير\nيتم توفير مصدر الإنترنت من قبل المالك');
+    setPayment('Full Payment in ADVANCE');
+    setPaymentAr('الدفع الكامل مقدما');
+    setWarranty("2 YEARS limited warranty and/or supplier's recommendation");
+    setWarrantyAr('ضمان محدود لمدة عامين و/أو توصية المورد');
+    setManpower('2 Technicians, 1 Supervisor');
+    setManpowerAr('فنيين، 1 مشرف 2');
+    setMobilization('3-4 days upon confirmation of payment');
+    setMobilizationAr('أيام بعد تأكيد الدفع 4-3');
+    setDuration('1-2 Working Days');
+    setDurationAr('أيام عمل 2-1');
+    setBankDetails('ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
+    setBankDetailsAr('');
+    setFooter('Thank you for your business!');
+    setFooterAr('شكرا لتعاملكم معنا!');
+    setItems([{ id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+  };
+
+  const handleProductSelect = (index: number, productId: string) => {
+    const product = products.find(p => p.id === parseInt(productId));
+    if (product) {
+      setItems(prevItems => {
+        const newItems = [...prevItems];
+        newItems[index] = {
+          ...newItems[index],
+          product_id: product.id,
+          description: product.description,
+          description_ar: product.description_ar || '',
+          unit: product.unit,
+          unit_price: product.unit_price,
+          net_price: newItems[index].qty * product.unit_price
+        };
+        return newItems;
+      });
+      // Force auto-translate since we picked a known product without an arabic description yet
+      handleProductAutoTranslate(index, product.description, product.description_ar || '');
+    }
+  };
+
+  const updateItem = (index: number, field: keyof QuoteItem, value: any) => {
+    setItems(prevItems => {
+      const newItems = [...prevItems];
+      newItems[index] = { ...newItems[index], [field]: value };
+
+      if (field === 'qty' || field === 'unit_price') {
+        newItems[index].net_price = newItems[index].qty * newItems[index].unit_price;
+      }
+      return newItems;
+    });
+  };
+
+  const addItem = () => {
+    setItems([...items, { id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+  };
+
+  const removeItem = (index: number) => {
+    if (!window.confirm('Are you sure you want to remove this item?')) return;
+    const newItems = items.filter((_, i) => i !== index);
+    setItems(newItems.length ? newItems : [{ id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+  };
+
+  const moveItemUp = (index: number) => {
+    if (index === 0) return;
+    setItems(prevItems => {
+      const newItems = [...prevItems];
+      const temp = newItems[index - 1];
+      newItems[index - 1] = newItems[index];
+      newItems[index] = temp;
+      return newItems;
+    });
+  };
+
+  const moveItemDown = (index: number) => {
+    if (index === items.length - 1) return;
+    setItems(prevItems => {
+      const newItems = [...prevItems];
+      const temp = newItems[index + 1];
+      newItems[index + 1] = newItems[index];
+      newItems[index] = temp;
+      return newItems;
+    });
+  };
+
+  const subtotal = items.reduce((sum, item) => sum + (item.net_price || 0), 0);
+  const discountedSubtotal = Math.max(0, subtotal - discount);
+  const tax = discountedSubtotal * (vatRate / 100);
+  const grandTotal = discountedSubtotal + tax;
+
+  const [showOverwriteModal, setShowOverwriteModal] = useState(false);
+
+  const performSave = async () => {
+    const payload = {
+      quote_id: quoteId,
+      date,
+      customer_id: selectedCustomerId,
+      subject,
+      subject_ar: subjectAr,
+      discount,
+      subtotal,
+      tax,
+      grand_total: grandTotal,
+      note_header: noteHeader,
+      note,
+      note_ar: noteAr,
+      payment,
+      payment_ar: paymentAr,
+      warranty,
+      warranty_ar: warrantyAr,
+      manpower,
+      manpower_ar: manpowerAr,
+      mobilization,
+      mobilization_ar: mobilizationAr,
+      duration,
+      duration_ar: durationAr,
+      bank_details: bankDetails,
+      bank_details_ar: bankDetailsAr,
+      footer,
+      footer_ar: footerAr,
+      custom_field_header: '',
+      custom_field: JSON.stringify(customFields),
+      custom_field_ar: '',
+      status,
+      type,
+      vat_rate: vatRate,
+      items: items.filter(item => item.description.trim() !== '')
+    };
+
+    const res = await fetch('/api/quotes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      alert(recallQuoteId === quoteId ? 'Quote updated successfully!' : 'Quote data is recorded to Tracking section!');
+      setShowOverwriteModal(false);
+    } else {
+      const error = await res.json();
+      alert(`Failed to record quote: ${error.error}`);
+    }
+  };
+
+  const recordQuote = async () => {
+    if (!quoteId) return alert('Please enter Quote ID!');
+    if (!date) return alert('Please input date!');
+    if (grandTotal === 0) return alert('Total is zero! Please check.');
+    if (!selectedCustomerId) return alert('Please select a customer.');
+
+    try {
+      // Check if quote ID already exists
+      const checkRes = await fetch(`/api/quotes/${quoteId}`);
+      if (checkRes.ok) {
+        // Quote exists. If we are not explicitly editing this specific quote, warn them.
+        if (recallQuoteId !== quoteId) {
+          setShowOverwriteModal(true);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not check for existing quote', e);
+    }
+
+    await performSave();
+  };
+
+  const handleCreateNewId = async () => {
+    setShowOverwriteModal(false);
+    await generateQuoteId();
+    // Use setTimeout so the new ID state applies before telling user to save again.
+    setTimeout(() => {
+      alert("A new Quote ID has been generated! You can now click Record to save.");
+    }, 100);
+  };
+
+  const handleCreateRevision = () => {
+    // Basic logic to append or increment -R suffix
+    const currentId = quoteId.trim();
+    if (!currentId) return;
+
+    let newId = currentId;
+    const revMatch = currentId.match(/-R(\d+)$/);
+    if (revMatch) {
+      const nextRev = parseInt(revMatch[1], 10) + 1;
+      newId = currentId.replace(/-R\d+$/, `-R${nextRev}`);
+    } else {
+      newId = `${currentId}-R1`;
+    }
+
+    setQuoteId(newId);
+    setStatus('Draft');
+    setType('Quotation');
+    alert(`Revision created as ${newId}. You can now make changes and hit Record.`);
+  };
+
+  const handleConvertToInvoice = () => {
+    setType('Tax Invoice');
+    setStatus('Draft');
+    alert('Document converted to Tax Invoice! Remember to Record the document to save changes.');
+  };
+
+  const handleSendEmail = async () => {
+    if (!recallQuoteId) {
+      alert('You must Record this quote before you can email it.');
+      return;
+    }
+
+    const to = prompt("Enter the recipient's email address:");
+    if (!to) return;
+
+    const body = prompt("Enter a brief message for the email body:");
+    if (body === null) return;
+
+    setIsSending(true);
+    try {
+      const res = await fetch(`/api/quotes/${quoteId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to,
+          subject: `${type} - ${subject || quoteId}`,
+          body: body || 'Please find the attached document.',
+          pdfHtml: '' // For complete system, generate PDF blob and send base64 here
+        })
+      });
+
+      if (res.ok) {
+        setStatus('Sent');
+        alert('Email sent successfully via SMTP!');
+      } else {
+        const error = await res.json();
+        alert(`Failed to send email: ${error.error}`);
+      }
+    } catch (err) {
+      alert('Error connecting to email service.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const handleExportPDF = async () => {
+    if (!printRef.current) return;
+
+    try {
+      // Store original values and styles to use in onclone
+      const originalElements = printRef.current.querySelectorAll('input, textarea, select');
+      const elementData = Array.from(originalElements).map((el: any) => {
+        const computedStyle = window.getComputedStyle(el);
+        // Increase font size for inputs by 25% for the PDF
+        let adjustedFontSize = computedStyle.fontSize;
+        if (adjustedFontSize.endsWith('px')) {
+          const num = parseFloat(adjustedFontSize);
+          if (!isNaN(num)) adjustedFontSize = `${num * 1.25}px`;
+        }
+
+        return {
+          value: el.tagName === 'SELECT' ? el.options[el.selectedIndex]?.text : el.value,
+          textAlign: computedStyle.textAlign,
+          fontFamily: computedStyle.fontFamily,
+          fontSize: adjustedFontSize,
+          fontWeight: computedStyle.fontWeight,
+          color: computedStyle.color,
+          padding: computedStyle.padding,
+        };
+      });
+
+      const canvas = await html2canvas(printRef.current, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        onclone: (clonedDoc) => {
+          const clonedElements = clonedDoc.querySelectorAll('input, textarea, select');
+          clonedElements.forEach((el: any, index) => {
+            const data = elementData[index];
+            if (!data) return;
+
+            const div = clonedDoc.createElement('div');
+            div.innerText = data.value || '';
+            div.className = el.className;
+            div.style.textAlign = data.textAlign;
+            div.style.fontFamily = data.fontFamily;
+            div.style.fontSize = data.fontSize;
+            div.style.fontWeight = data.fontWeight;
+            div.style.color = data.color;
+            div.style.padding = data.padding;
+            div.style.whiteSpace = 'pre-wrap';
+            div.style.wordBreak = 'break-word';
+            div.style.display = 'flex';
+            div.style.alignItems = 'center';
+            if (data.textAlign === 'right') div.style.justifyContent = 'flex-end';
+            if (data.textAlign === 'center') div.style.justifyContent = 'center';
+
+            // For textareas and text inputs, ensure height can expand to avoid layout shifts/cropping
+            if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text')) {
+              div.style.minHeight = el.offsetHeight ? `${el.offsetHeight}px` : (el.style.height || 'auto');
+              div.style.height = 'auto';
+              div.style.overflow = 'visible';
+              div.style.alignItems = el.tagName === 'TEXTAREA' ? 'flex-start' : 'center';
+              div.style.whiteSpace = 'pre-wrap';
+              div.style.wordBreak = 'break-word';
+            }
+
+            // Remove borders and backgrounds for cleaner print
+            div.style.border = 'none';
+            div.style.background = 'transparent';
+
+            el.parentNode?.replaceChild(div, el);
+          });
+
+          // Hide elements that should not be printed
+          const hiddenElements = clonedDoc.querySelectorAll('.print\\:hidden');
+          hiddenElements.forEach((el: any) => {
+            el.style.display = 'none';
+          });
+
+          // Force base font size to prevent shrinking in PDF
+          clonedDoc.body.style.fontSize = '18px';
+          const rootNode = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement;
+          if (rootNode) {
+            rootNode.style.fontSize = '18px';
+          }
+
+          // Show elements that are print-only
+          const printBlockElements = clonedDoc.querySelectorAll('.print\\:block, .print\\:flex');
+          printBlockElements.forEach((el: any) => {
+            el.style.display = el.classList.contains('print:flex') ? 'flex' : 'block';
+          });
+
+          // Apply specific print styles to avoid borders and bg colors in PDF
+          clonedDoc.querySelectorAll('.print\\:border-none').forEach((el: any) => {
+            el.style.border = 'none';
+          });
+          clonedDoc.querySelectorAll('.print\\:bg-transparent').forEach((el: any) => {
+            el.style.backgroundColor = 'transparent';
+          });
+          // Apply print:p-0 only to child elements, NOT the root container (which needs p-8 for side margins)
+          clonedDoc.querySelectorAll('.print\\:p-0').forEach((el: any) => {
+            if (!el.dataset.pdfRoot) el.style.padding = '0';
+          });
+          // Fix table widths and grids that were relying on @media print
+          clonedDoc.querySelectorAll('.min-w-\\[900px\\]').forEach((el: any) => {
+            el.classList.remove('min-w-[900px]');
+            el.style.minWidth = '0';
+          });
+          clonedDoc.querySelectorAll('.print\\:overflow-visible').forEach((el: any) => {
+            el.style.overflow = 'visible';
+          });
+          // Apply the exact grid template for the table to avoid the empty 40px action column
+          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[50px_1fr_80px_80px_100px_120px"]');
+          gridRows.forEach((el: any) => {
+            el.style.gridTemplateColumns = '50px 1fr 80px 80px 100px 120px';
+            el.style.width = '100%';
+          });
+
+          // Set A4 minHeight on root container so footer (mt-auto) is pushed to the page bottom
+          const pdfRoot = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement | null;
+          if (pdfRoot) {
+            const w = pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width;
+            pdfRoot.style.minHeight = `${w * (297 / 210)}px`;
+          }
+        }
+      });
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.8);
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+
+      const pdfBlob = pdf.output('blob');
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Quote_${quoteId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF');
+    }
+  };
+
+  const handleExportExcel = () => {
+    const wb = XLSX.utils.book_new();
+
+    // Create quote info sheet
+    const quoteInfo = [
+      [type.toUpperCase()],
+      ['Quote ID', quoteId],
+      ['Date', date],
+      ['Valid For', '30 Days'],
+      // [''],
+      ['CUSTOMER INFO'],
+      ['Customer', selectedCustomer?.name || ''],
+      ['Mobile', selectedCustomer?.mobile || ''],
+      ['Address', selectedCustomer?.address || ''],
+      ['Contact', selectedCustomer?.contact || ''],
+      ['E-mail', selectedCustomer?.email || ''],
+      ['Subject', subject, subjectAr],
+      ['']
+    ];
+
+    // Create items sheet data
+    const itemsData = [
+      ['ITEM', 'DESCRIPTION', 'DESCRIPTION (ARABIC)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE'],
+      ...items.map((item, index) => [
+        index + 1,
+        item.description,
+        item.description_ar || '',
+        item.qty,
+        item.unit,
+        `SAR ${item.unit_price.toFixed(2)}`,
+        `SAR ${item.net_price.toFixed(2)}`
+      ]),
+      ['', '', '', '', '', 'SUBTOTAL', `SAR ${subtotal.toFixed(2)}`],
+      ['', '', '', '', '', 'DISCOUNT', `SAR ${discount.toFixed(2)}`],
+      ['', '', '', '', '', 'VAT (15%)', `SAR ${tax.toFixed(2)}`],
+      ['', '', '', '', '', 'TOTAL PACKAGE', `SAR ${grandTotal.toFixed(2)}`],
+      [''],
+      ['TERMS & CONDITIONS'],
+      ...(showNote ? [[noteHeader, note, noteAr]] : []),
+      ...(showPayment ? [['PAYMENT', payment, paymentAr]] : []),
+      ...(showWarranty ? [['WARRANTY', warranty, warrantyAr]] : []),
+      ...(showManpower ? [['MANPOWER', manpower, manpowerAr]] : []),
+      ...(showMobilization ? [['MOBILIZATION', mobilization, mobilizationAr]] : []),
+      ...(showDuration ? [['DURATION', duration, durationAr]] : []),
+      ...(showBankDetails ? [['BANK DETAILS', bankDetails, bankDetailsAr]] : []),
+      [''],
+      ['FOOTER', footer, footerAr]
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet([...quoteInfo, ...itemsData]);
+
+    // Improve Excel formatting with column widths
+    ws['!cols'] = [
+      { wch: 15 }, // A: ITEM / INFO Labels
+      { wch: 50 }, // B: DESCRIPTION / INFO Values
+      { wch: 50 }, // C: DESCRIPTION (ARABIC)
+      { wch: 10 }, // D: QTY
+      { wch: 10 }, // E: UNIT
+      { wch: 15 }, // F: UNIT PRICE
+      { wch: 15 }  // G: NET PRICE
+    ];
+
+    // Apply basic borders and styling to all cells
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+      for (let C = range.s.c; C <= range.e.c; ++C) {
+        const cellRef = XLSX.utils.encode_cell({ c: C, r: R });
+        if (!ws[cellRef]) continue;
+
+        let bold = false;
+        if (R === 0 || ws[cellRef].v === 'CUSTOMER INFO' || ws[cellRef].v === 'TERMS & CONDITIONS' || ws[cellRef].v === 'ITEM' || ws[cellRef].v === 'DESCRIPTION') {
+          bold = true;
+        }
+
+        ws[cellRef].s = {
+          border: {
+            top: { style: 'thin', color: { auto: 1 } },
+            bottom: { style: 'thin', color: { auto: 1 } },
+            left: { style: 'thin', color: { auto: 1 } },
+            right: { style: 'thin', color: { auto: 1 } }
+          },
+          font: { name: 'Arial', sz: 10, bold },
+          alignment: { vertical: 'center', wrapText: true }
+        };
+      }
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Quote');
+
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Quote_${quoteId}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Action Bar - Hidden when printing */}
+      <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 print:hidden gap-4">
+        <h2 className="text-xl font-bold text-gray-800 w-full md:w-auto text-center md:text-left">Quote Generator</h2>
+        <div className="flex flex-wrap justify-center md:justify-end gap-2 md:gap-3 w-full md:w-auto">
+          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">
+            <RefreshCw size={18} /> Clear
+          </button>
+          <button onClick={recordQuote} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">
+            <Save size={18} /> Record
+          </button>
+          {recallQuoteId && (
+            <>
+              <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID">
+                Create Revision
+              </button>
+              {type !== 'Tax Invoice' && (
+                <button onClick={handleConvertToInvoice} className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors" title="Switch type to Tax Invoice">
+                  To Invoice
+                </button>
+              )}
+            </>
+          )}
+          <button onClick={handleSendEmail} disabled={isSending} className="flex items-center gap-2 px-4 py-2 text-white bg-sky-500 hover:bg-sky-600 rounded-lg transition-colors disabled:opacity-50">
+            {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />} Email
+          </button>
+          <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors">
+            <Printer size={18} /> Print
+          </button>
+          <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
+            <FileSpreadsheet size={18} /> Export Excel
+          </button>
+          <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
+            <Download size={18} /> Export PDF
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col xl:flex-row gap-6">
+        {/* Printable Quote Form */}
+        <div
+          ref={printRef}
+          data-pdf-root="true"
+          className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 print:shadow-none print:border-none flex-1 transition-all flex flex-col"
+        >
+
+          {/* App Configuration / Status selectors - Print Hidden */}
+          <div className="flex flex-wrap gap-4 mb-6 print:hidden bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <div className="flex flex-col">
+              <label className="text-xs font-bold text-gray-500 uppercase">Document Type</label>
+              <select value={type} onChange={(e) => setType(e.target.value)} className="bg-transparent border-b border-gray-300 outline-none font-medium py-1">
+                <option value="Quotation">Quotation</option>
+                <option value="Tax Invoice">Tax Invoice</option>
+              </select>
+            </div>
+            <div className="flex flex-col">
+              <label className="text-xs font-bold text-gray-500 uppercase">Status</label>
+              <select value={status} onChange={(e) => setStatus(e.target.value)} className="bg-transparent border-b border-gray-300 outline-none font-medium py-1">
+                <option value="Draft">Draft</option>
+                <option value="Sent">Sent</option>
+                <option value="Accepted">Accepted</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Header */}
+          <div className="flex flex-col md:flex-row justify-between items-start pb-6 mb-6">
+            <div className="mb-4 md:mb-0">
+              <h1 className="text-3xl md:text-4xl font-bold text-gray-900 tracking-tight mb-4 uppercase break-words">{type}</h1>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <span className="font-semibold text-gray-700">Quote ID:</span>
+                <input type="text" value={quoteId} onChange={e => setQuoteId(e.target.value)} className="font-mono text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+
+                <span className="font-semibold text-gray-700">Date:</span>
+                <input type="date" value={date} onChange={e => setDate(e.target.value)} className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+
+                <span className="font-semibold text-gray-700">Valid For:</span>
+                <input type="text" defaultValue="30 Days" className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+              </div>
+            </div>
+            <div className="text-right flex flex-col items-end">
+              {logoUrl ? (
+                <img
+                  src={logoUrl}
+                  alt="Company Logo"
+                  className="object-contain mb-2"
+                  style={{ height: `${logoSize * 0.25}rem` }} // Convert tailwind spacing (e.g. h-24 is 6rem)
+                />
+              ) : (
+                <div className="flex-col items-end">
+                  <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-2">
+                    <div className="text-green-600 font-bold text-2xl">AJ</div>
+                  </div>
+                  <h2 className="text-xl font-bold text-gray-900">NETWORK</h2>
+                  <h2 className="text-xl font-bold text-gray-900">SOLUTIONS</h2>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Customer Info */}
+          <div className="border-2 border-gray-800 mb-6">
+            <div className="bg-gray-100 px-4 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
+              CUSTOMER INFO
+            </div>
+            <div className="p-4 grid grid-cols-[100px_1fr_100px_1fr] gap-y-2 text-sm items-center">
+              <span className="font-bold flex items-center">Customer:</span>
+              <div className="relative w-full z-50 flex items-center">
+                <input
+                  type="text"
+                  className="w-full p-1 border border-gray-300 rounded outline-none focus:border-indigo-500 print:appearance-none print:border-none print:bg-transparent"
+                  placeholder="Search or select customer..."
+                  value={customerSearch}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCustomerSearch(val);
+                    const c = customers.find(cust => cust.name.toLowerCase() === val.toLowerCase());
+                    if (c) {
+                      setSelectedCustomerId(c.id);
+                      setSelectedCustomer(c);
+                    } else {
+                      setSelectedCustomerId('');
+                      setSelectedCustomer(null);
+                    }
+                  }}
+                  onFocus={() => setCustomerFocused(true)}
+                  onBlur={() => setTimeout(() => setCustomerFocused(false), 200)}
+                />
+                {customerFocused && customerSearch.length > 0 && (
+                  <div className="absolute top-full mt-1 z-[100] w-full bg-white border border-gray-200 rounded shadow-lg max-h-40 overflow-y-auto print:hidden">
+                    {customers
+                      .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) && c.name.toLowerCase() !== customerSearch.toLowerCase())
+                      .map(c => (
+                        <div
+                          key={c.id}
+                          className="cursor-pointer hover:bg-gray-100 px-3 py-2 text-sm"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            setCustomerSearch(c.name);
+                            setSelectedCustomerId(c.id);
+                            setSelectedCustomer(c);
+                            setCustomerFocused(false);
+                          }}
+                        >
+                          {c.name}
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+
+              <span className="font-bold pl-4 flex items-center">Mobile:</span>
+              <span className="font-mono flex items-center">{selectedCustomer?.mobile || ''}</span>
+
+              <span className="font-bold flex items-center">Address:</span>
+              <span className="col-span-3 flex items-center">{selectedCustomer?.address || ''}</span>
+
+              <span className="font-bold flex items-center">Contact:</span>
+              <span className="flex items-center">{selectedCustomer?.contact || ''}</span>
+
+              <span className="font-bold pl-4 flex items-center">E-mail:</span>
+              <span className="flex items-center">{selectedCustomer?.email || ''}</span>
+
+              <span className="font-bold flex items-center" style={{ marginTop: '24px' }}>Subject:</span>
+              <div className="col-span-3 flex items-center border border-gray-300 rounded focus-within:border-indigo-500 overflow-hidden print:border-none print:p-0 bg-white print:bg-transparent" style={{ marginTop: '24px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  className="flex-1 py-1.5 px-2 outline-none bg-transparent"
+                  value={subject}
+                  onChange={e => setSubject(e.target.value)}
+                  onBlur={() => handleAutoTranslate(subject, subjectAr, setSubjectAr)}
+                  placeholder="e.g., Supply, Installation and Configuration of IP Video Doorbell"
+                />
+                <div className="w-px h-6 bg-gray-200 print:hidden mx-2"></div>
+                <input
+                  type="text"
+                  dir="rtl"
+                  className="flex-1 py-1.5 px-2 outline-none bg-transparent text-right"
+                  value={subjectAr}
+                  onChange={e => setSubjectAr(e.target.value)}
+                  placeholder="توليد وتركيب وتكوين جرس الباب بالفيديو IP"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Items Table */}
+          <div className="border-2 border-gray-800 mb-6" style={{ marginTop: '4px', borderColor: '#1f2937' }}>
+            <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
+              <div className={`min-w-[900px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
+                <div
+                  className="grid grid-cols-[50px_1fr_80px_80px_100px_120px_40px] border-b-2 font-bold text-sm text-center print:grid-cols-[50px_1fr_80px_80px_100px_120px]"
+                  style={{ backgroundColor: '#dcfce7', borderColor: '#1f2937' }}
+                >
+                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">ITEM</div>
+                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">
+                    DESCRIPTION
+                  </div>
+                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">QTY</div>
+                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">UNIT</div>
+                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
+                  <div className="pt-0 pb-4 px-2 h-full">NET PRICE</div>
+                  <div className="pt-0 pb-4 px-2 print:hidden"></div>
+                </div>
+
+                {items.map((item, index) => (
+                  <div key={item.id} className={`grid grid-cols-[50px_1fr_80px_80px_100px_120px_40px] border-b border-gray-300 last:border-b-0 text-sm items-start group print:grid-cols-[50px_1fr_80px_80px_100px_120px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}>
+                    <div className="p-2 text-center border-r border-gray-300 h-full flex items-center justify-center">{index + 1}</div>
+                    <div className="p-0 border-r border-gray-300 h-full flex relative group bg-white print:bg-transparent">
+                      <div className="p-2 w-1/2 flex flex-col relative">
+                        <textarea
+                          className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
+                          value={item.description}
+                          placeholder="Type to search product or enter custom description..."
+                          onChange={e => updateItem(index, 'description', e.target.value)}
+                          onFocus={() => setFocusedDescriptionIndex(index)}
+                          onBlur={() => {
+                            setTimeout(() => setFocusedDescriptionIndex(null), 200);
+                            handleProductAutoTranslate(index, item.description, item.description_ar || '');
+                          }}
+                          rows={item.description.split('\n').length || 1}
+                        />
+                        {focusedDescriptionIndex === index && item.description.length > 1 && (
+                          <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
+                            {products
+                              .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
+                              .map(p => (
+                                <div
+                                  key={p.id}
+                                  className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                  onClick={() => {
+                                    handleProductSelect(index, p.id.toString());
+                                    setFocusedDescriptionIndex(null);
+                                    // Force auto-translate since we picked a known product without an arabic description yet
+                                    handleProductAutoTranslate(index, p.description, '');
+                                  }}
+                                >
+                                  <div className="font-medium">{p.description}</div>
+                                  {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                        <select
+                          className="absolute right-1 top-2 w-6 opacity-0 group-hover:opacity-100 cursor-pointer print:hidden"
+                          onChange={(e) => handleProductSelect(index, e.target.value)}
+                          value=""
+                          title="Select from Product DB"
+                        >
+                          <option value="">+</option>
+                          {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
+                        </select>
+                      </div>
+                      <div className="w-px bg-gray-200 print:hidden shrink-0 my-2"></div>
+                      <div className="p-2 w-1/2 flex flex-col">
+                        <input
+                          type="text"
+                          dir="rtl"
+                          className="w-full outline-none bg-transparent text-right h-full"
+                          value={item.description_ar || ''}
+                          onChange={e => updateItem(index, 'description_ar', e.target.value)}
+                          placeholder="الوصف بالعربية..."
+                        />
+                      </div>
+                    </div>
+                    <div className="p-2 border-r border-gray-300 h-full flex items-center">
+                      <input
+                        type="number"
+                        className="w-full text-center outline-none bg-transparent"
+                        value={item.qty || ''}
+                        onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
+                        min="1"
+                      />
+                    </div>
+                    <div className="p-2 border-r border-gray-300 h-full flex items-center">
+                      <input
+                        type="text"
+                        className="w-full text-center outline-none bg-transparent"
+                        value={item.unit}
+                        onChange={e => updateItem(index, 'unit', e.target.value)}
+                      />
+                    </div>
+                    <div className="p-2 border-r border-gray-300 h-full flex items-center font-mono">
+                      <div className="flex justify-between items-center w-full">
+                        <span>SAR</span>
+                        <input
+                          type="number"
+                          className="w-full text-right outline-none bg-transparent ml-1"
+                          value={item.unit_price || ''}
+                          onChange={e => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                          min="0"
+                          step="0.01"
+                        />
+                      </div>
+                    </div>
+                    <div className="p-2 font-mono font-medium h-full flex items-center">
+                      <div className="flex justify-between items-center w-full">
+                        <span>SAR</span>
+                        <span>{item.net_price.toFixed(2)}</span>
+                      </div>
+                    </div>
+                    <div className="p-2 text-center print:hidden flex flex-col items-center justify-center gap-2 h-full">
+                      <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
+                        <ArrowUp size={14} />
+                      </button>
+                      <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                        <Trash2 size={16} />
+                      </button>
+                      <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
+                        <ArrowDown size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <div className="p-2 bg-gray-50 border-t border-gray-300 print:hidden">
+                  <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                    <Plus size={16} /> Add Row
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Section: Terms & Totals */}
+          <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
+            {/* Terms & Conditions */}
+            {/* Terms & Conditions */}
+            <div className="flex-1 space-y-2 text-sm">
+              {showNote && (
+                <div className="flex flex-col md:flex-row gap-2 group relative">
+                  <span className="font-bold w-32 shrink-0">
+                    <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={noteHeader} onChange={(e) => setNoteHeader(e.target.value)} />
+                  </span>
+                  <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <textarea
+                      className="w-full outline-none bg-transparent resize-none overflow-hidden"
+                      value={note}
+                      onChange={e => setNote(e.target.value)}
+                      onBlur={() => handleAutoTranslate(note, noteAr, setNoteAr)}
+                      rows={note.split('\n').length || 2}
+                    />
+                    <textarea
+                      dir="rtl"
+                      className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
+                      value={noteAr}
+                      onChange={e => setNoteAr(e.target.value)}
+                      rows={noteAr.split('\n').length || 2}
+                    />
+                  </div>
+                  <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-1" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Hide Note" />
+                </div>
+              )}
+              {!showNote && (
+                <div className="flex gap-2 print:hidden items-center text-gray-400 italic">
+                  <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Show Note" />
+                  <span>Show Note Section</span>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-y-2 mt-4">
+                {showPayment ? (
+                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                    <span className="font-bold w-32 shrink-0">PAYMENT:</span>
+                    <input type="text" className="flex-1 outline-none bg-transparent italic" value={payment} onChange={e => setPayment(e.target.value)} onBlur={() => handleAutoTranslate(payment, paymentAr, setPaymentAr)} />
+                    <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={paymentAr} onChange={e => setPaymentAr(e.target.value)} />
+                    <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} title="Hide Payment" />
+                  </div>
+                ) : (
+                  <div className="print:hidden flex items-center gap-2 text-gray-400 italic">
+                    <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} title="Show Payment" />
+                    <span>Show Payment</span>
+                  </div>
+                )}
+
+                {showWarranty ? (
+                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                    <span className="font-bold w-32 shrink-0">WARRANTY:</span>
+                    <input type="text" className="flex-1 outline-none bg-transparent" value={warranty} onChange={e => setWarranty(e.target.value)} onBlur={() => handleAutoTranslate(warranty, warrantyAr, setWarrantyAr)} />
+                    <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={warrantyAr} onChange={e => setWarrantyAr(e.target.value)} />
+                    <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showWarranty} onChange={(e) => setShowWarranty(e.target.checked)} title="Hide Warranty" />
+                  </div>
+                ) : (
+                  <div className="print:hidden flex items-center gap-2 text-gray-400 italic">
+                    <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showWarranty} onChange={(e) => setShowWarranty(e.target.checked)} title="Show Warranty" />
+                    <span>Show Warranty</span>
+                  </div>
+                )}
+
+                {showManpower ? (
+                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                    <span className="font-bold w-32 shrink-0">MANPOWER:</span>
+                    <input type="text" className="flex-1 outline-none bg-transparent" value={manpower} onChange={e => setManpower(e.target.value)} onBlur={() => handleAutoTranslate(manpower, manpowerAr, setManpowerAr)} />
+                    <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={manpowerAr} onChange={e => setManpowerAr(e.target.value)} />
+                    <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showManpower} onChange={(e) => setShowManpower(e.target.checked)} title="Hide Manpower" />
+                  </div>
+                ) : (
+                  <div className="print:hidden flex items-center gap-2 text-gray-400 italic">
+                    <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showManpower} onChange={(e) => setShowManpower(e.target.checked)} title="Show Manpower" />
+                    <span>Show Manpower</span>
+                  </div>
+                )}
+
+                {showMobilization ? (
+                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                    <span className="font-bold w-32 shrink-0">MOBILIZATION:</span>
+                    <input type="text" className="flex-1 outline-none bg-transparent" value={mobilization} onChange={e => setMobilization(e.target.value)} onBlur={() => handleAutoTranslate(mobilization, mobilizationAr, setMobilizationAr)} />
+                    <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={mobilizationAr} onChange={e => setMobilizationAr(e.target.value)} />
+                    <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showMobilization} onChange={(e) => setShowMobilization(e.target.checked)} title="Hide Mobilization" />
+                  </div>
+                ) : (
+                  <div className="print:hidden flex items-center gap-2 text-gray-400 italic">
+                    <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showMobilization} onChange={(e) => setShowMobilization(e.target.checked)} title="Show Mobilization" />
+                    <span>Show Mobilization</span>
+                  </div>
+                )}
+
+                {showDuration ? (
+                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                    <span className="font-bold w-32 shrink-0">DURATION:</span>
+                    <input type="text" className="flex-1 outline-none bg-transparent" value={duration} onChange={e => setDuration(e.target.value)} onBlur={() => handleAutoTranslate(duration, durationAr, setDurationAr)} />
+                    <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={durationAr} onChange={e => setDurationAr(e.target.value)} />
+                    <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showDuration} onChange={(e) => setShowDuration(e.target.checked)} title="Hide Duration" />
+                  </div>
+                ) : (
+                  <div className="print:hidden flex items-center gap-2 text-gray-400 italic">
+                    <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showDuration} onChange={(e) => setShowDuration(e.target.checked)} title="Show Duration" />
+                    <span>Show Duration</span>
+                  </div>
+                )}
+
+                {showBankDetails ? (
+                  <div className="flex flex-col md:flex-row gap-2 md:items-start group mt-2">
+                    <span className="font-bold w-32 shrink-0 mt-1">BANK DETAILS:</span>
+                    <textarea
+                      className="flex-1 outline-none bg-transparent resize-none overflow-hidden font-mono"
+                      value={bankDetails}
+                      onChange={e => setBankDetails(e.target.value)}
+                      onBlur={() => handleAutoTranslate(bankDetails, bankDetailsAr, setBankDetailsAr)}
+                      rows={bankDetails.split('\n').length || 3}
+                    />
+                    <textarea
+                      dir="rtl"
+                      className="flex-1 outline-none bg-transparent resize-none overflow-hidden text-right font-mono"
+                      value={bankDetailsAr}
+                      onChange={e => setBankDetailsAr(e.target.value)}
+                      rows={bankDetailsAr.split('\n').length || 3}
+                    />
+                    <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-1" checked={showBankDetails} onChange={(e) => setShowBankDetails(e.target.checked)} title="Hide Bank Details" />
+                  </div>
+                ) : (
+                  <div className="print:hidden flex items-center gap-2 text-gray-400 italic mt-2">
+                    <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showBankDetails} onChange={(e) => setShowBankDetails(e.target.checked)} title="Show Bank Details" />
+                    <span>Show Bank Details</span>
+                  </div>
+                )}
+
+                {showCustomField && customFields.length > 0 ? (
+                  <div className="flex flex-col gap-2 mt-2">
+                    {customFields.map((cf, index) => (
+                      <div key={cf.id} className="flex flex-col md:flex-row gap-2 md:items-start group relative">
+                        <span className="font-bold w-32 shrink-0 mt-1 bg-gray-200 px-2 py-1 flex items-center print:bg-transparent">
+                          <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={cf.header} onChange={(e) => updateCustomField(index, 'header', e.target.value)} />
+                        </span>
+                        <textarea
+                          className="flex-1 outline-none bg-transparent resize-none overflow-hidden"
+                          value={cf.value}
+                          onChange={e => updateCustomField(index, 'value', e.target.value)}
+                          onBlur={() => {
+                            if (!cf.value) return;
+                            fetch('/api/translate', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ text: cf.value })
+                            }).then(r => r.json()).then(d => {
+                              if (d.translation) updateCustomField(index, 'valueAr', d.translation);
+                            });
+                          }}
+                          rows={cf.value.split('\n').length || 2}
+                          placeholder="Enter custom details..."
+                        />
+                        <textarea
+                          dir="rtl"
+                          className="flex-1 outline-none bg-transparent resize-none overflow-hidden text-right"
+                          value={cf.valueAr}
+                          onChange={e => updateCustomField(index, 'valueAr', e.target.value)}
+                          rows={cf.valueAr.split('\n').length || 2}
+                          placeholder="التفاصيل المخصصة..."
+                        />
+                        <div className="print:hidden flex items-center gap-1 mx-1 mt-1 shrink-0">
+                          <button onClick={() => removeCustomField(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Field">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="print:hidden flex items-center mt-2 group relative h-4">
+                      <input type="checkbox" className="absolute left-0 top-0 cursor-pointer h-4 w-4 z-10 opcaity-0 w-full h-full" checked={showCustomField} onChange={(e) => setShowCustomField(e.target.checked)} title="Hide Custom Fields" />
+                      <div className="flex items-center gap-2 text-gray-400 italic pointer-events-none absolute left-0 top-0">
+                        <input type="checkbox" className="h-4 w-4" checked={showCustomField} readOnly />
+                        <span>Hide All Custom Fields</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="print:hidden flex items-center gap-2 text-gray-400 italic mt-2">
+                    <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showCustomField} onChange={(e) => { if (e.target.checked && customFields.length === 0) addCustomField(); setShowCustomField(e.target.checked); }} title="Show Custom Field" />
+                    <span>Show Custom Field</span>
+                  </div>
+                )}
+
+                {showCustomField && (
+                  <div className="print:hidden mt-2">
+                    <button onClick={addCustomField} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                      <Plus size={16} /> Add Custom Field Row
+                    </button>
+                  </div>
+                )}
+              </div>
+
+
+            </div>
+            <div className="w-full md:w-64 border-2 border-gray-800 shrink-0 h-fit">
+              <div className="grid grid-cols-2 border-b border-gray-300 p-2 text-sm">
+                <div className="font-bold">SUBTOTAL</div>
+                <div className="flex justify-between items-center font-mono">
+                  <span>SAR</span>
+                  <span>{subtotal.toFixed(2)}</span>
+                </div>
+              </div>
+              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-sm items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
+                <div className="font-bold flex items-center whitespace-nowrap">DISCOUNT <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span></div>
+                <div className="flex justify-between items-center font-mono">
+                  <span>SAR</span>
+                  <input
+                    type="number"
+                    className="w-full max-w-[100px] text-right outline-none bg-transparent ml-2"
+                    value={discount || ''}
+                    onChange={e => setDiscount(parseFloat(e.target.value) || 0)}
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-sm items-center hover:bg-gray-50 transition-colors group">
+                <div className="font-bold flex items-center whitespace-nowrap">
+                  VAT
+                  <input
+                    type="number"
+                    className="w-12 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
+                    value={vatRate}
+                    onChange={e => setVatRate(parseFloat(e.target.value) || 0)}
+                    min="0"
+                    max="100"
+                  />%
+                </div>
+                <div className="flex justify-between items-center font-mono">
+                  <span>SAR</span>
+                  <span>{tax.toFixed(2)}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 p-2 text-sm bg-green-100">
+                <div className="font-bold">TOTAL PACKAGE</div>
+                <div className="flex justify-between items-center font-mono font-bold text-base text-green-800">
+                  <span>SAR</span>
+                  <span>{grandTotal.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer Display */}
+          <div className="mt-auto">
+            {footerImageUrl && (
+              <div className="text-center border-t-2 border-gray-800 pt-4 mt-8 flex flex-col gap-2">
+                <img src={footerImageUrl} alt="Footer Logo" className="max-w-full h-auto object-contain mx-auto mb-2" style={{ maxHeight: '100px' }} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Overwrite Confirmation Modal */}
+        {showOverwriteModal && (
+          <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+            <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Quote ID Exists</h3>
+              <p className="text-gray-600 mb-6">A quote with ID <span className="font-bold">{quoteId}</span> already exists. How would you like to proceed?</p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={performSave}
+                  className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Overwrite Existing Quote ({quoteId})
+                </button>
+                <button
+                  onClick={handleCreateNewId}
+                  className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Generate New ID & Save
+                </button>
+                <button
+                  onClick={() => setShowOverwriteModal(false)}
+                  className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+
+    </div>
+  );
+}
