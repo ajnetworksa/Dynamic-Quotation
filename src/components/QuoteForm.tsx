@@ -677,7 +677,7 @@ export default function QuoteForm() {
         // ── CHANGE PDF RESOLUTION HERE ────────────────────────────────────
         // scale: 2 means the canvas renders at 2× the screen resolution.
         // Increase to 3 or 4 for sharper print, decrease to 1 for speed.
-        scale: 2,
+        scale: 3,
         useCORS: true,
         logging: false,
         onclone: (clonedDoc) => {
@@ -1259,7 +1259,7 @@ export default function QuoteForm() {
                     <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
                       <input
                         type="number"
-                        className="w-full text-center outline-none bg-transparent"
+                        className="w-full text-center text-base outline-none bg-transparent"
                         value={item.qty || ''}
                         onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
                         min="1"
@@ -1268,17 +1268,17 @@ export default function QuoteForm() {
                     <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
                       <input
                         type="text"
-                        className="w-full text-center outline-none bg-transparent"
+                        className="w-full text-center text-base outline-none bg-transparent"
                         value={item.unit}
                         onChange={e => updateItem(index, 'unit', e.target.value)}
                       />
                     </div>
-                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
                       <div className="flex justify-between items-center w-full whitespace-nowrap">
                         <span>SAR</span>
                         <input
                           type="number"
-                          className="w-full text-right outline-none bg-transparent"
+                          className="w-full text-right text-base font-mono outline-none bg-transparent"
                           value={item.unit_price || ''}
                           onChange={e => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
                           min="0"
@@ -1286,7 +1286,7 @@ export default function QuoteForm() {
                         />
                       </div>
                     </div>
-                    <div className={`px-2 py-0.5 font-mono font-medium h-full flex items-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                    <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
                       <div className="flex justify-between items-center w-full whitespace-nowrap">
                         <span>SAR</span>
                         <span>{item.net_price.toFixed(2)}</span>
