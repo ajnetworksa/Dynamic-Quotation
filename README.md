@@ -164,7 +164,23 @@ Replace all with your currency code (e.g. `USD`, `EUR`, `AED`).
 |---|---|---|
 | **Resolution / sharpness** | `scale: 3` | Higher = sharper PDF but larger file size. `1` = fast/small, `3–4` = print-crisp |
 | **Image quality** | `canvas.toDataURL('image/jpeg', 0.8)` | Change `0.8` (0.0–1.0). Use `'image/png'` for lossless |
-| PDF filename | `Quote_${quoteId}.pdf` | Change `Quote_` to any prefix |
+| **PDF filename** | `link.download = \`${customerName}-${quoteId}.pdf\`` | See format examples below |
+
+**Filename format examples** (search `PDF FILENAME` in `QuoteForm.tsx`):
+
+```js
+// Current: CustomerName-QuoteID.pdf
+link.download = `${customerName}-${quoteId}.pdf`;
+
+// Quote ID only:
+link.download = `${quoteId}.pdf`;
+
+// Include date:
+link.download = `${customerName}-${quoteId}-${date}.pdf`;
+
+// Include document type (Quotation / Tax Invoice):
+link.download = `${type}-${customerName}-${quoteId}.pdf`;
+```
 
 ---
 
@@ -176,7 +192,7 @@ Replace all with your currency code (e.g. `USD`, `EUR`, `AED`).
 |---|---|---|
 | Column widths (xlsx) | `ws['!cols'] = [` | `wch` = width in characters |
 | Validity period | `'Valid For', '30 Days'` | Change `'30 Days'` to your policy |
-| Excel filename | `Quote_${quoteId}.xlsx` | Change the prefix |
+| **Excel filename** | `link.download = \`${excelCustomerName}-${quoteId}.xlsx\`` | Same pattern as PDF — search `EXCEL FILENAME` |
 | Font in cells | `font: { name: 'Arial', sz: 10` | Change name/size |
 
 ---

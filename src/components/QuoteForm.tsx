@@ -803,7 +803,31 @@ export default function QuoteForm() {
       const url = URL.createObjectURL(pdfBlob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `Quote_${quoteId}.pdf`;
+
+      // ── PDF FILENAME ────────────────────────────────────────────────────────────
+      // Format: CustomerName-QuoteID.pdf
+      //   • selectedCustomer?.name  → the customer's name (falls back to 'Unknown' if none selected)
+      //   • .replace(/[^a-zA-Z0-9_\-. ]/g, '') → strips characters that are illegal in
+      //     filenames (e.g. / \ : * ? " < > |) — keeps letters, numbers, spaces, hyphens, dots
+      //   • .trim()  → removes any leading/trailing spaces from the name
+      //   • quoteId  → the quote number (e.g. AJ-10042)
+      //   • '.pdf'   → file extension
+      //
+      // EXAMPLES:
+      //   Customer "Acme Corp", quote AJ-10042  →  "Acme Corp-AJ-10042.pdf"
+      //
+      // TO CHANGE THE FORMAT:
+      //   Remove customerName and the '-' to go back to just the quote ID:
+      //     link.download = `${quoteId}.pdf`;
+      //   Add the date:
+      //     link.download = `${customerName}-${quoteId}-${date}.pdf`;
+      //   Add document type (Quotation / Tax Invoice):
+      //     link.download = `${type}-${customerName}-${quoteId}.pdf`;
+      const customerName = (selectedCustomer?.name || 'Unknown')
+        .replace(/[^a-zA-Z0-9_\-.\s]/g, '') // strip filename-unsafe characters
+        .trim();
+      link.download = `${customerName}-${quoteId}.pdf`;
+
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -909,7 +933,16 @@ export default function QuoteForm() {
 
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Quote_${quoteId}.xlsx`;
+
+    // ── EXCEL FILENAME ──────────────────────────────────────────────────────────
+    // Same naming convention as the PDF export above.
+    // Format: CustomerName-QuoteID.xlsx
+    // To customise, follow the same pattern described in the PDF filename block.
+    const excelCustomerName = (selectedCustomer?.name || 'Unknown')
+      .replace(/[^a-zA-Z0-9_\-.\s]/g, '') // strip filename-unsafe characters
+      .trim();
+    link.download = `${excelCustomerName}-${quoteId}.xlsx`;
+
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
