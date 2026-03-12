@@ -1256,6 +1256,13 @@ export default function QuoteForm() {
                         />
                       </div>
                     </div>
+                    {/* ── QTY CELL ──────────────────────────────────────────────────────────
+                        text-center  → number is centred in the column
+                        text-base    → locks the input to 16px (same as the row text).
+                                       IMPORTANT: browsers don't auto-inherit font-size
+                                       into <input> elements, so always keep text-base here.
+                        To change the column background, add e.g. bg-gray-50 to the outer <div>.
+                    */}
                     <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
                       <input
                         type="number"
@@ -1265,6 +1272,11 @@ export default function QuoteForm() {
                         min="1"
                       />
                     </div>
+                    {/* ── UNIT CELL ─────────────────────────────────────────────────────────
+                        Free-text input (e.g. "set", "lot", "pcs", "m²").
+                        text-base    → keeps font size consistent with the row (see QTY note).
+                        text-center  → centres the unit label in the column.
+                    */}
                     <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
                       <input
                         type="text"
@@ -1273,8 +1285,22 @@ export default function QuoteForm() {
                         onChange={e => updateItem(index, 'unit', e.target.value)}
                       />
                     </div>
+                    {/* ── UNIT PRICE CELL ───────────────────────────────────────────────────
+                        font-mono    → monospace font keeps all digits aligned vertically.
+                        text-base    → explicit 16px size; critical for <input> elements
+                                       (see QTY note — browsers don't auto-inherit).
+                        text-amber-600 → warning orange color when price is 0 OR below
+                                         the original database price.  Remove this
+                                         conditional class to always show in black.
+
+                        CURRENCY LABEL: change 'SAR' to 'USD', 'EUR', etc.
+                        DECIMAL STEP:  step="0.01" allows cents. Change to step="1" for
+                                       whole numbers only.
+                        COLUMN WIDTH:  set by '110px' in the grid-cols template above.
+                    */}
                     <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
                       <div className="flex justify-between items-center w-full whitespace-nowrap">
+                        {/* Currency label — change 'SAR' to your currency code */}
                         <span>SAR</span>
                         <input
                           type="number"
@@ -1286,9 +1312,24 @@ export default function QuoteForm() {
                         />
                       </div>
                     </div>
+                    {/* ── NET PRICE CELL (read-only, auto-calculated) ───────────────────────
+                        This value is calculated automatically: qty × unit_price.
+                        It is a <span>, NOT an input — users cannot type here directly.
+
+                        font-mono    → monospace digits for neat column alignment.
+                        font-medium  → slightly bold to visually distinguish from unit price.
+                        text-base    → explicit 16px to match all other row cells.
+                        text-amber-600 → warning color when unit price is 0.
+
+                        DECIMAL PLACES: .toFixed(2) shows 2 decimal places.
+                                        Change to .toFixed(0) for whole numbers.
+                        CURRENCY LABEL: change 'SAR' to your currency code.
+                    */}
                     <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
                       <div className="flex justify-between items-center w-full whitespace-nowrap">
+                        {/* Currency label — change 'SAR' to your currency code */}
                         <span>SAR</span>
+                        {/* .toFixed(2) = always show 2 decimal places. Change to .toFixed(0) for whole numbers. */}
                         <span>{item.net_price.toFixed(2)}</span>
                       </div>
                     </div>
