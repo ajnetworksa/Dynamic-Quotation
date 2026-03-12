@@ -1,3 +1,18 @@
+// =============================================================================
+// App.tsx — Root Application Layout
+// =============================================================================
+// This file controls:
+//   - The top navigation bar (header) with logo, nav links, logout button
+//   - Routing between all pages (Dashboard, Docs, Product DB, etc.)
+//   - Authentication state (login/logout)
+//
+// HOW TO CUSTOMISE:
+//   • COMPANY NAME in the header  → search for "AJ Network Solutions" below
+//   • ACTIVE NAV-ITEM COLOR       → search for 'bg-indigo-600' in NavItem
+//   • HEADER BACKGROUND COLOR     → search for 'bg-white border-b'
+//   • NAVIGATION ITEMS (add/remove pages) → edit the <NavItem> list ~line 70
+// =============================================================================
+
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { FileText, Database, Users, History, Settings as SettingsIcon, LogOut, Shield, LayoutDashboard } from 'lucide-react';
@@ -34,6 +49,13 @@ Object.defineProperty(window, 'fetch', {
   configurable: true
 });
 
+// NavItem renders a single navigation link in the top bar.
+// The active page link is highlighted with a colored background.
+//
+// CHANGE ACTIVE LINK BACKGROUND COLOR: replace 'bg-indigo-600' below.
+// CHANGE ACTIVE LINK TEXT COLOR:       replace 'text-white' below.
+// CHANGE HOVER COLOR (inactive items): replace 'hover:bg-gray-100' below.
+// ICON SIZE: change size={20} (pixels). Common values: 16, 18, 20, 24.
 function NavItem({ to, icon: Icon, label }: { to: string, icon: any, label: string }) {
   const location = useLocation();
   const isActive = location.pathname === to;
@@ -41,11 +63,13 @@ function NavItem({ to, icon: Icon, label }: { to: string, icon: any, label: stri
   return (
     <Link
       to={to}
+      // Active page: highlighted background / Inactive page: subtle hover highlight
       className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isActive
-        ? 'bg-indigo-600 text-white'
-        : 'text-gray-600 hover:bg-gray-100'
+        ? 'bg-indigo-600 text-white'   // ← Change 'indigo-600' to recolor the active tab
+        : 'text-gray-600 hover:bg-gray-100' // ← Change 'gray-100' to recolor the hover state
         }`}
     >
+      {/* Icon size in pixels — change 20 to make icons bigger or smaller */}
       <Icon size={20} />
       <span className="font-medium">{label}</span>
     </Link>
@@ -56,14 +80,32 @@ function MainLayout({ user, handleLogout }: { user: any, handleLogout: () => voi
   const location = useLocation();
 
   return (
+    // Main page background color: bg-gray-50 = very light gray.
+    // Change to e.g. bg-white (pure white) or bg-slate-50 (cool light gray).
     <div className="min-h-screen bg-gray-50 flex flex-col">
+
+      {/* ── TOP NAVIGATION HEADER ──────────────────────────────────────────────
+          HEADER BACKGROUND: 'bg-white' — change to e.g. 'bg-indigo-900' for dark.
+          HEADER BORDER:     'border-gray-200' — change to match brand.
+          HEIGHT:            'md:h-16' = 64px tall on desktop. Change to md:h-20 etc.
+      ────────────────────────────────────────────────────────────────── */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
             <div className="flex items-center gap-2">
+              {/* ── LOGO ICON BOX ──────────────────────────────────────────────
+                  Background color: 'bg-indigo-600'  — change to rebrand the icon.
+                  Icon: FileText — replace with any Lucide icon (e.g. BriefcaseBusiness).
+                  Icon size: 24px — change to make the icon bigger or smaller.
+              */}
               <div className="bg-indigo-600 p-2 rounded-lg">
                 <FileText className="text-white" size={24} />
               </div>
+              {/* ── COMPANY / APP NAME ────────────────────────────────────────
+                  Change 'AJ Network Solutions' to your company name.
+                  Text size: 'text-xl'   — change to text-lg or text-2xl etc.
+                  Text color: 'text-gray-900' — change to e.g. 'text-indigo-900'.
+              */}
               <h1 className="text-xl font-bold text-gray-900">AJ Network Solutions</h1>
             </div>
             <nav className="flex gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-hide items-center">

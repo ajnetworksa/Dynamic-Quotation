@@ -1,3 +1,30 @@
+/* =============================================================================
+   index.css — Global Styles & Tailwind Colour Palette
+   =============================================================================
+   This project uses Tailwind CSS v4, which is configured entirely through CSS.
+
+   THE @theme BLOCK BELOW defines all colour tokens available as class names.
+   For example:
+     --color-indigo-600: #4f46e5;
+   gives you classes like: bg-indigo-600  text-indigo-600  border-indigo-600  etc.
+
+   HOW TAILWIND COLOR CLASSES WORK:
+     The format is: {property}-{color}-{shade}
+       bg-indigo-600      = background color indigo at shade 600
+       text-gray-900      = text color gray at shade 900
+       border-green-800   = border color green at shade 800
+     Shade numbers: 50 (very light) → 100, 200 … 900, 950 (very dark)
+
+   HOW TO ADD A CUSTOM COLOR:
+     1. Add a line such as:  --color-brand-500: #d4a017;
+     2. Save this file.
+     3. Use it in any component:  className="bg-brand-500 hover:bg-brand-600"
+
+   PRINT / PDF MARGINS (`@page` block at the bottom):
+     @page { margin: 1cm; }
+     Increase to e.g. 1.5cm for more whitespace, or 0.5cm to fit more content.
+   =============================================================================
+*/
 @import "tailwindcss";
 
 @theme {
