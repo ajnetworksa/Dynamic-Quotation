@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send } from 'lucide-react';
+import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award } from 'lucide-react';
 
 interface Quote {
     id: number;
@@ -13,6 +13,13 @@ interface Quote {
     type?: string;
     updated_at?: string;
 }
+
+const STATUS_COLORS: Record<string, string> = {
+    Accepted: 'bg-green-100 text-green-800',
+    Rejected: 'bg-red-100 text-red-800',
+    Sent: 'bg-yellow-100 text-yellow-800',
+    Draft: 'bg-gray-100 text-gray-800',
+};
 
 export default function Dashboard() {
     const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -28,117 +35,165 @@ export default function Dashboard() {
             const data = await res.json();
             setQuotes(data);
         } catch (err) {
-            console.error("Failed to load dashboard data", err);
+            console.error('Failed to load dashboard data', err);
         }
     };
 
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const currentMonth = new Date().toISOString().slice(0, 7);
     const thisMonthQuotes = quotes.filter(q => q.date && q.date.startsWith(currentMonth));
 
     const stats = {
-        totalRevenue: quotes.filter(q => q.status === 'Accepted').reduce((sum, q) => sum + (q.grand_total || 0), 0),
-        monthRevenue: thisMonthQuotes.filter(q => q.status === 'Accepted').reduce((sum, q) => sum + (q.grand_total || 0), 0),
+        totalDocs: quotes.length,
+        totalRevenue: quotes.filter(q => q.status === 'Accepted').reduce((s, q) => s + (q.grand_total || 0), 0),
+        monthRevenue: thisMonthQuotes.filter(q => q.status === 'Accepted').reduce((s, q) => s + (q.grand_total || 0), 0),
+        monthCount: thisMonthQuotes.length,
         pendingCount: quotes.filter(q => q.status === 'Draft' || q.status === 'Sent' || !q.status).length,
         acceptedCount: quotes.filter(q => q.status === 'Accepted').length,
         rejectedCount: quotes.filter(q => q.status === 'Rejected').length,
         sentCount: quotes.filter(q => q.status === 'Sent').length,
+        winRate: quotes.length > 0 ? Math.round((quotes.filter(q => q.status === 'Accepted').length / quotes.length) * 100) : 0,
     };
 
-    const getRecentQuotes = () => {
-        return [...quotes].sort((a, b) => {
-            const dateA = new Date(a.updated_at || a.date || 0).getTime();
-            const dateB = new Date(b.updated_at || b.date || 0).getTime();
-            return dateB - dateA;
-        }).slice(0, 5);
-    };
+    // Last 6 months bar chart data
+    const last6Months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date();
+        d.setMonth(d.getMonth() - (5 - i));
+        const key = d.toISOString().slice(0, 7);
+        const label = d.toLocaleString('default', { month: 'short' });
+        const total = quotes
+            .filter(q => q.date?.startsWith(key) && q.status === 'Accepted')
+            .reduce((s, q) => s + (q.grand_total || 0), 0);
+        return { label, total, key };
+    });
+    const maxBar = Math.max(...last6Months.map(m => m.total), 1);
 
-    const handleRecall = (quote_id: string) => {
-        navigate(`/quote?recall=${quote_id}`);
-    };
+    // Top 5 customers by total accepted revenue
+    const customerTotals: Record<string, number> = {};
+    quotes.filter(q => q.status === 'Accepted').forEach(q => {
+        const name = q.customer_name || 'Unknown';
+        customerTotals[name] = (customerTotals[name] || 0) + (q.grand_total || 0);
+    });
+    const topCustomers = Object.entries(customerTotals)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+
+    const getRecentQuotes = () =>
+        [...quotes].sort((a, b) => {
+            const da = new Date(a.updated_at || a.date || 0).getTime();
+            const db = new Date(b.updated_at || b.date || 0).getTime();
+            return db - da;
+        }).slice(0, 6);
+
+    const handleRecall = (quote_id: string) => navigate(`/quote?recall=${quote_id}`);
 
     return (
         <div className="space-y-6 max-w-7xl mx-auto">
+            {/* Header */}
             <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-800">Hello, Welcome back!</h1>
                     <p className="text-gray-500 mt-1">Here is the overview of your quotation and sales activities.</p>
                 </div>
-                <button
-                    onClick={() => navigate('/quote')}
-                    className="flex items-center gap-2 px-5 py-2.5 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow flex-shrink-0 font-medium"
-                >
-                    <FileText size={20} /> New Document
-                </button>
-            </div>
-
-            {/* Quick Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4">
-                    <div className="p-3 bg-emerald-100 text-emerald-600 rounded-lg">
-                        <CheckCircle size={28} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">Won Revenue</p>
-                        <h3 className="text-xl font-bold text-gray-900 mt-1">SAR {stats.totalRevenue.toLocaleString()}</h3>
-                    </div>
-                </div>
-
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4">
-                    <div className="p-3 bg-indigo-100 text-indigo-600 rounded-lg">
-                        <TrendingUp size={28} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">This Month (Won)</p>
-                        <h3 className="text-xl font-bold text-gray-900 mt-1">SAR {stats.monthRevenue.toLocaleString()}</h3>
-                    </div>
-                </div>
-
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4">
-                    <div className="p-3 bg-amber-100 text-amber-600 rounded-lg">
-                        <Clock size={28} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">Pending / Draft Actions</p>
-                        <h3 className="text-2xl font-bold text-gray-900 mt-1">{stats.pendingCount}</h3>
-                    </div>
-                </div>
-
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4">
-                    <div className="p-3 bg-red-100 text-red-600 rounded-lg">
-                        <XCircle size={28} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">Lost Deals</p>
-                        <h3 className="text-2xl font-bold text-gray-900 mt-1">{stats.rejectedCount}</h3>
-                    </div>
+                <div className="flex gap-3 flex-shrink-0">
+                    <button
+                        onClick={() => navigate('/customers')}
+                        className="flex items-center gap-2 px-4 py-2.5 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors font-medium"
+                    >
+                        <Users size={18} /> Customers
+                    </button>
+                    <button
+                        onClick={() => navigate('/tracking')}
+                        className="flex items-center gap-2 px-4 py-2.5 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors font-medium"
+                    >
+                        <BarChart2 size={18} /> Tracking
+                    </button>
+                    <button
+                        onClick={() => navigate('/quote')}
+                        className="flex items-center gap-2 px-5 py-2.5 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow font-medium"
+                    >
+                        <FileText size={18} /> New Document
+                    </button>
                 </div>
             </div>
 
+            {/* Stats Grid — 6 cards */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                {[
+                    { label: 'Total Documents', value: stats.totalDocs, icon: <FileText size={22} />, color: 'bg-indigo-100 text-indigo-600' },
+                    { label: 'Won Revenue', value: `SAR ${stats.totalRevenue.toLocaleString()}`, icon: <CheckCircle size={22} />, color: 'bg-emerald-100 text-emerald-600' },
+                    { label: 'This Month (Won)', value: `SAR ${stats.monthRevenue.toLocaleString()}`, icon: <TrendingUp size={22} />, color: 'bg-blue-100 text-blue-600' },
+                    { label: 'This Month (Docs)', value: stats.monthCount, icon: <BarChart2 size={22} />, color: 'bg-violet-100 text-violet-600' },
+                    { label: 'Pending / Draft', value: stats.pendingCount, icon: <Clock size={22} />, color: 'bg-amber-100 text-amber-600' },
+                    { label: 'Lost Deals', value: stats.rejectedCount, icon: <XCircle size={22} />, color: 'bg-red-100 text-red-600' },
+                ].map((card) => (
+                    <div key={card.label} className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex flex-col gap-3">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${card.color}`}>
+                            {card.icon}
+                        </div>
+                        <div>
+                            <p className="text-xs font-medium text-gray-500 leading-tight">{card.label}</p>
+                            <p className="text-lg font-bold text-gray-900 mt-0.5 leading-tight">{card.value}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Middle Row: Bar Chart + Conversion Metrics */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-                {/* Conversion Rate Card */}
+                {/* Monthly Revenue Bar Chart */}
+                <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                    <h3 className="text-lg font-bold text-gray-800 mb-5">Monthly Won Revenue (SAR)</h3>
+                    <div className="flex items-end gap-4 h-40">
+                        {last6Months.map((m) => {
+                            const heightPct = maxBar > 0 ? (m.total / maxBar) * 100 : 0;
+                            const isCurrent = m.key === currentMonth;
+                            return (
+                                <div key={m.key} className="flex-1 flex flex-col items-center gap-1 group relative">
+                                    {/* Tooltip */}
+                                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                                        SAR {m.total.toLocaleString()}
+                                    </div>
+                                    <div className="w-full rounded-t-md transition-all duration-300"
+                                        style={{
+                                            height: `${Math.max(heightPct, 2)}%`,
+                                            background: isCurrent
+                                                ? 'linear-gradient(to top, #4f46e5, #818cf8)'
+                                                : 'linear-gradient(to top, #cbd5e1, #e2e8f0)'
+                                        }}
+                                    />
+                                    <span className={`text-xs font-semibold ${isCurrent ? 'text-indigo-600' : 'text-gray-500'}`}>{m.label}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Conversion Metrics */}
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                    <h3 className="text-lg font-bold text-gray-800 mb-2 self-start">Conversion Metrics</h3>
+                    <h3 className="text-lg font-bold text-gray-800 mb-3 self-start">Conversion Metrics</h3>
                     <div className="flex-1 w-full flex items-center justify-center">
-                        <div className="w-48 h-48 rounded-full border-[16px] border-emerald-500 flex items-center justify-center relative shadow-inner">
-                            <div className="absolute inset-0 border-[16px] border-gray-100 rounded-full" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 50%, 0 50%)' }}></div>
+                        <div className="w-40 h-40 rounded-full border-[14px] border-emerald-500 flex items-center justify-center relative shadow-inner">
+                            <div className="absolute inset-0 border-[14px] border-gray-100 rounded-full" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 50%, 0 50%)' }} />
                             <div className="flex flex-col">
-                                <span className="text-3xl font-black text-emerald-600">
-                                    {quotes.length > 0 ? Math.round((stats.acceptedCount / quotes.length) * 100) : 0}%
-                                </span>
+                                <span className="text-3xl font-black text-emerald-600">{stats.winRate}%</span>
                                 <span className="text-xs font-bold text-gray-500 uppercase mt-1">Win Rate</span>
                             </div>
                         </div>
                     </div>
                     <div className="w-full grid grid-cols-3 gap-2 mt-4 text-sm font-medium border-t border-gray-100 pt-4">
-                        <div className="text-emerald-600"><span className="block text-xl font-bold">{stats.acceptedCount}</span> Won</div>
-                        <div className="text-yellow-600 border-l border-r border-gray-100"><span className="block text-xl font-bold">{stats.sentCount}</span> Sent</div>
-                        <div className="text-gray-500"><span className="block text-xl font-bold">{quotes.length}</span> Total</div>
+                        <div className="text-emerald-600"><span className="block text-xl font-bold">{stats.acceptedCount}</span>Won</div>
+                        <div className="text-yellow-600 border-l border-r border-gray-100"><span className="block text-xl font-bold">{stats.sentCount}</span>Sent</div>
+                        <div className="text-gray-500"><span className="block text-xl font-bold">{stats.totalDocs}</span>Total</div>
                     </div>
                 </div>
+            </div>
 
-                {/* Recent Quotes List */}
-                <div className="col-span-1 lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            {/* Bottom Row: Recent Activity + Top Customers */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                {/* Recent Activity */}
+                <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div className="p-6 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
                         <h2 className="text-lg font-bold text-gray-800">Recent Activity</h2>
                         <button onClick={() => navigate('/tracking')} className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">View All</button>
@@ -147,37 +202,69 @@ export default function Dashboard() {
                         {getRecentQuotes().map((quote) => (
                             <div key={quote.id} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
                                 <div>
-                                    <div className="flex gap-2 items-center">
-                                        <span className="font-bold text-indigo-900 cursor-pointer hover:underline" onClick={() => handleRecall(quote.quote_id)}>{quote.quote_id}</span>
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${quote.status === 'Accepted' ? 'bg-green-100 text-green-800' :
-                                                quote.status === 'Rejected' ? 'bg-red-100 text-red-800' :
-                                                    quote.status === 'Sent' ? 'bg-yellow-100 text-yellow-800' :
-                                                        'bg-gray-100 text-gray-800'
-                                            }`}>
+                                    <div className="flex gap-2 items-center flex-wrap">
+                                        <span
+                                            className="font-bold text-indigo-900 cursor-pointer hover:underline"
+                                            onClick={() => handleRecall(quote.quote_id)}
+                                        >
+                                            {quote.quote_id}
+                                        </span>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${STATUS_COLORS[quote.status || 'Draft'] || STATUS_COLORS.Draft}`}>
                                             {quote.status || 'Draft'}
                                         </span>
                                         <span className="text-xs text-gray-400">({quote.type || 'Quotation'})</span>
                                     </div>
                                     <div className="text-sm font-medium text-gray-900 mt-1">{quote.customer_name}</div>
-                                    <div className="text-xs text-gray-500 truncate max-w-sm" title={quote.subject}>{quote.subject}</div>
+                                    <div className="text-xs text-gray-500 truncate max-w-xs" title={quote.subject}>{quote.subject}</div>
                                 </div>
-                                <div className="text-right flex flex-col items-end">
-                                    <div className="font-mono font-bold text-gray-900">SAR {quote.grand_total?.toLocaleString()}</div>
+                                <div className="text-right flex flex-col items-end ml-4">
+                                    <div className="font-mono font-bold text-gray-900 whitespace-nowrap">SAR {quote.grand_total?.toLocaleString()}</div>
                                     <div className="text-xs text-gray-400 mt-1">{quote.date}</div>
                                     <button
                                         onClick={() => handleRecall(quote.quote_id)}
-                                        className="mt-2 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
+                                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
                                     >
-                                        Open <Send size={12} />
+                                        Open <Send size={11} />
                                     </button>
                                 </div>
                             </div>
                         ))}
                         {quotes.length === 0 && (
-                            <div className="p-12 text-center text-gray-500 bg-white">
-                                No activity found. Create your first quote to see statistics here.
-                            </div>
+                            <div className="p-12 text-center text-gray-400">No activity yet. Create your first quote.</div>
                         )}
+                    </div>
+                </div>
+
+                {/* Top Customers */}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-2">
+                        <Award size={18} className="text-amber-500" />
+                        <h2 className="text-lg font-bold text-gray-800">Top Customers</h2>
+                    </div>
+                    <div className="p-4 space-y-4">
+                        {topCustomers.length === 0 && (
+                            <p className="text-gray-400 text-sm text-center py-6">No accepted deals yet.</p>
+                        )}
+                        {topCustomers.map(([name, total], i) => {
+                            const pct = maxBar > 0 ? Math.round((total / topCustomers[0][1]) * 100) : 0;
+                            const colors = ['bg-amber-400', 'bg-indigo-400', 'bg-emerald-400', 'bg-blue-400', 'bg-rose-400'];
+                            return (
+                                <div key={name}>
+                                    <div className="flex justify-between items-center mb-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className={`w-5 h-5 rounded-full text-white text-xs font-bold flex items-center justify-center ${colors[i]}`}>{i + 1}</span>
+                                            <span className="text-sm font-medium text-gray-800 truncate max-w-[140px]" title={name}>{name}</span>
+                                        </div>
+                                        <span className="text-xs font-mono font-bold text-gray-600 whitespace-nowrap ml-2">
+                                            SAR {total.toLocaleString()}
+                                        </span>
+                                    </div>
+                                    <div className="h-1.5 rounded-full bg-gray-100">
+                                        <div className={`h-full rounded-full transition-all duration-500 ${colors[i]}`} style={{ width: `${pct}%` }} />
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 
 interface Product {
   id: number;
@@ -11,14 +11,13 @@ interface Product {
 
 export default function ProductDB() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [search, setSearch] = useState('');
   const [isEditing, setIsEditing] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Partial<Product>>({});
   const [isAdding, setIsAdding] = useState(false);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
+  useEffect(() => { fetchProducts(); }, []);
 
   const fetchProducts = async () => {
     const res = await fetch('/api/products');
@@ -28,13 +27,11 @@ export default function ProductDB() {
 
   const handleAdd = async () => {
     if (!editForm.description || !editForm.unit_price) return;
-    
     await fetch('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(editForm),
     });
-    
     setIsAdding(false);
     setEditForm({});
     fetchProducts();
@@ -46,7 +43,6 @@ export default function ProductDB() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(editForm),
     });
-    
     setIsEditing(null);
     setEditForm({});
     fetchProducts();
@@ -54,7 +50,6 @@ export default function ProductDB() {
 
   const handleDelete = async (id: number) => {
     if (!confirm('Are you sure you want to delete this product?')) return;
-    
     await fetch(`/api/products/${id}`, { method: 'DELETE' });
     fetchProducts();
   };
@@ -64,17 +59,50 @@ export default function ProductDB() {
     setEditForm(product);
   };
 
+  const q = search.toLowerCase();
+  const filtered = products.filter(p =>
+    !q ||
+    p.description?.toLowerCase().includes(q) ||
+    p.description_ar?.toLowerCase().includes(q) ||
+    p.unit?.toLowerCase().includes(q) ||
+    String(p.unit_price).includes(q)
+  );
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-      <div className="p-6 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-        <h2 className="text-xl font-semibold text-gray-800">Product Database</h2>
-        <button
-          onClick={() => { setIsAdding(true); setEditForm({ unit: 'set', unit_price: 0 }); }}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-        >
-          <Plus size={18} />
-          Add Product
-        </button>
+      <div className="p-6 border-b border-gray-200 bg-gray-50">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-semibold text-gray-800">Product Database</h2>
+            <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-full">
+              {filtered.length} / {products.length}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            {/* Search */}
+            <div className="relative flex-1 sm:flex-none">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search products…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none w-full sm:w-56"
+              />
+              {search && (
+                <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => { setIsAdding(true); setEditForm({ unit: 'set', unit_price: 0 }); }}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap"
+            >
+              <Plus size={18} /> Add Product
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -94,103 +122,61 @@ export default function ProductDB() {
               <tr className="bg-indigo-50">
                 <td className="p-4 text-gray-500">New</td>
                 <td className="p-4">
-                  <input
-                    type="text"
-                    className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="Product description"
-                    value={editForm.description || ''}
-                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                  />
+                  <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Product description"
+                    value={editForm.description || ''} onChange={e => setEditForm({ ...editForm, description: e.target.value })} />
                 </td>
                 <td className="p-4">
-                  <input
-                    type="text"
-                    dir="rtl"
-                    className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-right"
-                    placeholder="وصف المنتج"
-                    value={editForm.description_ar || ''}
-                    onChange={(e) => setEditForm({ ...editForm, description_ar: e.target.value })}
-                  />
+                  <input type="text" dir="rtl" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-right" placeholder="وصف المنتج"
+                    value={editForm.description_ar || ''} onChange={e => setEditForm({ ...editForm, description_ar: e.target.value })} />
                 </td>
                 <td className="p-4">
-                  <input
-                    type="text"
-                    className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="Unit"
-                    value={editForm.unit || ''}
-                    onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })}
-                  />
+                  <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Unit"
+                    value={editForm.unit || ''} onChange={e => setEditForm({ ...editForm, unit: e.target.value })} />
                 </td>
                 <td className="p-4">
-                  <input
-                    type="number"
-                    className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="0.00"
-                    value={editForm.unit_price || ''}
-                    onChange={(e) => setEditForm({ ...editForm, unit_price: parseFloat(e.target.value) })}
-                  />
+                  <input type="number" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="0.00"
+                    value={editForm.unit_price || ''} onChange={e => setEditForm({ ...editForm, unit_price: parseFloat(e.target.value) })} />
                 </td>
                 <td className="p-4 text-right">
                   <div className="flex justify-end gap-2">
-                    <button onClick={handleAdd} className="p-2 text-green-600 hover:bg-green-50 rounded">
-                      <Save size={18} />
-                    </button>
-                    <button onClick={() => setIsAdding(false)} className="p-2 text-red-600 hover:bg-red-50 rounded">
-                      <X size={18} />
-                    </button>
+                    <button onClick={handleAdd} className="p-2 text-green-600 hover:bg-green-50 rounded"><Save size={18} /></button>
+                    <button onClick={() => setIsAdding(false)} className="p-2 text-red-600 hover:bg-red-50 rounded"><X size={18} /></button>
                   </div>
                 </td>
               </tr>
             )}
-            
-            {products.map((product) => (
+
+            {filtered.map((product) => (
               <tr key={product.id} className="hover:bg-gray-50 transition-colors">
                 <td className="p-4 text-gray-500">{product.id}</td>
                 <td className="p-4">
                   {isEditing === product.id ? (
-                    <input
-                      type="text"
-                      className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={editForm.description || ''}
-                      onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                    />
+                    <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                      value={editForm.description || ''} onChange={e => setEditForm({ ...editForm, description: e.target.value })} />
                   ) : (
                     <span className="font-medium text-gray-900">{product.description}</span>
                   )}
                 </td>
                 <td className="p-4">
                   {isEditing === product.id ? (
-                    <input
-                      type="text"
-                      dir="rtl"
-                      className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-right"
-                      value={editForm.description_ar || ''}
-                      onChange={(e) => setEditForm({ ...editForm, description_ar: e.target.value })}
-                    />
+                    <input type="text" dir="rtl" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-right"
+                      value={editForm.description_ar || ''} onChange={e => setEditForm({ ...editForm, description_ar: e.target.value })} />
                   ) : (
                     <span className="font-medium text-gray-900 text-right block" dir="rtl">{product.description_ar || ''}</span>
                   )}
                 </td>
                 <td className="p-4">
                   {isEditing === product.id ? (
-                    <input
-                      type="text"
-                      className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={editForm.unit || ''}
-                      onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })}
-                    />
+                    <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                      value={editForm.unit || ''} onChange={e => setEditForm({ ...editForm, unit: e.target.value })} />
                   ) : (
                     <span className="text-gray-600">{product.unit}</span>
                   )}
                 </td>
                 <td className="p-4">
                   {isEditing === product.id ? (
-                    <input
-                      type="number"
-                      className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={editForm.unit_price || ''}
-                      onChange={(e) => setEditForm({ ...editForm, unit_price: parseFloat(e.target.value) })}
-                    />
+                    <input type="number" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                      value={editForm.unit_price || ''} onChange={e => setEditForm({ ...editForm, unit_price: parseFloat(e.target.value) })} />
                   ) : (
                     <span className="text-gray-900 font-mono">{product.unit_price.toFixed(2)}</span>
                   )}
@@ -198,32 +184,25 @@ export default function ProductDB() {
                 <td className="p-4 text-right">
                   {isEditing === product.id ? (
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => handleUpdate(product.id)} className="p-2 text-green-600 hover:bg-green-50 rounded">
-                        <Save size={18} />
-                      </button>
-                      <button onClick={() => setIsEditing(null)} className="p-2 text-gray-600 hover:bg-gray-100 rounded">
-                        <X size={18} />
-                      </button>
+                      <button onClick={() => handleUpdate(product.id)} className="p-2 text-green-600 hover:bg-green-50 rounded"><Save size={18} /></button>
+                      <button onClick={() => setIsEditing(null)} className="p-2 text-gray-600 hover:bg-gray-100 rounded"><X size={18} /></button>
                     </div>
                   ) : (
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => startEdit(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded">
-                        <Edit2 size={18} />
-                      </button>
+                      <button onClick={() => startEdit(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={18} /></button>
                       {user.role === 'admin' && (
-                        <button onClick={() => handleDelete(product.id)} className="p-2 text-red-600 hover:bg-red-50 rounded">
-                          <Trash2 size={18} />
-                        </button>
+                        <button onClick={() => handleDelete(product.id)} className="p-2 text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
                       )}
                     </div>
                   )}
                 </td>
               </tr>
             ))}
-            {products.length === 0 && !isAdding && (
+
+            {filtered.length === 0 && !isAdding && (
               <tr>
-                <td colSpan={5} className="p-8 text-center text-gray-500">
-                  No products found. Add one to get started.
+                <td colSpan={6} className="p-8 text-center text-gray-400">
+                  {search ? `No products match "${search}"` : 'No products found. Add one to get started.'}
                 </td>
               </tr>
             )}
