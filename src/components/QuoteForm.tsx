@@ -1234,7 +1234,8 @@ export default function QuoteForm() {
                       )}
                     </div>
                     <div className="p-0 border-r border-gray-300 h-full flex relative group bg-white print:bg-transparent">
-                      <div className="px-2 py-0.5 w-1/2 flex flex-col relative">
+                      {/* English description — left half of the cell, vertically centered */}
+                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
                         <textarea
                           className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[24px] relative z-0"
                           value={item.description}
@@ -1278,7 +1279,8 @@ export default function QuoteForm() {
                         </select>
                       </div>
                       <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
-                      <div className="px-2 py-0.5 w-1/2 flex flex-col">
+                      {/* Arabic description — right half, vertically centered, RTL */}
+                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
                         <textarea
                           dir="rtl"
                           className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
@@ -1332,18 +1334,19 @@ export default function QuoteForm() {
                         COLUMN WIDTH:  set by '110px' in the grid-cols template above.
                     */}
                     <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
-                      <div className="flex justify-between items-center w-full whitespace-nowrap">
-                        {/* Currency label — change 'SAR' to your currency code */}
-                        <span>SAR</span>
-                        <input
-                          type="number"
-                          className="w-full text-right text-base font-mono outline-none bg-transparent"
-                          value={item.unit_price || ''}
-                          onChange={e => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
-                          min="0"
-                          step="0.01"
-                        />
-                      </div>
+                      {/* SAR label: fixed width so the number always starts at the same position.
+                          Change 'w-9' if you use a longer currency code (e.g. 'USD' still fits w-9).
+                          Change 'SAR' to your currency code. */}
+                      <span className="shrink-0 w-9 text-left">SAR</span>
+                      {/* flex-1 + min-w-0 lets the input fill the remaining space without overflowing */}
+                      <input
+                        type="number"
+                        className="flex-1 min-w-0 text-right text-base font-mono outline-none bg-transparent"
+                        value={item.unit_price || ''}
+                        onChange={e => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                        min="0"
+                        step="0.01"
+                      />
                     </div>
                     {/* ── NET PRICE CELL (read-only, auto-calculated) ───────────────────────
                         This value is calculated automatically: qty × unit_price.
@@ -1359,12 +1362,10 @@ export default function QuoteForm() {
                         CURRENCY LABEL: change 'SAR' to your currency code.
                     */}
                     <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
-                      <div className="flex justify-between items-center w-full whitespace-nowrap">
-                        {/* Currency label — change 'SAR' to your currency code */}
-                        <span>SAR</span>
-                        {/* .toFixed(2) = always show 2 decimal places. Change to .toFixed(0) for whole numbers. */}
-                        <span>{item.net_price.toFixed(2)}</span>
-                      </div>
+                      {/* SAR label: same fixed-width as unit price column for visual consistency */}
+                      <span className="shrink-0 w-9 text-left">SAR</span>
+                      {/* .toFixed(2) = always 2 decimal places. Change to .toFixed(0) for whole numbers. */}
+                      <span className="flex-1 text-right">{item.net_price.toFixed(2)}</span>
                     </div>
                     <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
                       <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
