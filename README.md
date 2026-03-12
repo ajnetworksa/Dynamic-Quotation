@@ -1,201 +1,262 @@
 # Dynamic Quotation System
 
-A modern, responsive, and dual-language (English/Arabic) web application for generating, managing, and exporting professional quotations. Built with React, TypeScript, TailwindCSS, and a lightweight Node/Express/SQLite backend.
+A modern, dual-language (English/Arabic) web app for generating professional quotations.  
+Stack: **React 18 + TypeScript + Vite + TailwindCSS v4 + Node/Express/SQLite**.
 
 ---
 
-## ✨ Core Features
-
-*   **Dual-Language Support**: Seamlessly input data in English and automatically generate Arabic translations using Google Translate API. Both languages are rendered side-by-side on the quote.
-*   **Dynamic Quote Builder**:
-    *   Add, remove, and reorder quotation items (products/services) with auto-calculating totals and VAT.
-    *   Customizable Terms & Conditions sections (Note, Payment, Warranty, Manpower, Mobilization, Duration, Bank Details).
-    *   Dynamic multiple "Custom Fields" to add any extra terms or rows you need.
-    *   All sections support hiding/showing based on what the specific quote requires.
-*   **High-Quality PDF Export**: Advanced generation of strict A4-sized PDF documents through `html2canvas` and `jsPDF`. The print layout is highly optimized for clean borders, professional spacing, and accurate fonts.
-*   **Email Integration**: Built-in SMTP configuration to directly email the generated PDF quotes to clients from within the application.
-*   **Excel Export**: Export the quotation items and totals directly into a formatted `.xlsx` file.
-*   **Database Management & Backups**: Securely store all generated quotes and customer profiles in an SQLite database. Easily download full database backups directly from the admin settings.
-*   **Customizable Branding**: Upload your company logo and footer image (supports local file storage) to personalize the quotation documents.
-
----
-
-## 🚀 Tech Stack
-
-**Frontend**:
-*   React 18 + TypeScript
-*   Vite
-*   TailwindCSS v4 (for rapid, responsive styling)
-*   Lucide React (Icons)
-*   html2canvas & jspdf (PDF Generation)
-*   xlsx-js-style (Excel Generation)
-
-**Backend**:
-*   Node.js & Express
-*   SQLite3 (via `better-sqlite3`)
-*   Nodemailer (for SMTP emailing)
-*   Multer (for image uploads)
-
----
-
-## 🛠️ Deployment Instructions
-
-### Prerequisites
-*   Node.js (v18 or higher recommended)
-*   NPM or Yarn
-
-### 1. Local Development
-To run the server and frontend concurrently for development:
+## 🚀 Quick Start
 
 ```bash
-# Install dependencies
 npm install
-
-# Start the development environment (Frontend on port 5173, Backend on port 3000)
-npm run dev
+npm run dev          # Dev: Frontend :5173, Backend :3000
 ```
-
-### 2. Production Deployment
-To build the application for production and serve it:
 
 ```bash
-# 1. Install dependencies
-npm install
-
-# 2. Build the frontend (Vite builds to /dist)
-npm run build
-
-# 3. Start the production Node server
-npm start
+npm run build && npm start   # Production
 ```
 
-**Environment Variables**:
-You can customize the ports and host by configuring an `.env` file if needed, but the default configuration is set to run out of the box.
-
-**Database Persistence Warning**:
-The database is stored locally inside the project folder at `quotes.db`. If you are deploying via Docker or similar containerized systems, **you must mount a persistent volume** to ensure `quotes.db` and the `/uploads` folder (for logos) are not wiped out when the container restarts.
+> **Database warning**: `quotes.db` and `/uploads` are stored in the project folder. Mount a persistent volume if using Docker.
 
 ---
 
-## 🎨 Customization Guide
+## 📁 File Map
 
-> This section is written for **novice developers**. Every item below tells you exactly which file to open and what to search for to make a change.
-
-### 🏢 Company Name & App Branding
-
-| What to change | File | What to search for |
-|---|---|---|
-| Company name in the top header | `src/App.tsx` | `AJ Network Solutions` |
-| Header icon color | `src/App.tsx` | `bg-indigo-600 p-2 rounded-lg` |
-| Fallback logo text (when no image is uploaded) | `src/components/QuoteForm.tsx` | `text-green-600 font-bold text-2xl` |
-| Logo size (default) | Admin Settings UI → Logo Size slider | n/a (stored in database) |
-| Company logo / footer image | Admin Settings UI → Upload Logo / Footer Image | n/a (uploaded via browser) |
-
----
-
-### 🎨 Colors
-
-All colors in this project use **Tailwind CSS class names** in the format: `bg-{color}-{shade}`.
-
-Example shades: `50` (lightest) → `100`, `200`, `300` … `900`, `950` (darkest).
-
-Available color names: `gray`, `red`, `orange`, `amber`, `yellow`, `lime`, `green`, `emerald`, `teal`, `cyan`, `sky`, `blue`, `indigo`, `violet`, `purple`, `fuchsia`, `pink`, `rose`.
-
-| What to change | File | What to search for |
-|---|---|---|
-| Active navigation tab color | `src/App.tsx` | `bg-indigo-600 text-white` (in `NavItem`) |
-| Navigation hover color | `src/App.tsx` | `hover:bg-gray-100` (in `NavItem`) |
-| Page background color | `src/App.tsx` | `bg-gray-50 flex flex-col` |
-| **Items table header row background** | `src/components/QuoteForm.tsx` | `backgroundColor: '#dcfce7'` |
-| **Items table & customer box border color** | `src/components/QuoteForm.tsx` | `borderColor: '#1f2937'` |
-| Customer Info header bar background | `src/components/QuoteForm.tsx` | `bg-gray-100 px-4 pt-0 pb-3` |
-| **TOTAL PACKAGE row background** | `src/components/QuoteForm.tsx` | `bg-green-100` |
-| **TOTAL PACKAGE row text color** | `src/components/QuoteForm.tsx` | `text-green-800` |
-| Record button color | `src/components/QuoteForm.tsx` | `bg-indigo-600 hover:bg-indigo-700` (Record button) |
-| Export PDF button color | `src/components/QuoteForm.tsx` | `bg-blue-600 hover:bg-blue-700` |
-| Export Excel button color | `src/components/QuoteForm.tsx` | `bg-green-600 hover:bg-green-700` |
-| Print button color | `src/components/QuoteForm.tsx` | `bg-emerald-600 hover:bg-emerald-700` |
-| Email button color | `src/components/QuoteForm.tsx` | `bg-sky-500 hover:bg-sky-600` |
-
-**How to change a color**: Replace the color name in the class, for example:
-```diff
-- className="... bg-green-100 ..."
-+ className="... bg-blue-100 ..."
+```
+src/
+├── App.tsx                   ← Navigation bar, routing, auth
+├── index.css                 ← Tailwind v4 colour palette + print styles
+└── components/
+    ├── QuoteForm.tsx         ← Main quote builder (THIS IS THE BIG ONE)
+    ├── Dashboard.tsx         ← Stats overview page
+    ├── Tracking.tsx          ← Saved quotes list
+    ├── CustomerDB.tsx        ← Customer database
+    ├── ProductDB.tsx         ← Product/service database
+    ├── Settings.tsx          ← Admin settings (logo, SMTP, etc.)
+    ├── Login.tsx             ← Login screen
+    └── UsersDB.tsx           ← User management (admin only)
+server.ts                     ← Backend API (Express + SQLite)
 ```
 
 ---
 
-### 📝 Default Text Values (Terms & Conditions)
+## 🎨 Module 1 — Branding & Company Name
 
-These defaults appear on every **new** quote. To change them permanently, open `src/components/QuoteForm.tsx` and find the `useState` calls. They all appear between roughly **lines 73–92**.
+**File:** `src/App.tsx`
 
-| Section | What to search for in the file |
+| What | Search for | Change to |
+|---|---|---|
+| Company name in header | `AJ Network Solutions` | Your company name |
+| Header icon color | `bg-indigo-600 p-2 rounded-lg` | e.g. `bg-blue-700` |
+| Header background | `bg-white border-b border-gray-200` | e.g. `bg-slate-900 border-slate-700` |
+| Page background | `bg-gray-50 flex flex-col` | e.g. `bg-white` |
+| Active nav link color | `bg-indigo-600 text-white` (in `NavItem`) | e.g. `bg-emerald-600 text-white` |
+| Inactive nav hover | `hover:bg-gray-100` | e.g. `hover:bg-slate-100` |
+
+---
+
+## 📝 Module 2 — Default Text (Terms & Conditions)
+
+**File:** `src/components/QuoteForm.tsx` — search for `useState(` around **line 90**
+
+| Field | Search for | Notes |
+|---|---|---|
+| Default VAT % | `useState(15)` | Change `15` to your country's rate |
+| Note header label | `useState('NOTE:')` | e.g. `'REMARKS:'` |
+| Note body | `useState('Any additional work\|device...')` | Use `\n` for new lines |
+| Payment terms | `useState('Full Payment in ADVANCE')` | |
+| Warranty | `useState("2 YEARS limited warranty...")` | |
+| Manpower | `useState('2 Technicians, 1 Supervisor')` | |
+| Mobilization time | `useState('3-4 days upon...')` | |
+| Project duration | `useState('1-2 Working Days')` | |
+| ⚠️ Bank details | `useState('ALINMA BANK - Account:...')` | **Replace with your bank info!** |
+| Footer message | `useState('Thank you for your business!')` | |
+
+> Changes here affect every **new** quote. Existing saved quotes keep their own text.
+
+---
+
+## 🎨 Module 3 — Colors
+
+All colors use Tailwind class names: `bg-{color}-{shade}` / `text-{color}-{shade}`.  
+Shades: `50` (lightest) → `950` (darkest). Colors: `gray red orange amber yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia pink rose`.
+
+**File:** `src/components/QuoteForm.tsx`
+
+### Action Bar Buttons
+
+Search for the button's label text, then change `bg-*` and `hover:bg-*`:
+
+| Button | Current color classes |
 |---|---|
-| Default VAT rate | `useState(15)` — change `15` to your country's rate |
-| Note / Remarks | `useState('Any additional work\|device...')` |
-| Payment terms | `useState('Full Payment in ADVANCE')` |
-| Warranty | `useState("2 YEARS limited warranty...")` |
-| Manpower | `useState('2 Technicians, 1 Supervisor')` |
-| Mobilization | `useState('3-4 days upon confirmation...')` |
-| Duration | `useState('1-2 Working Days')` |
-| **Bank details** ⚠️ | `useState('ALINMA BANK - Account:...')` — **Change this to your own bank!** |
-| Footer thank-you message | `useState('Thank you for your business!')` |
+| Record / Save | `bg-indigo-600 hover:bg-indigo-700` |
+| Clear | `bg-gray-100 hover:bg-gray-200` |
+| Create Revision | `bg-orange-500 hover:bg-orange-600` |
+| To Invoice | `bg-purple-600 hover:bg-purple-700` |
+| Email | `bg-sky-500 hover:bg-sky-600` |
+| Print | `bg-emerald-600 hover:bg-emerald-700` |
+| Export Excel | `bg-green-600 hover:bg-green-700` |
+| Export PDF | `bg-blue-600 hover:bg-blue-700` |
 
-After editing, **save the file** and the dev server will hot-reload automatically.
+### Quote Document Colors
 
----
-
-### 📐 Sizes & Layout
-
-| What to change | File | What to search for |
+| Element | Search for | How to change |
 |---|---|---|
-| Document title font size | `src/components/QuoteForm.tsx` | `text-3xl md:text-4xl` (on the `<h1>`) |
-| Totals box width | `src/components/QuoteForm.tsx` | `w-full md:w-64` (the totals `<div>`) — `w-64` = 256 px |
-| ITEM column width | `src/components/QuoteForm.tsx` | `grid-cols-[44px_1fr_64px_64px_110px_110px_36px]` — first number |
-| QTY / UNIT column width | `src/components/QuoteForm.tsx` | same grid template — 3rd/4th numbers (`64px`) |
-| UNIT PRICE / NET PRICE column width | `src/components/QuoteForm.tsx` | same grid template — 5th/6th numbers (`110px`) |
-| Footer image max height | `src/components/QuoteForm.tsx` | `maxHeight: '100px'` in the footer `<img>` |
-| Print page margin | `src/index.css` | `@page { margin: 1cm; }` |
+| **Table header row bg** | `backgroundColor: '#dcfce7'` | Replace hex, e.g. `'#dbeafe'` = light blue |
+| **Table/section border color** | `borderColor: '#1f2937'` | Replace hex, e.g. `'#1d4ed8'` = dark blue |
+| Customer Info header bar bg | `bg-gray-100 px-4 pt-0 pb-3` | Change `bg-gray-100` to any color |
+| **Total Package row bg** | `bg-green-100` (on the totals row `<div>`) | e.g. `bg-blue-100` |
+| **Total Package text color** | `text-green-800` | e.g. `text-blue-800` |
+| Warning price color (0 / below DB) | `text-amber-600` | e.g. `text-red-600` |
 
 ---
 
-### 📄 PDF Export Quality
+## 📐 Module 4 — Sizes & Layout
 
-Open `src/components/QuoteForm.tsx` and search for `handleExportPDF`.
+**File:** `src/components/QuoteForm.tsx`
 
-| Setting | What to change | Effect |
+| Element | Search for | How to change |
 |---|---|---|
-| **Resolution / sharpness** | `scale: 2` in the `html2canvas` call | Higher = sharper but bigger file. Try `3` for very crisp output. |
-| **Image quality** | `'image/jpeg', 0.8` in `canvas.toDataURL(...)` | Second number is quality (0.0–1.0). `1.0` = lossless. Change first arg to `'image/png'` for PNG format. |
+| Document title font size | `text-3xl md:text-4xl` on `<h1>` | `text-2xl`, `text-4xl`, `text-5xl` |
+| Column widths (items table) | `grid-cols-[44px_1fr_64px_64px_110px_110px_36px]` | Change individual px values (see below) |
+| Totals box width | `w-full md:w-64` | `w-72` = 288px, `w-80` = 320px |
+| Footer image max height | `maxHeight: '100px'` | `'150px'`, `'200px'` |
+
+**Column width reference** (`grid-cols-[A_B_C_D_E_F_G]`):
+
+| Position | Column | Default |
+|---|---|---|
+| A | ITEM # | `44px` |
+| B | DESCRIPTION | `1fr` (fills remaining space) |
+| C | QTY | `64px` |
+| D | UNIT | `64px` |
+| E | UNIT PRICE | `110px` |
+| F | NET PRICE | `110px` |
+| G | Actions (hidden in PDF) | `36px` |
 
 ---
 
-### 🎨 Adding a Custom Color
+## 💰 Module 5 — Currency & Prices
 
-If you need a completely new color that isn't in Tailwind's palette, open `src/index.css` and add a line inside the `@theme { }` block:
+**File:** `src/components/QuoteForm.tsx`
+
+Search for `SAR` — there are 4 occurrences in the items table and 2 in the totals box.  
+Replace all with your currency code (e.g. `USD`, `EUR`, `AED`).
+
+| Setting | Search for | Notes |
+|---|---|---|
+| Currency label (items table) | `<span>SAR</span>` | 2 in items table (unit price & net price) |
+| Currency label (totals box) | `<span>SAR</span>` | 2 in subtotal/total rows |
+| Unit price decimal step | `step="0.01"` | `step="1"` for whole numbers only |
+| Net price decimals | `.toFixed(2)` | `.toFixed(0)` for no decimals |
+| Subtotal / tax decimals | `.toFixed(2)` | In the totals box `<div>` |
+| Excel export currency | `SAR ${item.unit_price.toFixed(2)}` | In `handleExportExcel` function |
+
+> **Font tip**: All price cells use `font-mono` (monospace) and `text-base` to keep "SAR" and the number perfectly aligned. Never remove `text-base` from `<input>` elements in the table — browsers don't auto-inherit font size.
+
+---
+
+## 📄 Module 6 — PDF Export
+
+**File:** `src/components/QuoteForm.tsx` — search for `handleExportPDF`
+
+| Setting | Search for | Effect |
+|---|---|---|
+| **Resolution / sharpness** | `scale: 3` | Higher = sharper PDF but larger file size. `1` = fast/small, `3–4` = print-crisp |
+| **Image quality** | `canvas.toDataURL('image/jpeg', 0.8)` | Change `0.8` (0.0–1.0). Use `'image/png'` for lossless |
+| PDF filename | `Quote_${quoteId}.pdf` | Change `Quote_` to any prefix |
+
+---
+
+## 📊 Module 7 — Excel Export
+
+**File:** `src/components/QuoteForm.tsx` — search for `handleExportExcel`
+
+| Setting | Search for | Notes |
+|---|---|---|
+| Column widths (xlsx) | `ws['!cols'] = [` | `wch` = width in characters |
+| Validity period | `'Valid For', '30 Days'` | Change `'30 Days'` to your policy |
+| Excel filename | `Quote_${quoteId}.xlsx` | Change the prefix |
+| Font in cells | `font: { name: 'Arial', sz: 10` | Change name/size |
+
+---
+
+## 🖨️ Module 8 — Print Margins
+
+**File:** `src/index.css` — at the very bottom
 
 ```css
-@theme {
-  /* ... existing colors ... */
-  --color-brand-500: #d4a017;   /* ← your custom gold color */
-  --color-brand-600: #b8880e;   /* ← slightly darker shade for hover */
+@page {
+  margin: 1cm;   /* ← change to 1.5cm for more whitespace, 0.5cm for tighter fit */
 }
 ```
 
-Then use it in any component:
+---
+
+## 🎨 Module 9 — Adding a Custom Color
+
+**File:** `src/index.css` — inside the `@theme { }` block
+
+```css
+--color-brand-500: #d4a017;   /* your custom color */
+--color-brand-600: #b8880e;   /* slightly darker for hover */
+```
+
+Then use anywhere:
+
 ```tsx
 <button className="bg-brand-500 hover:bg-brand-600 text-white ...">
-  My Button
-</button>
 ```
 
 ---
 
-## 🔮 Future Features & Roadmap Ideas
+## 🖼️ Module 10 — Logo & Footer Image
 
-*   **Authentication & Authorization**: Implement user login (Admin vs. Sales roles) to restrict who can edit settings or delete quotes.
-*   **Dashboard & Analytics**: A visual home page showing monthly quotation metrics, acceptance rates, and revenue projections.
-*   **Inventory Integration**: Link the product dropdowns to an active inventory tracking system to pull real-time pricing and stock.
-*   **Multi-Currency Support**: Allow users to switch between SAR, USD, EUR, etc., with automatic conversion rates.
-*   **Invoice Conversion**: A one-click button to convert an accepted "Quotation" into a formal "Tax Invoice" with corresponding sequential invoice numbers.
-*   **Dark Mode UI**: Add a dark theme toggle for the application interface (while keeping the PDF export cleanly styled for print).
+Use the **Admin Settings** page (Settings link in nav, admin only):
+
+| Setting | Where |
+|---|---|
+| Company logo | Settings → Upload Logo |
+| Logo size | Settings → Logo Size (slider) |
+| Footer banner image | Settings → Upload Footer Image |
+
+Logo is shown top-right of the quote. Footer image appears at the bottom of the quote.  
+Max footer image height in code: search `maxHeight: '100px'` in `QuoteForm.tsx`.
+
+---
+
+## ⚙️ Module 11 — SMTP Email
+
+**Via UI**: Settings → SMTP Configuration.  
+Fields: Host, Port, Username, Password, From Name.
+
+The email feature requires a saved quote (click **Record** first, then **Email**).
+
+---
+
+## 🔐 Module 12 — Users & Roles
+
+**Via UI**: Users page (admin only, `Users` link in nav).
+
+- `admin` role → full access to Settings, Users, all delete actions.
+- Standard users → can create/edit quotes and view databases.
+
+Default admin is created at first run. Change credentials via the Users page.
+
+---
+
+## 🗄️ Module 13 — Database Backup
+
+**Via UI**: Settings → Download Database Backup.
+
+The SQLite file (`quotes.db`) will be downloaded as-is. Keep periodic backups if running in production.
+
+---
+
+## 🔮 Roadmap
+
+- Multi-currency with live conversion rates
+- Invoice conversion from accepted quotes
+- Dark mode UI
+- Inventory integration (live stock & pricing)
+- Dashboard analytics (revenue, acceptance rate)
