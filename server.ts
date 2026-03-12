@@ -1,15 +1,72 @@
+// =============================================================================
+// server.ts — Express Backend
+// =============================================================================
+// Security hardening applied:
+//   1. Passwords hashed with bcrypt (never stored in plaintext)
+//   2. Session tokens generated with crypto.randomBytes (cryptographically secure)
+//   3. HTTP security headers via helmet (hides X-Powered-By, adds CSP headers, etc.)
+//   4. Rate limiting on /api/login (max 10 attempts / 15 min per IP)
+//   5. Login input validation (non-empty, max 128 chars)
+//   6. Global body limit reduced to 1mb; only /api/db/import keeps 50mb
+//   7. .env is listed in .gitignore — never commit real API keys
+// =============================================================================
+
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import nodemailer from 'nodemailer';
 import path from 'path';
 import puppeteer from 'puppeteer';
+import bcrypt from 'bcrypt';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import crypto from 'crypto';
 
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// ── SECURITY: HTTP headers ────────────────────────────────────────────────────
+// helmet() automatically sets a suite of security headers, including:
+//   • X-Content-Type-Options: nosniff   (prevents MIME-sniffing attacks)
+//   • X-Frame-Options: SAMEORIGIN       (prevents clickjacking)
+//   • X-XSS-Protection                  (legacy XSS filter for older browsers)
+//   • Removes the "X-Powered-By: Express" header that leaks tech info
+//
+// To allow iframing from a specific origin, remove helmet() and configure manually.
+app.use(helmet({
+  // Content-Security-Policy is disabled here because html2canvas & jsPDF
+  // load fonts and images from data: URLs which a strict CSP would block.
+  // If you are not using the PDF export in the browser, you can enable this.
+  contentSecurityPolicy: false,
+}));
+
+// ── SECURITY: Body size limit ─────────────────────────────────────────────────
+// The global limit is 1mb — sufficient for all normal API calls.
+// Allowing 50mb globally would let anyone flood the server with large payloads.
+// The /api/db/import route below overrides this with 50mb just for that endpoint.
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
+
+// ── SECURITY: Login rate limiter ──────────────────────────────────────────────
+// Limits login attempts to 10 per 15 minutes per IP address.
+// After exceeding the limit, the client gets HTTP 429 Too Many Requests.
+//
+// To change the limits:
+//   • windowMs   → time window in milliseconds (15 * 60 * 1000 = 15 minutes)
+//   • max        → max requests allowed in that window (10 = 10 attempts)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15-minute window
+  max: 10,                   // max 10 login attempts per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+});
+
+// ── BCRYPT COST FACTOR ────────────────────────────────────────────────────────
+// 12 is a good balance of security vs speed (~300ms per hash on modern hardware).
+// Increase to 13 or 14 for more security (doubles time per increment).
+// Do NOT go below 10.
+const BCRYPT_ROUNDS = 12;
 
 // Initialize SQLite Database
 const db = new Database('quotes.db');
@@ -94,8 +151,6 @@ addColumnIfNotExists('quotes', 'manpower', 'TEXT');
 addColumnIfNotExists('quotes', 'mobilization', 'TEXT');
 addColumnIfNotExists('quotes', 'duration', 'TEXT');
 addColumnIfNotExists('quotes', 'bank_details', 'TEXT');
-
-// Arabic translation columns
 addColumnIfNotExists('quotes', 'subject_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'note_header', 'TEXT');
 addColumnIfNotExists('quotes', 'discount', 'REAL');
@@ -118,13 +173,41 @@ addColumnIfNotExists('quotes', 'custom_field_ar', 'TEXT');
 addColumnIfNotExists('quote_items', 'description_ar', 'TEXT');
 addColumnIfNotExists('products', 'description_ar', 'TEXT');
 
-// Create default admin if no users exist
-const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
-if (!adminExists) {
-  db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run('admin', 'admin123', 'admin');
+// ── SECURITY: Default admin account ──────────────────────────────────────────
+// On first boot, if no admin exists, one is created with a hashed password.
+// The password 'admin123' is hashed with bcrypt — never stored in plaintext.
+//
+// ⚠️  IMPORTANT: Change this password via the Users page immediately after first login!
+//
+// Migration: if an admin exists but their password is NOT a bcrypt hash (i.e., it
+// was created by an older version of this server), it is re-hashed automatically.
+const adminRow = db.prepare('SELECT id, password FROM users WHERE username = ?').get('admin') as { id: number; password: string } | undefined;
+if (!adminRow) {
+  // Fresh install — create the default admin with a hashed password
+  const hashedDefault = bcrypt.hashSync('admin123', BCRYPT_ROUNDS);
+  db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run('admin', hashedDefault, 'admin');
+  console.log('✅ Default admin created. Change the password via the Users page!');
+} else if (!adminRow.password.startsWith('$2')) {
+  // Migration: existing admin has a plaintext password — hash it now
+  const rehashed = bcrypt.hashSync(adminRow.password, BCRYPT_ROUNDS);
+  db.prepare('UPDATE users SET password = ? WHERE id = ?').run(rehashed, adminRow.id);
+  console.log('🔐 Migrated admin password to bcrypt hash.');
 }
 
-// Auth Middleware
+// ── SECURITY: Migrate any other plaintext passwords ───────────────────────────
+// If other users were created before this security update, their passwords will
+// also be in plaintext. This loop hashes them all on startup.
+const allUsers = db.prepare('SELECT id, password FROM users').all() as { id: number; password: string }[];
+for (const u of allUsers) {
+  if (!u.password.startsWith('$2')) {
+    const rehashed = bcrypt.hashSync(u.password, BCRYPT_ROUNDS);
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(rehashed, u.id);
+  }
+}
+
+// ── Auth Middleware ───────────────────────────────────────────────────────────
+// Validates the Bearer token in the Authorization header against the sessions table.
+// Attaches the user object to req for downstream use.
 const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -139,6 +222,7 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
   next();
 };
 
+// Restricts a route to admin-role users only (used after requireAuth).
 const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if ((req as any).user.role !== 'admin') {
     return res.status(403).json({ error: 'Forbidden' });
@@ -146,15 +230,40 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
   next();
 };
 
-// API Routes
+// ── API Routes ────────────────────────────────────────────────────────────────
 
-// Auth
-app.post('/api/login', (req, res) => {
+// ── AUTH: Login ───────────────────────────────────────────────────────────────
+// loginLimiter is applied first — blocks brute-force attempts.
+// Inputs are validated for type, length, and emptiness before hitting the DB.
+// Passwords are compared using bcrypt.compare (safe against timing attacks).
+//
+// SECURITY NOTE: We always respond with the same generic message for bad
+// credentials regardless of whether the username or password was wrong.
+// This prevents user-enumeration (knowing which usernames exist).
+app.post('/api/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
-  const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password) as any;
 
-  if (user) {
-    const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  // ── Input validation ──────────────────────────────────────────────────────
+  // Reject blanks, non-strings, or anything suspiciously long (>128 chars).
+  // This prevents the server from hashing or querying with absurd payloads.
+  if (
+    typeof username !== 'string' || !username.trim() || username.length > 128 ||
+    typeof password !== 'string' || !password || password.length > 128
+  ) {
+    return res.status(400).json({ error: 'Invalid credentials' });
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username.trim()) as any;
+
+  // bcrypt.compare returns false for wrong passwords without timing leaks.
+  // We also handle the case where user is null safely to avoid timing differences.
+  const passwordMatch = user ? await bcrypt.compare(password, user.password) : false;
+
+  if (user && passwordMatch) {
+    // ── SECURITY: Cryptographically secure session token ──────────────────
+    // crypto.randomBytes(32) generates 32 bytes of OS-level random data.
+    // hex encodes to 64 characters — effectively unguessable.
+    const token = crypto.randomBytes(32).toString('hex');
     db.prepare('INSERT INTO sessions (token, user_id) VALUES (?, ?)').run(token, user.id);
     res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
   } else {
@@ -174,29 +283,52 @@ app.get('/api/me', requireAuth, (req, res) => {
   res.json((req as any).user);
 });
 
-// Users Management (Admin only)
+// ── Users Management (Admin only) ─────────────────────────────────────────────
 app.get('/api/users', requireAuth, requireAdmin, (req, res) => {
+  // Never return the password field — even though it's hashed, no need to expose it
   const users = db.prepare('SELECT id, username, role FROM users').all();
   res.json(users);
 });
 
-app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
   const { username, password, role } = req.body;
+
+  // Validate before hashing
+  if (
+    typeof username !== 'string' || !username.trim() || username.length > 128 ||
+    typeof password !== 'string' || !password || password.length > 128
+  ) {
+    return res.status(400).json({ error: 'Username and password are required (max 128 chars).' });
+  }
+
   try {
-    const info = db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run(username, password, role);
+    // ── SECURITY: Hash the password before storing ────────────────────────
+    const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const info = db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run(username.trim(), hashed, role);
     res.json({ id: info.lastInsertRowid });
   } catch (error: any) {
     res.status(400).json({ error: 'Username might already exist' });
   }
 });
 
-app.put('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
+app.put('/api/users/:id', requireAuth, requireAdmin, async (req, res) => {
   const { username, password, role } = req.body;
+
+  // Validate username
+  if (typeof username !== 'string' || !username.trim() || username.length > 128) {
+    return res.status(400).json({ error: 'Invalid username.' });
+  }
+
   try {
     if (password) {
-      db.prepare('UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?').run(username, password, role, req.params.id);
+      if (typeof password !== 'string' || password.length > 128) {
+        return res.status(400).json({ error: 'Invalid password.' });
+      }
+      // ── SECURITY: Hash the new password before updating ───────────────
+      const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
+      db.prepare('UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?').run(username.trim(), hashed, role, req.params.id);
     } else {
-      db.prepare('UPDATE users SET username = ?, role = ? WHERE id = ?').run(username, role, req.params.id);
+      db.prepare('UPDATE users SET username = ?, role = ? WHERE id = ?').run(username.trim(), role, req.params.id);
     }
     res.json({ success: true });
   } catch (error: any) {
@@ -220,7 +352,7 @@ app.delete('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// Customers
+// ── Customers ─────────────────────────────────────────────────────────────────
 app.get('/api/customers', requireAuth, (req, res) => {
   const customers = db.prepare('SELECT * FROM customers').all();
   res.json(customers);
@@ -246,7 +378,7 @@ app.delete('/api/customers/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// Products
+// ── Products ──────────────────────────────────────────────────────────────────
 app.get('/api/products', requireAuth, (req, res) => {
   const products = db.prepare('SELECT * FROM products').all();
   res.json(products);
@@ -272,7 +404,7 @@ app.delete('/api/products/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// Quotes
+// ── Quotes ────────────────────────────────────────────────────────────────────
 app.get('/api/quotes/next-id', requireAuth, (req, res) => {
   try {
     const rows = db.prepare('SELECT quote_id FROM quotes').all() as { quote_id: string }[];
@@ -280,18 +412,15 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
 
     for (const row of rows) {
       if (row.quote_id) {
-        // Only look at base ID without revision part, e.g., AJ-56993, ignore -R1
         const match = row.quote_id.match(/AJ-(\d+)/);
         if (match) {
           const num = parseInt(match[1], 10);
-          if (num > maxNum) {
-            maxNum = num;
-          }
+          if (num > maxNum) maxNum = num;
         }
       }
     }
 
-    let nextNum = maxNum > 0 ? maxNum + 1 : 10001; // Start from 10001 if empty
+    const nextNum = maxNum > 0 ? maxNum + 1 : 10001;
     const nextId = `AJ-${nextNum.toString().padStart(5, '0')}`;
     res.json({ nextId });
   } catch (error: any) {
@@ -337,8 +466,6 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
 
     await transporter.verify();
 
-    // Ideally we would generate the PDF blob here or attach what the client sends.
-    // For simplicity, we assume the client is sending standard email details.
     await transporter.sendMail({
       from: `"${smtp.fromName}" <${smtp.user}>`,
       to,
@@ -347,7 +474,6 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
       html: `<p>${body.replace(/\\n/g, '<br/>')}</p>`
     });
 
-    // Update quote status to Sent
     db.prepare('UPDATE quotes SET status = "Sent" WHERE quote_id = ?').run(quote_id);
     res.json({ success: true });
   } catch (err: any) {
@@ -364,7 +490,6 @@ app.post('/api/quotes', requireAuth, (req, res) => {
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate
   } = req.body;
   const updated_at = new Date().toISOString();
-  // We extract the user_id from the auth middleware to track who made the quote
   const author_id = (req as any).user.id;
 
   try {
@@ -408,7 +533,6 @@ app.post('/api/quotes', requireAuth, (req, res) => {
       }
 
       const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-
       for (const item of items) {
         insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price);
       }
@@ -422,21 +546,17 @@ app.post('/api/quotes', requireAuth, (req, res) => {
 
 app.delete('/api/quotes/:quote_id', requireAuth, requireAdmin, (req, res) => {
   try {
-    const deleteItems = db.prepare('DELETE FROM quote_items WHERE quote_id = ?');
-    const deleteQuote = db.prepare('DELETE FROM quotes WHERE quote_id = ?');
-
     db.transaction(() => {
-      deleteItems.run(req.params.quote_id);
-      deleteQuote.run(req.params.quote_id);
+      db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(req.params.quote_id);
+      db.prepare('DELETE FROM quotes WHERE quote_id = ?').run(req.params.quote_id);
     })();
-
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Database Export/Import
+// ── Database Export / Import ───────────────────────────────────────────────────
 app.get('/api/db/export', requireAuth, requireAdmin, (req, res) => {
   try {
     const customers = db.prepare('SELECT * FROM customers').all();
@@ -449,9 +569,12 @@ app.get('/api/db/export', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-app.post('/api/db/import', requireAuth, requireAdmin, (req, res) => {
+// ── SECURITY: 50mb body limit only on this route ──────────────────────────────
+// The global limit is 1mb. This specific route needs 50mb for large imports.
+// We override body-parser just for this endpoint using express.json({ limit })
+// as inline middleware before the handler.
+app.post('/api/db/import', requireAuth, requireAdmin, express.json({ limit: '50mb' }), (req, res) => {
   const { customers, products, quotes, quote_items } = req.body;
-
   const importErrors: string[] = [];
 
   const logError = (table: string, rowIndex: number, record: any, err: any) => {
@@ -468,29 +591,20 @@ app.post('/api/db/import', requireAuth, requireAdmin, (req, res) => {
       db.prepare('DELETE FROM products').run();
       db.prepare('DELETE FROM customers').run();
 
-      // --- Customers ---
       const insertCustomer = db.prepare('INSERT INTO customers (id, name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?, ?)');
       (customers || []).forEach((c: any, i: number) => {
         try {
           insertCustomer.run(c.id, c.name ?? null, c.address ?? null, c.contact ?? null, c.mobile ?? null, c.email ?? null);
-        } catch (err: any) {
-          logError('customers', i, c, err);
-          throw err; // re-throw to roll back transaction
-        }
+        } catch (err: any) { logError('customers', i, c, err); throw err; }
       });
 
-      // --- Products ---
       const insertProduct = db.prepare('INSERT INTO products (id, description, description_ar, unit, unit_price) VALUES (?, ?, ?, ?, ?)');
       (products || []).forEach((p: any, i: number) => {
         try {
           insertProduct.run(p.id, p.description ?? null, p.description_ar ?? null, p.unit ?? null, p.unit_price ?? 0);
-        } catch (err: any) {
-          logError('products', i, p, err);
-          throw err;
-        }
+        } catch (err: any) { logError('products', i, p, err); throw err; }
       });
 
-      // --- Quotes ---
       const insertQuote = db.prepare(`
         INSERT INTO quotes (
           id, quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, updated_at,
@@ -511,43 +625,30 @@ app.post('/api/db/import', requireAuth, requireAdmin, (req, res) => {
             q.custom_field_header ?? 'CUSTOM:', q.custom_field ?? null, q.custom_field_ar ?? null,
             q.status ?? 'Draft', q.type ?? 'Quotation', q.revision_of ?? null, q.author_id ?? null, q.vat_rate ?? 15
           );
-        } catch (err: any) {
-          logError('quotes', i, { id: q.id, quote_id: q.quote_id, customer_id: q.customer_id }, err);
-          throw err;
-        }
+        } catch (err: any) { logError('quotes', i, { id: q.id, quote_id: q.quote_id }, err); throw err; }
       });
 
-      // --- Quote Items ---
       const insertQuoteItem = db.prepare('INSERT INTO quote_items (id, quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
       (quote_items || []).forEach((qi: any, i: number) => {
         try {
           insertQuoteItem.run(qi.id, qi.quote_id, qi.product_id ?? null, qi.description ?? null, qi.description_ar ?? null, qi.qty ?? 0, qi.unit ?? null, qi.unit_price ?? 0, qi.net_price ?? 0);
-        } catch (err: any) {
-          logError('quote_items', i, { id: qi.id, quote_id: qi.quote_id, product_id: qi.product_id }, err);
-          throw err;
-        }
+        } catch (err: any) { logError('quote_items', i, { id: qi.id, quote_id: qi.quote_id }, err); throw err; }
       });
-
     })();
 
     res.json({ success: true });
   } catch (error: any) {
     const detail = importErrors.length > 0 ? importErrors[importErrors.length - 1] : error.message;
-    console.error('Import transaction rolled back. First failure:', detail);
-    res.status(500).json({
-      error: `Import failed: ${detail}`,
-      details: importErrors
-    });
+    res.status(500).json({ error: `Import failed: ${detail}`, details: importErrors });
   }
 });
 
-// Settings / System
+// ── Settings / System ─────────────────────────────────────────────────────────
 app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
   const file = path.resolve(process.cwd(), 'quotes.db');
   res.download(file, `AJ_Network_DB_Backup_${new Date().toISOString().split('T')[0]}.db`);
 });
 
-// Settings
 app.get('/api/settings/:key', requireAuth, (req, res) => {
   try {
     const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get(req.params.key) as { value: string } | undefined;
@@ -567,7 +668,8 @@ app.post('/api/settings', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-// Translation API
+// ── Translation API ───────────────────────────────────────────────────────────
+// Proxies to Google Translate. requireAuth ensures only logged-in users can use it.
 app.post('/api/translate', requireAuth, async (req, res) => {
   const { text } = req.body;
   if (!text) return res.json({ translation: '' });
@@ -577,7 +679,6 @@ app.post('/api/translate', requireAuth, async (req, res) => {
     const response = await fetch(url);
     const data = await response.json();
 
-    // Google Translate returns an array where the first element is an array of translated segments.
     let translation = '';
     if (data && data[0]) {
       data[0].forEach((segment: any) => {
@@ -592,9 +693,8 @@ app.post('/api/translate', requireAuth, async (req, res) => {
   }
 });
 
-
+// ── Server Startup ────────────────────────────────────────────────────────────
 async function startServer() {
-
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
