@@ -451,6 +451,16 @@ app.get('/api/db/export', requireAuth, requireAdmin, (req, res) => {
 
 app.post('/api/db/import', requireAuth, requireAdmin, (req, res) => {
   const { customers, products, quotes, quote_items } = req.body;
+
+  const importErrors: string[] = [];
+
+  const logError = (table: string, rowIndex: number, record: any, err: any) => {
+    const key = record.id ? `id=${record.id}` : record.quote_id ? `quote_id=${record.quote_id}` : `row #${rowIndex + 1}`;
+    const msg = `[${table}] Row ${rowIndex + 1} (${key}): ${err.message}`;
+    console.error(`❌ Import error - ${msg}`, '\nRecord:', JSON.stringify(record));
+    importErrors.push(msg);
+  };
+
   try {
     db.transaction(() => {
       db.prepare('DELETE FROM quote_items').run();
@@ -458,12 +468,29 @@ app.post('/api/db/import', requireAuth, requireAdmin, (req, res) => {
       db.prepare('DELETE FROM products').run();
       db.prepare('DELETE FROM customers').run();
 
+      // --- Customers ---
       const insertCustomer = db.prepare('INSERT INTO customers (id, name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?, ?)');
-      for (const c of customers || []) insertCustomer.run(c.id, c.name ?? null, c.address ?? null, c.contact ?? null, c.mobile ?? null, c.email ?? null);
+      (customers || []).forEach((c: any, i: number) => {
+        try {
+          insertCustomer.run(c.id, c.name ?? null, c.address ?? null, c.contact ?? null, c.mobile ?? null, c.email ?? null);
+        } catch (err: any) {
+          logError('customers', i, c, err);
+          throw err; // re-throw to roll back transaction
+        }
+      });
 
+      // --- Products ---
       const insertProduct = db.prepare('INSERT INTO products (id, description, description_ar, unit, unit_price) VALUES (?, ?, ?, ?, ?)');
-      for (const p of products || []) insertProduct.run(p.id, p.description ?? null, p.description_ar ?? null, p.unit ?? null, p.unit_price ?? 0);
+      (products || []).forEach((p: any, i: number) => {
+        try {
+          insertProduct.run(p.id, p.description ?? null, p.description_ar ?? null, p.unit ?? null, p.unit_price ?? 0);
+        } catch (err: any) {
+          logError('products', i, p, err);
+          throw err;
+        }
+      });
 
+      // --- Quotes ---
       const insertQuote = db.prepare(`
         INSERT INTO quotes (
           id, quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, updated_at,
@@ -472,23 +499,45 @@ app.post('/api/db/import', requireAuth, requireAdmin, (req, res) => {
           custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      for (const q of quotes || []) {
-        insertQuote.run(
-          q.id, q.quote_id, q.date ?? null, q.customer_id ?? null, q.subject ?? null, q.subject_ar ?? null, q.discount ?? 0, q.subtotal ?? 0, q.tax ?? 0, q.grand_total ?? 0, q.updated_at ?? null,
-          q.note_header ?? 'NOTE:', q.note ?? null, q.note_ar ?? null, q.payment ?? null, q.payment_ar ?? null, q.warranty ?? null, q.warranty_ar ?? null,
-          q.manpower ?? null, q.manpower_ar ?? null, q.mobilization ?? null, q.mobilization_ar ?? null, q.duration ?? null, q.duration_ar ?? null,
-          q.bank_details ?? null, q.bank_details_ar ?? null, q.footer ?? null, q.footer_ar ?? null,
-          q.custom_field_header ?? 'CUSTOM:', q.custom_field ?? null, q.custom_field_ar ?? null,
-          q.status ?? 'Draft', q.type ?? 'Quotation', q.revision_of ?? null, q.author_id ?? null, q.vat_rate ?? 15
-        );
-      }
+      (quotes || []).forEach((q: any, i: number) => {
+        try {
+          insertQuote.run(
+            q.id, q.quote_id, q.date ?? null, q.customer_id ?? null, q.subject ?? null, q.subject_ar ?? null,
+            q.discount ?? 0, q.subtotal ?? 0, q.tax ?? 0, q.grand_total ?? 0, q.updated_at ?? null,
+            q.note_header ?? 'NOTE:', q.note ?? null, q.note_ar ?? null, q.payment ?? null, q.payment_ar ?? null,
+            q.warranty ?? null, q.warranty_ar ?? null, q.manpower ?? null, q.manpower_ar ?? null,
+            q.mobilization ?? null, q.mobilization_ar ?? null, q.duration ?? null, q.duration_ar ?? null,
+            q.bank_details ?? null, q.bank_details_ar ?? null, q.footer ?? null, q.footer_ar ?? null,
+            q.custom_field_header ?? 'CUSTOM:', q.custom_field ?? null, q.custom_field_ar ?? null,
+            q.status ?? 'Draft', q.type ?? 'Quotation', q.revision_of ?? null, q.author_id ?? null, q.vat_rate ?? 15
+          );
+        } catch (err: any) {
+          logError('quotes', i, { id: q.id, quote_id: q.quote_id, customer_id: q.customer_id }, err);
+          throw err;
+        }
+      });
 
+      // --- Quote Items ---
       const insertQuoteItem = db.prepare('INSERT INTO quote_items (id, quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      for (const qi of quote_items || []) insertQuoteItem.run(qi.id, qi.quote_id, qi.product_id ?? null, qi.description ?? null, qi.description_ar ?? null, qi.qty ?? 0, qi.unit ?? null, qi.unit_price ?? 0, qi.net_price ?? 0);
+      (quote_items || []).forEach((qi: any, i: number) => {
+        try {
+          insertQuoteItem.run(qi.id, qi.quote_id, qi.product_id ?? null, qi.description ?? null, qi.description_ar ?? null, qi.qty ?? 0, qi.unit ?? null, qi.unit_price ?? 0, qi.net_price ?? 0);
+        } catch (err: any) {
+          logError('quote_items', i, { id: qi.id, quote_id: qi.quote_id, product_id: qi.product_id }, err);
+          throw err;
+        }
+      });
+
     })();
+
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    const detail = importErrors.length > 0 ? importErrors[importErrors.length - 1] : error.message;
+    console.error('Import transaction rolled back. First failure:', detail);
+    res.status(500).json({
+      error: `Import failed: ${detail}`,
+      details: importErrors
+    });
   }
 });
 

@@ -129,7 +129,13 @@ export default function Settings() {
         } else {
           const errorData = await res.json();
           console.error('Import failed:', errorData);
-          alert(`Import failed: ${errorData.error || 'Unknown error'}`);
+          if (errorData.details && errorData.details.length > 0) {
+            console.table(errorData.details.map((d: string) => ({ error: d })));
+            const detailLines = errorData.details.map((d: string) => `• ${d}`).join('\n');
+            alert(`Import failed — the following rows could not be imported:\n\n${detailLines}`);
+          } else {
+            alert(`Import failed: ${errorData.error || 'Unknown error'}`);
+          }
           setImportStatus('error');
           setTimeout(() => setImportStatus('idle'), 5000);
         }
