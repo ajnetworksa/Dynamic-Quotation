@@ -130,6 +130,14 @@ db.exec(`
     user_id INTEGER NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor TEXT,
+    timestamp TEXT NOT NULL
+  );
 `);
 
 const addColumnIfNotExists = (table: string, column: string, type: string) => {
@@ -172,6 +180,9 @@ addColumnIfNotExists('quotes', 'custom_field', 'TEXT');
 addColumnIfNotExists('quotes', 'custom_field_ar', 'TEXT');
 addColumnIfNotExists('quote_items', 'description_ar', 'TEXT');
 addColumnIfNotExists('products', 'description_ar', 'TEXT');
+addColumnIfNotExists('quotes', 'expiry_date', 'TEXT');
+addColumnIfNotExists('quotes', 'followup_date', 'TEXT');
+addColumnIfNotExists('quotes', 'followup_note', 'TEXT');
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -487,33 +498,41 @@ app.post('/api/quotes', requireAuth, (req, res) => {
     quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, items,
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
-    custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate
+    custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date
   } = req.body;
   const updated_at = new Date().toISOString();
   const author_id = (req as any).user.id;
 
+  const actor = (req as any).user?.username || 'system';
+
   try {
     db.transaction(() => {
-      const existing = db.prepare('SELECT id FROM quotes WHERE quote_id = ?').get(quote_id);
+      const existing = db.prepare('SELECT id, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
 
       if (existing) {
+        const prevStatus = existing.status;
         db.prepare(`
           UPDATE quotes SET 
             date = ?, customer_id = ?, subject = ?, subject_ar = ?, discount = ?, subtotal = ?, tax = ?, grand_total = ?, updated_at = ?,
             note_header = ?, note = ?, note_ar = ?, payment = ?, payment_ar = ?, warranty = ?, warranty_ar = ?, 
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
-            custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?
+            custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15,
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null,
           quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
+        // Activity log: updated
+        const action = prevStatus !== (status || 'Draft')
+          ? `Status changed to ${status || 'Draft'}`
+          : 'Updated';
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, action, actor, updated_at);
       } else {
         db.prepare(`
           INSERT INTO quotes (
@@ -521,15 +540,17 @@ app.post('/api/quotes', requireAuth, (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id, vat_rate || 15
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id, vat_rate || 15, expiry_date || null
         );
+        // Activity log: created
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at);
       }
 
       const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -548,12 +569,62 @@ app.delete('/api/quotes/:quote_id', requireAuth, requireAdmin, (req, res) => {
   try {
     db.transaction(() => {
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(req.params.quote_id);
+      db.prepare('DELETE FROM activity_log WHERE quote_id = ?').run(req.params.quote_id);
       db.prepare('DELETE FROM quotes WHERE quote_id = ?').run(req.params.quote_id);
     })();
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// ── Quote Timeline ────────────────────────────────────────────────────────────
+app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM activity_log WHERE quote_id = ? ORDER BY timestamp ASC').all(req.params.quote_id);
+  res.json(rows);
+});
+
+// ── Bulk Status Update ────────────────────────────────────────────────────────
+app.patch('/api/quotes/bulk-status', requireAuth, (req, res) => {
+  const { ids, status } = req.body;
+  if (!Array.isArray(ids) || !status) return res.status(400).json({ error: 'ids and status required' });
+  const actor = (req as any).user?.username || 'system';
+  const ts = new Date().toISOString();
+  try {
+    db.transaction(() => {
+      for (const id of ids) {
+        db.prepare('UPDATE quotes SET status = ?, updated_at = ? WHERE quote_id = ?').run(status, ts, id);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(id, `Status changed to ${status}`, actor, ts);
+      }
+    })();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Follow-up ─────────────────────────────────────────────────────────────────
+app.patch('/api/quotes/:quote_id/followup', requireAuth, (req, res) => {
+  const { followup_date, followup_note } = req.body;
+  try {
+    db.prepare('UPDATE quotes SET followup_date = ?, followup_note = ? WHERE quote_id = ?').run(followup_date || null, followup_note || null, req.params.quote_id);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Customer Stats ────────────────────────────────────────────────────────────
+app.get('/api/customers/stats', requireAuth, (req, res) => {
+  const rows = db.prepare(`
+    SELECT customer_id,
+           SUM(grand_total) as total_won,
+           COUNT(*) as quote_count
+    FROM quotes
+    WHERE customer_id IS NOT NULL
+    GROUP BY customer_id
+  `).all();
+  res.json(rows);
 });
 
 // ── Database Export / Import ───────────────────────────────────────────────────

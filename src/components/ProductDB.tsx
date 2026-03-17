@@ -15,6 +15,8 @@ export default function ProductDB() {
   const [isEditing, setIsEditing] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Partial<Product>>({});
   const [isAdding, setIsAdding] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => { fetchProducts(); }, []);
@@ -67,6 +69,10 @@ export default function ProductDB() {
     p.unit?.toLowerCase().includes(q) ||
     String(p.unit_price).includes(q)
   );
+
+  const totalPages = Math.ceil(filtered.length / rowsPerPage) || 1;
+  const safePage = Math.min(currentPage, totalPages);
+  const currentItems = filtered.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -146,8 +152,8 @@ export default function ProductDB() {
               </tr>
             )}
 
-            {filtered.map((product) => (
-              <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+            {currentItems.map((product) => (
+              <tr key={product.id} className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors">
                 <td className="p-4 text-gray-500">{product.id}</td>
                 <td className="p-4">
                   {isEditing === product.id ? (
@@ -208,6 +214,46 @@ export default function ProductDB() {
             )}
           </tbody>
         </table>
+      </div>
+      <div className="p-4 border-t border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-4 bg-white rounded-b-xl">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Rows per page:</span>
+          <input
+            type="number"
+            min="1"
+            className="w-16 p-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+            value={rowsPerPage || ''}
+            onChange={(e) => {
+              const val = parseInt(e.target.value);
+              setRowsPerPage(isNaN(val) ? '' as any : val);
+              setCurrentPage(1);
+            }}
+            onBlur={() => {
+              if (!rowsPerPage || rowsPerPage < 1) setRowsPerPage(20);
+            }}
+          />
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-gray-600">
+            Page {safePage} of {totalPages}
+          </span>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={safePage === 1}
+              className="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={safePage === totalPages}
+              className="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,0 +1,21 @@
+{
+    "version": 1.1,
+    "atDirectives": [
+        {
+            "name": "@theme",
+            "description": "Tailwind CSS v4: Defines design tokens (colors, spacing, etc.) directly in CSS."
+        },
+        {
+            "name": "@utility",
+            "description": "Tailwind CSS v4: Defines a custom utility class."
+        },
+        {
+            "name": "@variant",
+            "description": "Tailwind CSS v4: Defines a custom variant."
+        },
+        {
+            "name": "@source",
+            "description": "Tailwind CSS v4: Specifies content sources for class scanning."
+        }
+    ]
+}

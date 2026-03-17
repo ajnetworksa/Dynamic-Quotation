@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx-js-style';
@@ -75,11 +75,18 @@ export default function QuoteForm() {
   // You can change the default here, but it will be overridden by whatever is
   // saved in the database via the Settings page.
   const [logoSize, setLogoSize] = useState<number>(24);
+  const [themeColors, setThemeColors] = useState({
+    headerBg: '#dcfce7',
+    headerText: '#1f2937',
+    stripeBg: '#e5e7eb',
+    totalsBg: '#f3f4f6'
+  });
 
 
 
   const [quoteId, setQuoteId] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [expiryDate, setExpiryDate] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | ''>('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
@@ -153,6 +160,19 @@ export default function QuoteForm() {
 
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
 
+  // ── UNIT SUGGESTIONS ─────────────────────────────────────────────────────────
+  // These appear as auto-complete options on every Unit cell. Free-text still allowed.
+  const UNIT_SUGGESTIONS = ['pc', 'set', 'lot', 'm²', 'hr', 'day', 'kg', 'm', 'lm', 'pair', 'roll'];
+
+  // ── DRAFT AUTO-SAVE ───────────────────────────────────────────────────────────
+  const DRAFT_KEY = 'quote_draft';
+  const [draftBanner, setDraftBanner] = useState(false);
+
+  // ── QUOTE TEMPLATES ───────────────────────────────────────────────────────────
+  const [templates, setTemplates] = useState<{ name: string; data: any }[]>([]);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+
   const addCustomField = () => {
     setCustomFields([...customFields, { id: crypto.randomUUID(), header: 'CUSTOM FIELD:', value: '', valueAr: '' }]);
     setShowCustomField(true);
@@ -185,11 +205,13 @@ export default function QuoteForm() {
       const dbCustomers = await fetchCustomers();
       fetchProducts();
       fetchLogo();
+      loadTemplates();
       if (recallQuoteId) {
         fetchQuote(recallQuoteId, dbCustomers);
       } else if (!quoteId) {
-        // Only generate ID and reset items if we haven't already started a quote
-        // This prevents wiping out the form data when switching tabs (which triggers a re-render/re-mount)
+        // Check for saved draft
+        const draft = localStorage.getItem(DRAFT_KEY);
+        if (draft) setDraftBanner(true);
         generateQuoteId();
         setItems([{ id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
       }
@@ -228,14 +250,20 @@ export default function QuoteForm() {
         if (dataFooter.value) setFooterImageUrl(dataFooter.value);
       }
 
+      const resTheme = await fetch('/api/settings/themeColors');
+      if (resTheme.ok) {
+        const dataTheme = await resTheme.json();
+        if (dataTheme.value) setThemeColors(JSON.parse(dataTheme.value));
+      }
 
     } catch (e) {
-      console.error('Failed to fetch logo settings', e);
+      console.error('Failed to fetch settings', e);
     }
   };
 
-  const handleAutoTranslate = async (text: string, currentAr: string, setterAr: (val: string) => void) => {
-    if (!text) return; // Allow re-translating if there is text
+  const handleAutoTranslate = async (text: string, currentAr: string, setterAr: (val: string) => void, force = false) => {
+    if (!text) return;
+    if (currentAr && !force) return; // Only auto-translate if empty or forced
     try {
       const res = await fetch('/api/translate', {
         method: 'POST',
@@ -251,8 +279,98 @@ export default function QuoteForm() {
     }
   };
 
-  const handleProductAutoTranslate = async (index: number, text: string, currentAr: string) => {
-    if (!text) return; // Allow re-translating
+  const translateSingle = async (text: string): Promise<string | null> => {
+    if (!text) return null;
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.translation || null;
+      }
+    } catch (e) {
+      console.error('Translation helper failed', e);
+    }
+    return null;
+  };
+
+  const handleTranslateAll = async () => {
+    const isConfirm = confirm('This will translate all empty Arabic fields based on English content. Proceed?');
+    if (!isConfirm) return;
+
+    // 1. Subject
+    if (subject && !subjectAr) {
+      const trans = await translateSingle(subject);
+      if (trans) setSubjectAr(trans);
+    }
+
+    // 2. Items
+    const newItems = [...items];
+    let itemsChanged = false;
+    for (let i = 0; i < newItems.length; i++) {
+      if (newItems[i].description && !newItems[i].description_ar) {
+        const trans = await translateSingle(newItems[i].description);
+        if (trans) {
+          newItems[i].description_ar = trans;
+          itemsChanged = true;
+        }
+      }
+    }
+    if (itemsChanged) setItems(newItems);
+
+    // 3. Terms
+    if (note && !noteAr) {
+      const trans = await translateSingle(note);
+      if (trans) setNoteAr(trans);
+    }
+    if (payment && !paymentAr) {
+      const trans = await translateSingle(payment);
+      if (trans) setPaymentAr(trans);
+    }
+    if (warranty && !warrantyAr) {
+      const trans = await translateSingle(warranty);
+      if (trans) setWarrantyAr(trans);
+    }
+    if (manpower && !manpowerAr) {
+      const trans = await translateSingle(manpower);
+      if (trans) setManpowerAr(trans);
+    }
+    if (mobilization && !mobilizationAr) {
+      const trans = await translateSingle(mobilization);
+      if (trans) setMobilizationAr(trans);
+    }
+    if (duration && !durationAr) {
+      const trans = await translateSingle(duration);
+      if (trans) setDurationAr(trans);
+    }
+    if (bankDetails && !bankDetailsAr) {
+      const trans = await translateSingle(bankDetails);
+      if (trans) setBankDetailsAr(trans);
+    }
+
+    // 4. Custom Fields
+    const newCFs = [...customFields];
+    let cfChanged = false;
+    for (let i = 0; i < newCFs.length; i++) {
+      if (newCFs[i].value && !newCFs[i].valueAr) {
+        const trans = await translateSingle(newCFs[i].value);
+        if (trans) {
+          newCFs[i].valueAr = trans;
+          cfChanged = true;
+        }
+      }
+    }
+    if (cfChanged) setCustomFields(newCFs);
+
+    alert('Translation process complete!');
+  };
+
+  const handleProductAutoTranslate = async (index: number, text: string, currentAr: string, force = false) => {
+    if (!text) return;
+    if (currentAr && !force) return; // Only auto-translate if empty or forced
     try {
       const res = await fetch('/api/translate', {
         method: 'POST',
@@ -296,6 +414,7 @@ export default function QuoteForm() {
       const data = await res.json();
       setQuoteId(data.quote_id);
       setDate(data.date);
+      setExpiryDate(data.expiry_date || '');
       setSelectedCustomerId(data.customer_id || '');
       // Update search field if customer found
       const c = customersList.find(cust => cust.id === data.customer_id);
@@ -383,6 +502,8 @@ export default function QuoteForm() {
     generateQuoteId();
     setSearchParams({});
     setDate(new Date().toISOString().split('T')[0]);
+    setExpiryDate('');
+    localStorage.removeItem('quote_draft');
     setSelectedCustomerId('');
     setSelectedCustomer(null);
     setCustomerSearch('');
@@ -489,6 +610,7 @@ export default function QuoteForm() {
     const payload = {
       quote_id: quoteId,
       date,
+      expiry_date: expiryDate || null,
       customer_id: selectedCustomerId,
       subject,
       subject_ar: subjectAr,
@@ -530,6 +652,7 @@ export default function QuoteForm() {
 
     if (res.ok) {
       alert(recallQuoteId === quoteId ? 'Quote updated successfully!' : 'Quote data is recorded to Tracking section!');
+      localStorage.removeItem('quote_draft'); // clear auto-saved draft on successful record
       setShowOverwriteModal(false);
     } else {
       const error = await res.json();
@@ -567,6 +690,133 @@ export default function QuoteForm() {
     setTimeout(() => {
       alert("A new Quote ID has been generated! You can now click Record to save.");
     }, 100);
+  };
+
+  // ── DRAFT AUTO-SAVE: write every 30 seconds ────────────────────────────────
+  useEffect(() => {
+    if (recallQuoteId) return; // Don't auto-save when editing a recalled quote
+    const save = () => {
+      if (!quoteId && items.every(i => !i.description)) return; // Nothing worth saving
+      const draft = {
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate,
+        selectedCustomerId, selectedCustomer, customerSearch,
+        note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
+        manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
+        bankDetails, bankDetailsAr, footer, footerAr, customFields,
+        savedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    };
+    const timer = setInterval(save, 30000);
+    return () => clearInterval(timer);
+  }, [quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate,
+    note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
+    manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
+    bankDetails, bankDetailsAr, footer, footerAr, customFields, recallQuoteId,
+    selectedCustomerId, selectedCustomer, customerSearch]);
+
+  const restoreDraft = () => {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return;
+    try {
+      const d = JSON.parse(raw);
+      if (d.quoteId) setQuoteId(d.quoteId);
+      if (d.date) setDate(d.date);
+      if (d.expiryDate) setExpiryDate(d.expiryDate);
+      if (d.subject) setSubject(d.subject);
+      if (d.subjectAr) setSubjectAr(d.subjectAr);
+      if (d.selectedCustomerId !== undefined) setSelectedCustomerId(d.selectedCustomerId);
+      if (d.selectedCustomer !== undefined) setSelectedCustomer(d.selectedCustomer);
+      if (d.customerSearch !== undefined) setCustomerSearch(d.customerSearch);
+      if (d.items?.length) setItems(d.items);
+      if (d.discount) setDiscount(d.discount);
+      if (d.vatRate !== undefined) setVatRate(d.vatRate);
+      if (d.note) setNote(d.note);
+      if (d.noteAr) setNoteAr(d.noteAr);
+      if (d.noteHeader) setNoteHeader(d.noteHeader);
+      if (d.payment) setPayment(d.payment);
+      if (d.paymentAr) setPaymentAr(d.paymentAr);
+      if (d.warranty) setWarranty(d.warranty);
+      if (d.warrantyAr) setWarrantyAr(d.warrantyAr);
+      if (d.manpower) setManpower(d.manpower);
+      if (d.manpowerAr) setManpowerAr(d.manpowerAr);
+      if (d.mobilization) setMobilization(d.mobilization);
+      if (d.mobilizationAr) setMobilizationAr(d.mobilizationAr);
+      if (d.duration) setDuration(d.duration);
+      if (d.durationAr) setDurationAr(d.durationAr);
+      if (d.bankDetails) setBankDetails(d.bankDetails);
+      if (d.bankDetailsAr) setBankDetailsAr(d.bankDetailsAr);
+      if (d.footer) setFooter(d.footer);
+      if (d.footerAr) setFooterAr(d.footerAr);
+      if (d.customFields) setCustomFields(d.customFields);
+    } catch (e) { /* ignore */ }
+    setDraftBanner(false);
+  };
+
+  const discardDraft = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    setDraftBanner(false);
+  };
+
+  // ── TEMPLATES ─────────────────────────────────────────────────────────────────
+  const loadTemplates = () => {
+    try {
+      const raw = localStorage.getItem('quote_templates');
+      if (raw) setTemplates(JSON.parse(raw));
+    } catch (e) { /* ignore */ }
+  };
+
+  const saveTemplate = () => {
+    if (!templateName.trim()) return alert('Please enter a template name.');
+    const data = {
+      note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
+      manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
+      bankDetails, bankDetailsAr, footer, footerAr, vatRate,
+    };
+    const newTemplates = [...templates.filter(t => t.name !== templateName.trim()), { name: templateName.trim(), data }];
+    localStorage.setItem('quote_templates', JSON.stringify(newTemplates));
+    setTemplates(newTemplates);
+    setShowTemplateModal(false);
+    setTemplateName('');
+    alert(`Template "${templateName.trim()}" saved!`);
+  };
+
+  const deleteTemplate = (name: string) => {
+    if (!confirm(`Are you sure you want to delete the template "${name}"?`)) return;
+    const newTemplates = templates.filter(t => t.name !== name);
+    localStorage.setItem('quote_templates', JSON.stringify(newTemplates));
+    setTemplates(newTemplates);
+  };
+
+  const applyTemplate = (t: { name: string; data: any }) => {
+    const d = t.data;
+    if (d.note !== undefined) setNote(d.note);
+    if (d.noteAr !== undefined) setNoteAr(d.noteAr);
+    if (d.noteHeader !== undefined) setNoteHeader(d.noteHeader);
+    if (d.payment !== undefined) setPayment(d.payment);
+    if (d.paymentAr !== undefined) setPaymentAr(d.paymentAr);
+    if (d.warranty !== undefined) setWarranty(d.warranty);
+    if (d.warrantyAr !== undefined) setWarrantyAr(d.warrantyAr);
+    if (d.manpower !== undefined) setManpower(d.manpower);
+    if (d.manpowerAr !== undefined) setManpowerAr(d.manpowerAr);
+    if (d.mobilization !== undefined) setMobilization(d.mobilization);
+    if (d.mobilizationAr !== undefined) setMobilizationAr(d.mobilizationAr);
+    if (d.duration !== undefined) setDuration(d.duration);
+    if (d.durationAr !== undefined) setDurationAr(d.durationAr);
+    if (d.bankDetails !== undefined) setBankDetails(d.bankDetails);
+    if (d.bankDetailsAr !== undefined) setBankDetailsAr(d.bankDetailsAr);
+    if (d.footer !== undefined) setFooter(d.footer);
+    if (d.footerAr !== undefined) setFooterAr(d.footerAr);
+    if (d.vatRate !== undefined) setVatRate(d.vatRate);
+  };
+
+  // ── DUPLICATE QUOTE ───────────────────────────────────────────────────────────
+  const handleDuplicate = async () => {
+    if (!confirm('This will copy the current quote into a new ID. Proceed?')) return;
+    await generateQuoteId();
+    // Clear the recall param so it saves as a new quote
+    setSearchParams({});
+    alert('Quote duplicated with a new ID. Click Record to save it.');
   };
 
   const handleCreateRevision = () => {
@@ -655,18 +905,13 @@ export default function QuoteForm() {
       const originalElements = printRef.current.querySelectorAll('input, textarea, select');
       const elementData = Array.from(originalElements).map((el: any) => {
         const computedStyle = window.getComputedStyle(el);
-        // Increase font size for inputs by 25% for the PDF
-        let adjustedFontSize = computedStyle.fontSize;
-        if (adjustedFontSize.endsWith('px')) {
-          const num = parseFloat(adjustedFontSize);
-          if (!isNaN(num)) adjustedFontSize = `${num * 1.25}px`;
-        }
-
+        // Use the exact computed font size — no scaling — so replaced divs
+        // match surrounding static text exactly in the PDF.
         return {
           value: el.tagName === 'SELECT' ? el.options[el.selectedIndex]?.text : el.value,
           textAlign: computedStyle.textAlign,
           fontFamily: computedStyle.fontFamily,
-          fontSize: adjustedFontSize,
+          fontSize: computedStyle.fontSize,
           fontWeight: computedStyle.fontWeight,
           color: computedStyle.color,
           padding: computedStyle.padding,
@@ -702,7 +947,6 @@ export default function QuoteForm() {
             if (data.textAlign === 'right') div.style.justifyContent = 'flex-end';
             if (data.textAlign === 'center') div.style.justifyContent = 'center';
 
-            // For textareas and text inputs, ensure height can expand to avoid layout shifts/cropping
             if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text')) {
               div.style.minHeight = el.offsetHeight ? `${el.offsetHeight}px` : (el.style.height || 'auto');
               div.style.height = 'auto';
@@ -712,7 +956,6 @@ export default function QuoteForm() {
               div.style.wordBreak = 'break-word';
             }
 
-            // Remove borders and backgrounds for cleaner print
             div.style.border = 'none';
             div.style.background = 'transparent';
 
@@ -724,13 +967,6 @@ export default function QuoteForm() {
           hiddenElements.forEach((el: any) => {
             el.style.display = 'none';
           });
-
-          // Force base font size to prevent shrinking in PDF
-          clonedDoc.body.style.fontSize = '18px';
-          const rootNode = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement;
-          if (rootNode) {
-            rootNode.style.fontSize = '18px';
-          }
 
           // Show elements that are print-only
           const printBlockElements = clonedDoc.querySelectorAll('.print\\:block, .print\\:flex');
@@ -745,23 +981,35 @@ export default function QuoteForm() {
           clonedDoc.querySelectorAll('.print\\:bg-transparent').forEach((el: any) => {
             el.style.backgroundColor = 'transparent';
           });
-          // Apply print:p-0 only to child elements, NOT the root container (which needs p-8 for side margins)
+
           clonedDoc.querySelectorAll('.print\\:p-0').forEach((el: any) => {
             if (!el.dataset.pdfRoot) el.style.padding = '0';
           });
-          // Fix table widths and grids that were relying on @media print
+
           clonedDoc.querySelectorAll('.min-w-\\[900px\\]').forEach((el: any) => {
             el.classList.remove('min-w-[900px]');
             el.style.minWidth = '0';
           });
+
           clonedDoc.querySelectorAll('.print\\:overflow-visible').forEach((el: any) => {
             el.style.overflow = 'visible';
           });
-          // Apply the exact grid template for the table to avoid the empty 40px action column
+
+          // ★ CENTER THE TABLE IN THE PDF ★
+          const tableOverflowContainer = clonedDoc.querySelector('.overflow-x-auto');
+          if (tableOverflowContainer) {
+            (tableOverflowContainer as HTMLElement).style.display = 'flex';
+            (tableOverflowContainer as HTMLElement).style.justifyContent = 'center';
+            (tableOverflowContainer as HTMLElement).style.width = '100%';
+          }
+
+          // Apply the exact grid template for the table
           const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[50px_1fr_80px_80px_100px_120px"]');
           gridRows.forEach((el: any) => {
             el.style.gridTemplateColumns = '50px 1fr 80px 80px 100px 120px';
             el.style.width = '100%';
+            el.style.margin = '0 auto';
+            el.style.display = 'grid';
           });
 
           // Set A4 minHeight on root container so footer (mt-auto) is pushed to the page bottom
@@ -769,6 +1017,9 @@ export default function QuoteForm() {
           if (pdfRoot) {
             const w = pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width;
             pdfRoot.style.minHeight = `${w * (297 / 210)}px`;
+            pdfRoot.style.display = 'flex';
+            pdfRoot.style.flexDirection = 'column';
+            pdfRoot.style.justifyContent = 'space-between';
           }
         }
       });
@@ -776,7 +1027,7 @@ export default function QuoteForm() {
       // ── CHANGE IMAGE FORMAT / QUALITY HERE ───────────────────────────────
       // First arg: 'image/jpeg' (smaller file) or 'image/png' (lossless, larger)
       // Second arg (only for JPEG): quality from 0.0 to 1.0. 0.8 = 80% quality.
-      const imgData = canvas.toDataURL('image/jpeg', 0.8);
+      const imgData = canvas.toDataURL('image/jpeg', 1);
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -969,6 +1220,17 @@ export default function QuoteForm() {
           emerald, teal, cyan, sky, blue, indigo, violet, purple, fuchsia, pink.
           Number suffix controls darkness: 50 (lightest) → 950 (darkest).
       ────────────────────────────────────────────────────────────────────── */}
+      {/* ── DRAFT RESTORE BANNER ────────────────────────────────────────────────────── */}
+      {draftBanner && (
+        <div className="flex items-center justify-between bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 print:hidden">
+          <span className="text-amber-800 text-sm font-medium">📝 You have an unsaved draft from a previous session.</span>
+          <div className="flex gap-2">
+            <button onClick={restoreDraft} className="px-3 py-1.5 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors font-medium">Restore Draft</button>
+            <button onClick={discardDraft} className="px-3 py-1.5 text-sm bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 transition-colors">Discard</button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 print:hidden gap-4">
         <h2 className="text-xl font-bold text-gray-800 w-full md:w-auto text-center md:text-left">Quote Generator</h2>
         <div className="flex flex-wrap justify-center md:justify-end gap-2 md:gap-3 w-full md:w-auto">
@@ -978,8 +1240,14 @@ export default function QuoteForm() {
           <button onClick={recordQuote} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">
             <Save size={18} /> Record
           </button>
+          <button onClick={handleTranslateAll} className="flex items-center gap-2 px-4 py-2 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors" title="Translate all empty Arabic fields">
+            <Languages size={18} /> Translate
+          </button>
           {recallQuoteId && (
             <>
+              <button onClick={handleDuplicate} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors" title="Copy all data to a new Quote ID">
+                <Copy size={18} /> Duplicate
+              </button>
               <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID">
                 Create Revision
               </button>
@@ -989,6 +1257,33 @@ export default function QuoteForm() {
                 </button>
               )}
             </>
+          )}
+          {/* ── TEMPLATE BUTTONS ───────────────────────────────────────────────────── */}
+          <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors" title="Save current Terms as a reusable template">
+            <Bookmark size={18} /> Save Template
+          </button>
+          {templates.length > 0 && (
+            <div className="relative group">
+              <button className="flex items-center gap-2 px-4 py-2 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors">
+                <BookOpen size={18} /> Load Template ▾
+              </button>
+              <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[180px] hidden group-hover:block">
+                {templates.map(t => (
+                  <div key={t.name} className="flex items-center hover:bg-amber-50 group/item">
+                    <button onClick={() => applyTemplate(t)} className="flex-1 text-left px-4 py-2 text-sm text-gray-700">
+                      {t.name}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteTemplate(t.name); }}
+                      className="p-2 text-gray-400 hover:text-red-500 opacity-0 group-hover/item:opacity-100 transition-opacity"
+                      title="Delete Template"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
           <button onClick={handleSendEmail} disabled={isSending} className="flex items-center gap-2 px-4 py-2 text-white bg-sky-500 hover:bg-sky-600 rounded-lg transition-colors disabled:opacity-50">
             {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />} Email
@@ -1042,19 +1337,19 @@ export default function QuoteForm() {
 
               TITLE COLOR: change 'text-gray-900' to e.g. 'text-indigo-900'.
           ────────────────────────────────────────────────────────────────── */}
-          <div className="flex flex-col md:flex-row justify-between items-start pb-6 mb-6">
+          <div className="flex flex-col md:flex-row justify-between items-start pb-2 mb-2">
             <div className="mb-4 md:mb-0">
               {/* ── Document title: QUOTATION or TAX INVOICE ─────────────── */}
               <h1 className="text-3xl md:text-4xl font-bold text-gray-900 tracking-tight mb-4 uppercase break-words">{type}</h1>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                <span className="font-semibold text-gray-700">Quote ID:</span>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-lg">
+                <span className="font-semibold text-gray-700">Quote ID / رقم العرض:</span>
                 <input type="text" value={quoteId} onChange={e => setQuoteId(e.target.value)} className="font-mono text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
 
-                <span className="font-semibold text-gray-700">Date:</span>
+                <span className="font-semibold text-gray-700">Date / التاريخ:</span>
                 <input type="date" value={date} onChange={e => setDate(e.target.value)} className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
 
-                <span className="font-semibold text-gray-700">Valid For:</span>
-                <input type="text" defaultValue="30 Days" className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+                <span className="font-semibold text-gray-700">Valid Until / صالح لغاية:</span>
+                <input type="date" value={expiryDate} onChange={e => setExpiryDate(e.target.value)} className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
               </div>
             </div>
             <div className="text-right flex flex-col items-end">
@@ -1091,10 +1386,10 @@ export default function QuoteForm() {
           <div className="border-2 border-gray-800 mb-6">
             {/* Header bar: "CUSTOMER INFO" label
                 Background color → bg-gray-100 | Text size → text-lg */}
-            <div className="bg-gray-100 px-4 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
+            <div className="bg-gray-100 px-4 pt-0 pb-2 border-b-2 border-gray-800 font-bold text-lg">
               CUSTOMER INFO
             </div>
-            <div className="p-4 grid grid-cols-[100px_1fr_100px_1fr] gap-y-2 text-base items-center">
+            <div className="px-4 py-2 grid grid-cols-[100px_1fr_100px_1fr] gap-y-0.5 text-base items-center">
               <span className="font-bold flex items-center">Customer:</span>
               <div className="relative w-full z-50 flex items-center">
                 <input
@@ -1141,28 +1436,50 @@ export default function QuoteForm() {
               </div>
 
               <span className="font-bold pl-4 flex items-center">Mobile:</span>
-              <span className="font-mono flex items-center">{selectedCustomer?.mobile || ''}</span>
+              <input
+                type="text"
+                className="font-mono flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                value={selectedCustomer?.mobile || ''}
+                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, mobile: e.target.value })}
+              />
 
               <span className="font-bold flex items-center">Address:</span>
-              <span className="col-span-3 flex items-center">{selectedCustomer?.address || ''}</span>
+              <input
+                type="text"
+                className="col-span-3 flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                value={selectedCustomer?.address || ''}
+                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, address: e.target.value })}
+              />
 
               <span className="font-bold flex items-center">Contact:</span>
-              <span className="flex items-center">{selectedCustomer?.contact || ''}</span>
+              <input
+                type="text"
+                className="flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                value={selectedCustomer?.contact || ''}
+                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, contact: e.target.value })}
+              />
 
               <span className="font-bold pl-4 flex items-center">E-mail:</span>
-              <span className="flex items-center">{selectedCustomer?.email || ''}</span>
+              <input
+                type="text"
+                className="flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                value={selectedCustomer?.email || ''}
+                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, email: e.target.value })}
+              />
 
-              <span className="font-bold flex items-center" style={{ marginTop: '24px' }}>Subject:</span>
-              <div className="col-span-3 flex items-center border border-gray-300 rounded focus-within:border-indigo-500 overflow-hidden print:border-none print:p-0 bg-white print:bg-transparent" style={{ marginTop: '24px', alignItems: 'center' }}>
-                <input
-                  type="text"
-                  className="flex-1 py-1.5 px-2 outline-none bg-transparent"
-                  value={subject}
-                  onChange={e => setSubject(e.target.value)}
-                  onBlur={() => handleAutoTranslate(subject, subjectAr, setSubjectAr)}
-                  placeholder="e.g., Supply, Installation and Configuration of IP Video Doorbell"
-                />
-                <div className="w-px h-6 bg-gray-200 print:hidden mx-2"></div>
+              <span className="font-bold flex items-center" style={{ marginTop: '8px' }}>Subject:</span>
+              <div className="col-span-3 flex items-center border border-gray-300 rounded focus-within:border-indigo-500 overflow-hidden print:border-none print:p-0 bg-white print:bg-transparent group/subject" style={{ marginTop: '8px', alignItems: 'center' }}>
+                <div className="flex-1 flex items-center">
+                  <input
+                    type="text"
+                    className="flex-1 py-1.5 px-2 outline-none bg-transparent"
+                    value={subject}
+                    onChange={e => setSubject(e.target.value)}
+                    onBlur={() => handleAutoTranslate(subject, subjectAr, setSubjectAr)}
+                    placeholder="e.g., Supply, Installation and Configuration of IP Video Doorbell"
+                  />
+                </div>
+                <div className="w-px h-6 bg-gray-200 print:hidden mx-1"></div>
                 <input
                   type="text"
                   dir="rtl"
@@ -1180,7 +1497,7 @@ export default function QuoteForm() {
 
               TABLE OUTER BORDER:
                 borderColor: '#1f2937' → dark gray.  Change to any hex, e.g.
-                '#1d4ed8' for dark blue or '#166534' for dark green.
+                '#1d4ed8' for dark blue or '#11ee66ff' for dark green.
 
               TABLE HEADER ROW BACKGROUND:
                 backgroundColor: '#dcfce7' → very light green (Tailwind green-100).
@@ -1211,21 +1528,21 @@ export default function QuoteForm() {
                 */}
                 <div
                   className="grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
-                  style={{ backgroundColor: '#dcfce7', borderColor: '#1f2937' }}
+                  style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
                 >
-                  <div className="pt-0 pb-4 px-1 border-r border-gray-800 h-full">ITEM</div>
-                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">
+                  <div className="py-2 px-1 border-r border-gray-800 h-full">ITEM</div>
+                  <div className="py-2 px-2 border-r border-gray-800 h-full">
                     DESCRIPTION
                   </div>
-                  <div className="pt-0 pb-4 px-1 border-r border-gray-800 h-full">QTY</div>
-                  <div className="pt-0 pb-4 px-1 border-r border-gray-800 h-full">UNIT</div>
-                  <div className="pt-0 pb-4 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
-                  <div className="pt-0 pb-4 px-2 h-full">NET PRICE</div>
-                  <div className="pt-0 pb-4 px-1 print:hidden"></div>
+                  <div className="py-2 px-1 border-r border-gray-800 h-full">QTY</div>
+                  <div className="py-2 px-1 border-r border-gray-800 h-full">UNIT</div>
+                  <div className="py-2 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
+                  <div className="py-2 px-2 h-full">NET PRICE</div>
+                  <div className="py-2 px-1 print:hidden"></div>
                 </div>
 
                 {items.map((item, index) => (
-                  <div key={item.id} className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}>
+                  <div key={item.id} className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`} style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                     <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
                       {index + 1}
                       {/* Price warning badge — UI only, hidden in PDF */}
@@ -1233,7 +1550,7 @@ export default function QuoteForm() {
                         <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
                       )}
                     </div>
-                    <div className="p-0 border-r border-gray-300 h-full flex relative group bg-white print:bg-transparent">
+                    <div className="p-0 border-r border-gray-300 h-full flex relative group">
                       {/* English description — left half of the cell, vertically centered */}
                       <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
                         <textarea
@@ -1248,6 +1565,7 @@ export default function QuoteForm() {
                           }}
                           rows={item.description.split('\n').length || 1}
                         />
+
                         {focusedDescriptionIndex === index && item.description.length > 1 && (
                           <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
                             {products
@@ -1268,15 +1586,21 @@ export default function QuoteForm() {
                               ))}
                           </div>
                         )}
-                        <select
-                          className="absolute right-1 top-2 w-6 opacity-0 group-hover:opacity-100 cursor-pointer print:hidden"
-                          onChange={(e) => handleProductSelect(index, e.target.value)}
-                          value=""
-                          title="Select from Product DB"
-                        >
-                          <option value="">+</option>
-                          {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
-                        </select>
+                        {/* Action Container for Product Selection Button */}
+                        <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
+                          <div className="relative flex items-center">
+                            <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
+                            <select
+                              className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                              onChange={(e) => handleProductSelect(index, e.target.value)}
+                              value=""
+                              title="Select from Product DB"
+                            >
+                              <option value="">+</option>
+                              {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
+                            </select>
+                          </div>
+                        </div>
                       </div>
                       <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
                       {/* Arabic description — right half, vertically centered, RTL */}
@@ -1315,6 +1639,7 @@ export default function QuoteForm() {
                     <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
                       <input
                         type="text"
+                        list="unit-suggestions"
                         className="w-full text-center text-base outline-none bg-transparent"
                         value={item.unit}
                         onChange={e => updateItem(index, 'unit', e.target.value)}
@@ -1334,16 +1659,22 @@ export default function QuoteForm() {
                         COLUMN WIDTH:  set by '110px' in the grid-cols template above.
                     */}
                     <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
-                      {/* SAR label: fixed width so the number always starts at the same position.
-                          Change 'w-9' if you use a longer currency code (e.g. 'USD' still fits w-9).
-                          Change 'SAR' to your currency code. */}
-                      <span className="shrink-0 w-9 text-left">SAR</span>
-                      {/* flex-1 + min-w-0 lets the input fill the remaining space without overflowing */}
                       <input
-                        type="number"
-                        className="flex-1 min-w-0 text-right text-base font-mono outline-none bg-transparent"
-                        value={item.unit_price || ''}
-                        onChange={e => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                        type="text"
+                        className="w-full text-center text-base font-mono outline-none bg-transparent"
+                        value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
+                        onFocus={(e) => {
+                          e.target.type = 'number';
+                          e.target.value = item.unit_price ? item.unit_price.toString() : '';
+                        }}
+                        onBlur={(e) => {
+                          e.target.type = 'text';
+                          e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+                        }}
+                        onChange={e => {
+                          const val = parseFloat(e.target.value);
+                          updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
+                        }}
                         min="0"
                         step="0.01"
                       />
@@ -1361,11 +1692,8 @@ export default function QuoteForm() {
                                         Change to .toFixed(0) for whole numbers.
                         CURRENCY LABEL: change 'SAR' to your currency code.
                     */}
-                    <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
-                      {/* SAR label: same fixed-width as unit price column for visual consistency */}
-                      <span className="shrink-0 w-9 text-left">SAR</span>
-                      {/* .toFixed(2) = always 2 decimal places. Change to .toFixed(0) for whole numbers. */}
-                      <span className="flex-1 text-right">{item.net_price.toFixed(2)}</span>
+                    <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                      <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                     <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
                       <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
@@ -1401,13 +1729,15 @@ export default function QuoteForm() {
                     <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={noteHeader} onChange={(e) => setNoteHeader(e.target.value)} />
                   </span>
                   <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <textarea
-                      className="w-full outline-none bg-transparent resize-none overflow-hidden"
-                      value={note}
-                      onChange={e => setNote(e.target.value)}
-                      onBlur={() => handleAutoTranslate(note, noteAr, setNoteAr)}
-                      rows={note.split('\n').length || 2}
-                    />
+                    <div className="relative group/note flex flex-col justify-center">
+                      <textarea
+                        className="w-full outline-none bg-transparent resize-none overflow-hidden"
+                        value={note}
+                        onChange={e => setNote(e.target.value)}
+                        onBlur={() => handleAutoTranslate(note, noteAr, setNoteAr)}
+                        rows={note.split('\n').length || 2}
+                      />
+                    </div>
                     <textarea
                       dir="rtl"
                       className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
@@ -1426,11 +1756,13 @@ export default function QuoteForm() {
                 </div>
               )}
 
-              <div className="flex flex-col gap-y-2 mt-4">
+              <div className="flex flex-col gap-y-0.5 mt-4">
                 {showPayment ? (
-                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                  <div className="flex flex-col md:flex-row md:items-center group">
                     <span className="font-bold w-32 shrink-0">PAYMENT:</span>
-                    <input type="text" className="flex-1 outline-none bg-transparent italic" value={payment} onChange={e => setPayment(e.target.value)} onBlur={() => handleAutoTranslate(payment, paymentAr, setPaymentAr)} />
+                    <div className="flex-1 flex items-center group/field relative">
+                      <input type="text" className="flex-1 outline-none bg-transparent italic" value={payment} onChange={e => setPayment(e.target.value)} onBlur={() => handleAutoTranslate(payment, paymentAr, setPaymentAr)} />
+                    </div>
                     <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={paymentAr} onChange={e => setPaymentAr(e.target.value)} />
                     <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} title="Hide Payment" />
                   </div>
@@ -1442,9 +1774,11 @@ export default function QuoteForm() {
                 )}
 
                 {showWarranty ? (
-                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                  <div className="flex flex-col md:flex-row md:items-center group">
                     <span className="font-bold w-32 shrink-0">WARRANTY:</span>
-                    <input type="text" className="flex-1 outline-none bg-transparent" value={warranty} onChange={e => setWarranty(e.target.value)} onBlur={() => handleAutoTranslate(warranty, warrantyAr, setWarrantyAr)} />
+                    <div className="flex-1 flex items-center group/field relative">
+                      <input type="text" className="flex-1 outline-none bg-transparent" value={warranty} onChange={e => setWarranty(e.target.value)} onBlur={() => handleAutoTranslate(warranty, warrantyAr, setWarrantyAr)} />
+                    </div>
                     <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={warrantyAr} onChange={e => setWarrantyAr(e.target.value)} />
                     <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showWarranty} onChange={(e) => setShowWarranty(e.target.checked)} title="Hide Warranty" />
                   </div>
@@ -1456,9 +1790,11 @@ export default function QuoteForm() {
                 )}
 
                 {showManpower ? (
-                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                  <div className="flex flex-col md:flex-row md:items-center group">
                     <span className="font-bold w-32 shrink-0">MANPOWER:</span>
-                    <input type="text" className="flex-1 outline-none bg-transparent" value={manpower} onChange={e => setManpower(e.target.value)} onBlur={() => handleAutoTranslate(manpower, manpowerAr, setManpowerAr)} />
+                    <div className="flex-1 flex items-center group/field relative">
+                      <input type="text" className="flex-1 outline-none bg-transparent" value={manpower} onChange={e => setManpower(e.target.value)} onBlur={() => handleAutoTranslate(manpower, manpowerAr, setManpowerAr)} />
+                    </div>
                     <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={manpowerAr} onChange={e => setManpowerAr(e.target.value)} />
                     <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showManpower} onChange={(e) => setShowManpower(e.target.checked)} title="Hide Manpower" />
                   </div>
@@ -1470,9 +1806,11 @@ export default function QuoteForm() {
                 )}
 
                 {showMobilization ? (
-                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                  <div className="flex flex-col md:flex-row md:items-center group">
                     <span className="font-bold w-32 shrink-0">MOBILIZATION:</span>
-                    <input type="text" className="flex-1 outline-none bg-transparent" value={mobilization} onChange={e => setMobilization(e.target.value)} onBlur={() => handleAutoTranslate(mobilization, mobilizationAr, setMobilizationAr)} />
+                    <div className="flex-1 flex items-center group/field relative">
+                      <input type="text" className="flex-1 outline-none bg-transparent" value={mobilization} onChange={e => setMobilization(e.target.value)} onBlur={() => handleAutoTranslate(mobilization, mobilizationAr, setMobilizationAr)} />
+                    </div>
                     <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={mobilizationAr} onChange={e => setMobilizationAr(e.target.value)} />
                     <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showMobilization} onChange={(e) => setShowMobilization(e.target.checked)} title="Hide Mobilization" />
                   </div>
@@ -1484,9 +1822,11 @@ export default function QuoteForm() {
                 )}
 
                 {showDuration ? (
-                  <div className="flex flex-col md:flex-row gap-2 md:items-center group">
+                  <div className="flex flex-col md:flex-row md:items-center group">
                     <span className="font-bold w-32 shrink-0">DURATION:</span>
-                    <input type="text" className="flex-1 outline-none bg-transparent" value={duration} onChange={e => setDuration(e.target.value)} onBlur={() => handleAutoTranslate(duration, durationAr, setDurationAr)} />
+                    <div className="flex-1 flex items-center group/field relative">
+                      <input type="text" className="flex-1 outline-none bg-transparent" value={duration} onChange={e => setDuration(e.target.value)} onBlur={() => handleAutoTranslate(duration, durationAr, setDurationAr)} />
+                    </div>
                     <input type="text" dir="rtl" className="flex-1 outline-none bg-transparent text-right font-medium" value={durationAr} onChange={e => setDurationAr(e.target.value)} />
                     <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1" checked={showDuration} onChange={(e) => setShowDuration(e.target.checked)} title="Hide Duration" />
                   </div>
@@ -1498,15 +1838,17 @@ export default function QuoteForm() {
                 )}
 
                 {showBankDetails ? (
-                  <div className="flex flex-col md:flex-row gap-2 md:items-start group mt-2">
+                  <div className="flex flex-col md:flex-row md:items-start group mt-1">
                     <span className="font-bold w-32 shrink-0 mt-1">BANK DETAILS:</span>
-                    <textarea
-                      className="flex-1 outline-none bg-transparent resize-none overflow-hidden font-mono"
-                      value={bankDetails}
-                      onChange={e => setBankDetails(e.target.value)}
-                      onBlur={() => handleAutoTranslate(bankDetails, bankDetailsAr, setBankDetailsAr)}
-                      rows={bankDetails.split('\n').length || 3}
-                    />
+                    <div className="flex-1 flex flex-col justify-center relative group/bank pr-2">
+                      <textarea
+                        className="w-full outline-none bg-transparent resize-none overflow-hidden font-mono"
+                        value={bankDetails}
+                        onChange={e => setBankDetails(e.target.value)}
+                        onBlur={() => handleAutoTranslate(bankDetails, bankDetailsAr, setBankDetailsAr)}
+                        rows={bankDetails.split('\n').length || 3}
+                      />
+                    </div>
                     <textarea
                       dir="rtl"
                       className="flex-1 outline-none bg-transparent resize-none overflow-hidden text-right font-mono"
@@ -1531,23 +1873,18 @@ export default function QuoteForm() {
                           <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={cf.header} onChange={(e) => updateCustomField(index, 'header', e.target.value)} />
                         </span>
                         <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <textarea
-                            className="w-full outline-none bg-transparent resize-none overflow-hidden"
-                            value={cf.value}
-                            onChange={e => updateCustomField(index, 'value', e.target.value)}
-                            onBlur={() => {
-                              if (!cf.value) return;
-                              fetch('/api/translate', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ text: cf.value })
-                              }).then(r => r.json()).then(d => {
-                                if (d.translation) updateCustomField(index, 'valueAr', d.translation);
-                              });
-                            }}
-                            rows={cf.value.split('\n').length || 2}
-                            placeholder="Enter custom details..."
-                          />
+                          <div className="relative group/custom flex flex-col justify-center pr-2">
+                            <textarea
+                              className="w-full outline-none bg-transparent resize-none overflow-hidden"
+                              value={cf.value}
+                              onChange={e => updateCustomField(index, 'value', e.target.value)}
+                              onBlur={() => {
+                                if (!cf.value) return;
+                                handleAutoTranslate(cf.value, cf.valueAr, (val) => updateCustomField(index, 'valueAr', val));
+                              }}
+                              rows={cf.value.split('\n').length || 1}
+                            />
+                          </div>
                           <textarea
                             dir="rtl"
                             className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
@@ -1612,7 +1949,7 @@ export default function QuoteForm() {
                 <div className="font-bold">SUBTOTAL</div>
                 <div className="flex justify-between items-center font-mono">
                   <span>SAR</span>
-                  <span>{subtotal.toFixed(2)}</span>
+                  <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
               <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
@@ -1630,7 +1967,7 @@ export default function QuoteForm() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-base items-center hover:bg-gray-50 transition-colors group">
+              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
                 <div className="font-bold flex items-center whitespace-nowrap">
                   VAT
                   <input
@@ -1644,7 +1981,7 @@ export default function QuoteForm() {
                 </div>
                 <div className="flex justify-between items-center font-mono">
                   <span>SAR</span>
-                  <span>{tax.toFixed(2)}</span>
+                  <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
               {/* ── GRAND TOTAL ROW ──────────────────────────────────────────
@@ -1654,11 +1991,11 @@ export default function QuoteForm() {
                   Currency label   → 'SAR'           (change to 'USD', 'EUR', etc.)
                   Row label        → 'TOTAL PACKAGE' (change to 'GRAND TOTAL' etc.)
               */}
-              <div className="grid grid-cols-2 p-2 text-base bg-green-100">
+              <div className="grid grid-cols-2 p-2 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
                 <div className="font-bold">TOTAL PACKAGE</div>
-                <div className="flex justify-between items-center font-mono font-bold text-lg text-green-800">
-                  <span>SAR</span>
-                  <span>{grandTotal.toFixed(2)}</span>
+                <div className="flex justify-between items-center font-mono font-bold text-lg">
+                  <span className="mr-2">SAR</span>
+                  <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
             </div>
@@ -1715,6 +2052,44 @@ export default function QuoteForm() {
       </div>
 
 
+      {/* Save Template Modal */}
+      {showTemplateModal && (
+        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Save Terms as Template</h3>
+            <p className="text-gray-600 mb-4 text-sm">Save the current Note, Payment, Warranty, Duration, Mobilization, Manpower, Bank Details, and Footer as a reusable template.</p>
+            <input
+              type="text"
+              autoFocus
+              placeholder="E.g., Standard CCTV Terms"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 mb-6"
+              value={templateName}
+              onChange={e => setTemplateName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveTemplate()}
+            />
+            <div className="flex justify-end gap-3 font-medium">
+              <button
+                className="px-4 py-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-700"
+                onClick={() => setShowTemplateModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                onClick={saveTemplate}
+              >
+                Save Template
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global Datalist for Unit Suggestions */}
+      <datalist id="unit-suggestions">
+        {UNIT_SUGGESTIONS.map(u => <option key={u} value={u} />)}
+      </datalist>
+
     </div>
   );
-}
+};
