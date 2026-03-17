@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 interface Customer {
   id: number;
@@ -16,14 +17,31 @@ export default function CustomerDB() {
   const [isEditing, setIsEditing] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Partial<Customer>>({});
   const [isAdding, setIsAdding] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [stats, setStats] = useState<Record<number, { total_won: number, quote_count: number }>>({});
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const navigate = useNavigate();
 
-  useEffect(() => { fetchCustomers(); }, []);
+  useEffect(() => {
+    fetchCustomers();
+    fetchStats();
+  }, []);
 
   const fetchCustomers = async () => {
     const res = await fetch('/api/customers');
     const data = await res.json();
     setCustomers(data);
+  };
+
+  const fetchStats = async () => {
+    try {
+      const res = await fetch('/api/customers/stats');
+      const data = await res.json();
+      const statsMap: Record<number, { total_won: number, quote_count: number }> = {};
+      data.forEach((s: any) => { statsMap[s.customer_id] = s; });
+      setStats(statsMap);
+    } catch (e) { }
   };
 
   const handleAdd = async () => {
@@ -69,6 +87,10 @@ export default function CustomerDB() {
     c.mobile?.toLowerCase().includes(q) ||
     c.email?.toLowerCase().includes(q)
   );
+
+  const totalPages = Math.ceil(filtered.length / rowsPerPage) || 1;
+  const safePage = Math.min(currentPage, totalPages);
+  const currentItems = filtered.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -117,6 +139,7 @@ export default function CustomerDB() {
               <th className="p-4 border-b">Contact</th>
               <th className="p-4 border-b">Mobile</th>
               <th className="p-4 border-b">Email</th>
+              <th className="p-4 border-b">Total (Won)</th>
               <th className="p-4 border-b text-right">Actions</th>
             </tr>
           </thead>
@@ -144,6 +167,7 @@ export default function CustomerDB() {
                     onChange={e => setEditForm({ ...editForm, email: e.target.value })}
                   />
                 </td>
+                <td className="p-4"></td>
                 <td className="p-4 text-right">
                   <div className="flex justify-end gap-2">
                     <button onClick={handleAdd} className="p-2 text-green-600 hover:bg-green-50 rounded"><Save size={18} /></button>
@@ -153,8 +177,8 @@ export default function CustomerDB() {
               </tr>
             )}
 
-            {filtered.map((customer) => (
-              <tr key={customer.id} className="hover:bg-gray-50 transition-colors">
+            {currentItems.map((customer) => (
+              <tr key={customer.id} className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors">
                 <td className="p-4 text-gray-500">{customer.id}</td>
                 {(['name', 'address', 'contact', 'mobile', 'email'] as const).map(field => (
                   <td key={field} className="p-4">
@@ -172,6 +196,15 @@ export default function CustomerDB() {
                     )}
                   </td>
                 ))}
+                <td className="p-4">
+                  <div className="font-mono font-medium text-green-700">SAR {stats[customer.id]?.total_won?.toFixed(2) || '0.00'}</div>
+                  <div
+                    className="text-xs text-indigo-500 hover:text-indigo-700 cursor-pointer underline decoration-indigo-300 underline-offset-2"
+                    onClick={() => navigate(`/tracking?customer=${encodeURIComponent(customer.name)}`)}
+                  >
+                    {stats[customer.id]?.quote_count || 0} Quotes
+                  </div>
+                </td>
                 <td className="p-4 text-right">
                   {isEditing === customer.id ? (
                     <div className="flex justify-end gap-2">
@@ -192,13 +225,53 @@ export default function CustomerDB() {
 
             {filtered.length === 0 && !isAdding && (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-gray-400">
+                <td colSpan={8} className="p-8 text-center text-gray-400">
                   {search ? `No customers match "${search}"` : 'No customers found. Add one to get started.'}
                 </td>
               </tr>
             )}
           </tbody>
         </table>
+      </div>
+      <div className="p-4 border-t border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-4 bg-white rounded-b-xl">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Rows per page:</span>
+          <input
+            type="number"
+            min="1"
+            className="w-16 p-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+            value={rowsPerPage || ''}
+            onChange={(e) => {
+              const val = parseInt(e.target.value);
+              setRowsPerPage(isNaN(val) ? '' as any : val);
+              setCurrentPage(1);
+            }}
+            onBlur={() => {
+              if (!rowsPerPage || rowsPerPage < 1) setRowsPerPage(20);
+            }}
+          />
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-gray-600">
+            Page {safePage} of {totalPages}
+          </span>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={safePage === 1}
+              className="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={safePage === totalPages}
+              className="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

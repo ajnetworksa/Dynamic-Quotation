@@ -22,6 +22,14 @@ export default function Settings() {
     fromName: 'AJ Network Solutions'
   });
 
+  const [themeStatus, setThemeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [themeColors, setThemeColors] = useState({
+    headerBg: '#dcfce7',
+    headerText: '#1f2937',
+    stripeBg: '#e5e7eb',
+    totalsBg: '#f3f4f6'
+  });
+
   useEffect(() => {
     fetch('/api/settings/logo')
       .then(res => res.json())
@@ -48,6 +56,13 @@ export default function Settings() {
       .then(res => res.json())
       .then(data => {
         if (data.value) setSmtpConfig(JSON.parse(data.value));
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/themeColors')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setThemeColors(JSON.parse(data.value));
       })
       .catch(console.error);
   }, []);
@@ -235,6 +250,25 @@ export default function Settings() {
       setSmtpStatus('error');
     }
     setTimeout(() => setSmtpStatus('idle'), 3000);
+  };
+
+  const handleThemeSave = async () => {
+    setThemeStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'themeColors', value: JSON.stringify(themeColors) })
+      });
+      if (res.ok) {
+        setThemeStatus('success');
+      } else {
+        setThemeStatus('error');
+      }
+    } catch {
+      setThemeStatus('error');
+    }
+    setTimeout(() => setThemeStatus('idle'), 3000);
   };
 
   const handleDownloadSystemDB = async () => {
@@ -505,50 +539,106 @@ export default function Settings() {
             </div>
           </div>
         </div>
-        {/* SMTP Email Configuration */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold text-gray-800">SMTP Server settings</h2>
-            </div>
-            <button
-              onClick={handleSmtpSave}
-              disabled={smtpStatus === 'loading'}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
-            >
-              {smtpStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Config'}
-            </button>
+      </div>
+
+      {/* Theme Colors Configuration */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-semibold text-gray-800">Theme Colors Setup</h2>
           </div>
-          <div className="p-6">
-            <p className="text-gray-600 mb-6 text-sm">
-              Configure your SMTP server here to allow sending Quotations and Invoices directly to clients via email.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Host Server</label>
-                <input type="text" placeholder="smtp.gmail.com" value={smtpConfig.host} onChange={e => setSmtpConfig({ ...smtpConfig, host: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Port</label>
-                <input type="number" placeholder="465" value={smtpConfig.port} onChange={e => setSmtpConfig({ ...smtpConfig, port: parseInt(e.target.value, 10) })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Username / Email</label>
-                <input type="text" placeholder="user@company.com" value={smtpConfig.user} onChange={e => setSmtpConfig({ ...smtpConfig, user: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password / App Password</label>
-                <input type="password" placeholder="••••••••" value={smtpConfig.pass} onChange={e => setSmtpConfig({ ...smtpConfig, pass: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">From Name</label>
-                <input type="text" placeholder="AJ Network Solutions" value={smtpConfig.fromName} onChange={e => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+          <button
+            onClick={handleThemeSave}
+            disabled={themeStatus === 'loading'}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+          >
+            {themeStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Colors'}
+          </button>
+        </div>
+        <div className="p-6">
+          <p className="text-gray-600 mb-6 text-sm">
+            Customize the colors used in the Quote Form and exported PDFs.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Table Header Background</label>
+              <div className="flex items-center gap-3">
+                <input type="color" value={themeColors.headerBg} onChange={e => setThemeColors({ ...themeColors, headerBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                <span className="font-mono text-gray-500 text-sm">{themeColors.headerBg}</span>
               </div>
             </div>
-            <div className="mt-4 h-6">
-              {smtpStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> SMTP configuration saved</span>}
-              {smtpStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save SMTP details</span>}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Table Header Text</label>
+              <div className="flex items-center gap-3">
+                <input type="color" value={themeColors.headerText} onChange={e => setThemeColors({ ...themeColors, headerText: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                <span className="font-mono text-gray-500 text-sm">{themeColors.headerText}</span>
+              </div>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Alternating Row (Stripe)</label>
+              <div className="flex items-center gap-3">
+                <input type="color" value={themeColors.stripeBg} onChange={e => setThemeColors({ ...themeColors, stripeBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                <span className="font-mono text-gray-500 text-sm">{themeColors.stripeBg}</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Totals Box Background</label>
+              <div className="flex items-center gap-3">
+                <input type="color" value={themeColors.totalsBg} onChange={e => setThemeColors({ ...themeColors, totalsBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                <span className="font-mono text-gray-500 text-sm">{themeColors.totalsBg}</span>
+              </div>
+            </div>
+          </div>
+          <div className="mt-6 h-6">
+            {themeStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> Theme colors saved successfully</span>}
+            {themeStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save theme colors</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* SMTP Email Configuration */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-semibold text-gray-800">SMTP Server settings</h2>
+          </div>
+          <button
+            onClick={handleSmtpSave}
+            disabled={smtpStatus === 'loading'}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+          >
+            {smtpStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Config'}
+          </button>
+        </div>
+        <div className="p-6">
+          <p className="text-gray-600 mb-6 text-sm">
+            Configure your SMTP server here to allow sending Quotations and Invoices directly to clients via email.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Host Server</label>
+              <input type="text" placeholder="smtp.gmail.com" value={smtpConfig.host} onChange={e => setSmtpConfig({ ...smtpConfig, host: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Port</label>
+              <input type="number" placeholder="465" value={smtpConfig.port} onChange={e => setSmtpConfig({ ...smtpConfig, port: parseInt(e.target.value, 10) })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Username / Email</label>
+              <input type="text" placeholder="user@company.com" value={smtpConfig.user} onChange={e => setSmtpConfig({ ...smtpConfig, user: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Password / App Password</label>
+              <input type="password" placeholder="••••••••" value={smtpConfig.pass} onChange={e => setSmtpConfig({ ...smtpConfig, pass: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">From Name</label>
+              <input type="text" placeholder="AJ Network Solutions" value={smtpConfig.fromName} onChange={e => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+            </div>
+          </div>
+          <div className="mt-4 h-6">
+            {smtpStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> SMTP configuration saved</span>}
+            {smtpStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save SMTP details</span>}
           </div>
         </div>
       </div>
