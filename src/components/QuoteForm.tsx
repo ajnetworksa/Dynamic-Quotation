@@ -51,6 +51,7 @@ interface QuoteItem {
   unit: string;
   unit_price: number;
   net_price: number;
+  manual_price?: number;
 }
 
 interface CustomField {
@@ -63,35 +64,47 @@ interface CustomField {
 export default function QuoteForm() {
   const [searchParams, setSearchParams] = useSearchParams();
   const recallQuoteId = searchParams.get('recall');
-  const printRef = useRef<HTMLDivElement>(null);
-
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [footerImageUrl, setFooterImageUrl] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+
+  // ── SIDEBAR ALIGNMENT REFS ──────────────────────────────────────────────
+  // printRef wraps the actual document. formTopRef wraps the header section
+  // up to the items table. This allows the Analysis Sidebar (which sits 
+  // outside the form) to align its table header perfectly with the 
+  // document's items table.
+  const printRef = useRef<HTMLDivElement>(null);
+  const formTopRef = useRef<HTMLDivElement>(null);
+  const [formTopHeight, setFormTopHeight] = useState<number>(0);
   // logoSize is loaded from the Admin Settings page (Settings → Logo Size).
   // The number maps to a Tailwind spacing unit: 24 = h-24 = 6rem ≈ 96px tall.
   // You can change the default here, but it will be overridden by whatever is
   // saved in the database via the Settings page.
-  const [logoSize, setLogoSize] = useState<number>(24);
-  const [themeColors, setThemeColors] = useState({
-    headerBg: '#dcfce7',
-    headerText: '#1f2937',
-    stripeBg: '#e5e7eb',
-    totalsBg: '#f3f4f6'
+  const [logoSize, setLogoSize] = useState(24);
+  const [themeColors, setThemeColors] = useState<ThemeColors>({
+    headerBg: "#dcfce7",
+    headerText: "#1f2937",
+    stripeBg: "#f9fafb",
+    totalsBg: "#f3f4f6"
   });
 
-
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
 
   const [quoteId, setQuoteId] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [expiryDate, setExpiryDate] = useState('');
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number | ''>('');
+  const [expiryDate, setExpiryDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().split('T')[0];
+  });
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerFocused, setCustomerFocused] = useState(false);
+  const [showOverwriteModal, setShowOverwriteModal] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templateName, setTemplateName] = useState('');
   const [focusedDescriptionIndex, setFocusedDescriptionIndex] = useState<number | null>(null);
 
   const [subject, setSubject] = useState('');
@@ -100,6 +113,69 @@ export default function QuoteForm() {
   const [discount, setDiscount] = useState(0);
   const [status, setStatus] = useState('Draft');
   const [type, setType] = useState('Quotation');
+
+  // Global markup percentage added for automated pricing.
+  // When products are added from the DB, their unit_price is calculated as:
+  // original_price * (1 + markup / 100).
+  const [markup, setMarkup] = useState(8);
+
+  // ── ROW HEIGHT SYNCING ──────────────────────────────────────────────────
+  // rowRefs tracks the DOM elements of the main table rows.
+  // rowHeights stores their current pixel heights so the Sidebar can 
+  // match them exactly (synchronizing the analysis rows with table rows).
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const [rowHeights, setRowHeights] = useState<number[]>([]);
+  const [headerHeight, setHeaderHeight] = useState<number>(44);
+
+  // ── DYNAMIC SYNCING LOGIC ───────────────────────────────────────────────
+  // Uses ResizeObserver to monitor changes in the form top section (header/customer info)
+  // and each individual row in the items table.
+  useEffect(() => {
+    let animationFrameId: number;
+    const updateHeights = () => {
+      animationFrameId = window.requestAnimationFrame(() => {
+        if (headerRef.current) {
+          setHeaderHeight(headerRef.current.getBoundingClientRect().height);
+        }
+        const heights = rowRefs.current.map(el => el ? el.getBoundingClientRect().height : 40);
+        setRowHeights(heights);
+        if (formTopRef.current) {
+          setFormTopHeight(formTopRef.current.getBoundingClientRect().height);
+        }
+      });
+    };
+
+    const observer = new ResizeObserver(updateHeights);
+    if (headerRef.current) observer.observe(headerRef.current);
+    if (formTopRef.current) observer.observe(formTopRef.current);
+    rowRefs.current.forEach(el => {
+      if (el) observer.observe(el);
+    });
+
+    updateHeights();
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(animationFrameId);
+    };
+  }, [items]);
+
+  // AUTOMATIC PRICING UPDATE:
+  // When the global markup percentage changes, recalculate all item prices
+  // EXCEPT for those where a manual price override has been set.
+  useEffect(() => {
+    setItems(prevItems => prevItems.map(item => {
+      if (item.manual_price !== undefined || item.original_price === undefined) {
+        return item;
+      }
+      const newUnitPrice = item.original_price * (1 + markup / 100);
+      return {
+        ...item,
+        unit_price: newUnitPrice,
+        net_price: newUnitPrice * item.qty
+      };
+    }));
+  }, [markup]);
   // ── DEFAULT VAT RATE ──────────────────────────────────────────────────────
   // Change 15 to any number (e.g. 5 for 5%).  The user can also edit it live
   // in the totals box on the right side of the form.
@@ -170,8 +246,6 @@ export default function QuoteForm() {
 
   // ── QUOTE TEMPLATES ───────────────────────────────────────────────────────────
   const [templates, setTemplates] = useState<{ name: string; data: any }[]>([]);
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [templateName, setTemplateName] = useState('');
 
   const addCustomField = () => {
     setCustomFields([...customFields, { id: crypto.randomUUID(), header: 'CUSTOM FIELD:', value: '', valueAr: '' }]);
@@ -203,11 +277,11 @@ export default function QuoteForm() {
   useEffect(() => {
     const init = async () => {
       const dbCustomers = await fetchCustomers();
-      fetchProducts();
+      const dbProducts = await fetchProducts();
       fetchLogo();
       loadTemplates();
       if (recallQuoteId) {
-        fetchQuote(recallQuoteId, dbCustomers);
+        fetchQuote(recallQuoteId, dbCustomers, dbProducts);
       } else if (!quoteId) {
         // Check for saved draft
         const draft = localStorage.getItem(DRAFT_KEY);
@@ -228,7 +302,9 @@ export default function QuoteForm() {
 
   const fetchProducts = async () => {
     const res = await fetch('/api/products');
-    setProducts(await res.json());
+    const data = await res.json();
+    setProducts(data);
+    return data;
   };
 
   const fetchLogo = async () => {
@@ -408,7 +484,7 @@ export default function QuoteForm() {
     return () => clearTimeout(timer);
   }, [note, lastNoteTrigger]);
 
-  const fetchQuote = async (id: string, customersList: Customer[] = customers) => {
+  const fetchQuote = async (id: string, customersList: Customer[] = customers, productsList: Product[] = products) => {
     const res = await fetch(`/api/quotes/${id}`);
     if (res.ok) {
       const data = await res.json();
@@ -432,6 +508,7 @@ export default function QuoteForm() {
       setStatus(data.status || 'Draft');
       setType(data.type || 'Quotation');
       setVatRate(data.vat_rate !== undefined ? data.vat_rate : 15);
+      setMarkup(data.markup !== undefined ? data.markup : 8);
       setPayment(data.payment || 'Full Payment in ADVANCE');
       setPaymentAr(data.payment_ar || 'الدفع الكامل مقدما');
       setWarranty(data.warranty || "2 YEARS limited warranty and/or supplier's recommendation");
@@ -473,10 +550,22 @@ export default function QuoteForm() {
       setCustomFields(parsedCustomFields);
       setShowCustomField(parsedCustomFields.length > 0);
 
-      setItems(data.items.map((item: any) => ({
-        ...item,
-        id: crypto.randomUUID()
-      })));
+      setItems(data.items.map((item: any) => {
+        // Fallback: if original_price is null (missing from DB for old quotes), 
+        // try to find the current product's original price.
+        let original_price = item.original_price;
+        if ((original_price === null || original_price === undefined) && item.product_id) {
+          const prod = productsList.find(p => p.id === item.product_id);
+          if (prod) original_price = prod.unit_price;
+        }
+
+        return {
+          ...item,
+          id: crypto.randomUUID(),
+          original_price: original_price,
+          manual_price: item.manual_price
+        };
+      }));
     }
   };
 
@@ -538,6 +627,7 @@ export default function QuoteForm() {
     if (product) {
       setItems(prevItems => {
         const newItems = [...prevItems];
+        const newUnitPrice = product.unit_price * (1 + markup / 100);
         newItems[index] = {
           ...newItems[index],
           product_id: product.id,
@@ -545,8 +635,9 @@ export default function QuoteForm() {
           description: product.description,
           description_ar: product.description_ar || '',
           unit: product.unit,
-          unit_price: product.unit_price,
-          net_price: newItems[index].qty * product.unit_price
+          unit_price: newUnitPrice,
+          manual_price: undefined,
+          net_price: newItems[index].qty * newUnitPrice
         };
         return newItems;
       });
@@ -560,7 +651,19 @@ export default function QuoteForm() {
       const newItems = [...prevItems];
       newItems[index] = { ...newItems[index], [field]: value };
 
-      if (field === 'qty' || field === 'unit_price') {
+      if (field === 'manual_price') {
+        if (value !== undefined && value !== null && value !== '' && !isNaN(value)) {
+          newItems[index].unit_price = value;
+        } else {
+          const orig = newItems[index].original_price;
+          newItems[index].unit_price = orig !== undefined ? orig * (1 + markup / 100) : 0;
+          newItems[index].manual_price = undefined;
+        }
+      } else if (field === 'unit_price') {
+        newItems[index].manual_price = value === '' || isNaN(value) ? undefined : value;
+      }
+
+      if (field === 'qty' || field === 'unit_price' || field === 'manual_price') {
         newItems[index].net_price = newItems[index].qty * newItems[index].unit_price;
       }
       return newItems;
@@ -600,11 +703,11 @@ export default function QuoteForm() {
   };
 
   const subtotal = items.reduce((sum, item) => sum + (item.net_price || 0), 0);
+  const baseTotal = items.reduce((sum, item) => sum + ((item.original_price || 0) * item.qty), 0);
+  const markupProfit = subtotal - baseTotal;
   const discountedSubtotal = Math.max(0, subtotal - discount);
   const tax = discountedSubtotal * (vatRate / 100);
   const grandTotal = discountedSubtotal + tax;
-
-  const [showOverwriteModal, setShowOverwriteModal] = useState(false);
 
   const performSave = async () => {
     const payload = {
@@ -641,7 +744,18 @@ export default function QuoteForm() {
       status,
       type,
       vat_rate: vatRate,
-      items: items.filter(item => item.description.trim() !== '')
+      markup: markup,
+      items: items.filter(item => item.description.trim() !== '').map(item => ({
+        product_id: item.product_id,
+        description: item.description,
+        description_ar: item.description_ar,
+        qty: item.qty,
+        unit: item.unit,
+        unit_price: item.unit_price,
+        net_price: item.net_price,
+        original_price: item.original_price, // Added base price tracking
+        manual_price: item.manual_price      // Added manual price tracking
+      }))
     };
 
     const res = await fetch('/api/quotes', {
@@ -1027,7 +1141,7 @@ export default function QuoteForm() {
       // ── CHANGE IMAGE FORMAT / QUALITY HERE ───────────────────────────────
       // First arg: 'image/jpeg' (smaller file) or 'image/png' (lossless, larger)
       // Second arg (only for JPEG): quality from 0.0 to 1.0. 0.8 = 80% quality.
-      const imgData = canvas.toDataURL('image/jpeg', 1);
+      const imgData = canvas.toDataURL('image/png', 1);
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -1307,7 +1421,7 @@ export default function QuoteForm() {
           data-pdf-root="true"
           className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 print:shadow-none print:border-none flex-1 transition-all flex flex-col"
         >
-
+          <div ref={formTopRef} className="flex flex-col">
           {/* App Configuration / Status selectors - Print Hidden */}
           <div className="flex flex-wrap gap-4 mb-6 print:hidden bg-gray-50 p-4 rounded-lg border border-gray-200">
             <div className="flex flex-col">
@@ -1386,7 +1500,7 @@ export default function QuoteForm() {
           <div className="border-2 border-gray-800 mb-6">
             {/* Header bar: "CUSTOMER INFO" label
                 Background color → bg-gray-100 | Text size → text-lg */}
-            <div className="bg-gray-100 px-4 pt-0 pb-2 border-b-2 border-gray-800 font-bold text-lg">
+            <div className="bg-gray-100 px-4 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
               CUSTOMER INFO
             </div>
             <div className="px-4 py-2 grid grid-cols-[100px_1fr_100px_1fr] gap-y-0.5 text-base items-center">
@@ -1492,231 +1606,167 @@ export default function QuoteForm() {
             </div>
           </div>
 
-          {/* ── ITEMS TABLE ───────────────────────────────────────────────────
-              The main table listing all quote line items.
+          </div>
 
-              TABLE OUTER BORDER:
-                borderColor: '#1f2937' → dark gray.  Change to any hex, e.g.
-                '#1d4ed8' for dark blue or '#11ee66ff' for dark green.
-
-              TABLE HEADER ROW BACKGROUND:
-                backgroundColor: '#dcfce7' → very light green (Tailwind green-100).
-                Common alternatives:
-                  Light blue:   '#dbeafe'  (blue-100)
-                  Light gray:   '#f3f4f6'  (gray-100)
-                  Light yellow: '#fef9c3'  (yellow-100)
-                  Light indigo: '#e0e7ff'  (indigo-100)
-
-              COLUMN WIDTHS (grid-cols-[...]):
-                The column widths are defined inline as a CSS grid template:
-                  44px  → ITEM number column
-                  1fr   → DESCRIPTION column (takes remaining space)
-                  64px  → QTY column
-                  64px  → UNIT column
-                  110px → UNIT PRICE column
-                  110px → NET PRICE column
-                  36px  → Action buttons column (hidden in PDF)
-
-              COLUMN TEXT SIZE: change 'text-base' to 'text-sm' or 'text-lg'.
-          ────────────────────────────────────────────────────────────────── */}
-          <div className="border-2 border-gray-800 mb-6" style={{ marginTop: '4px', borderColor: '#1f2937' }}>
-            <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
-              <div className={`min-w-[900px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
-                {/* ── TABLE HEADER ROW ──────────────────────────────────────────
+          {/* ── ITEMS TABLE ─────────────────────────────────────────────────── */}
+          <div className="w-full border-2 border-gray-800 min-w-0 mb-6" style={{ marginTop: '0px', borderColor: '#1f2937' }}>
+              <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
+                <div className={`min-w-[900px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
+                  {/* ── TABLE HEADER ROW ──────────────────────────────────────────
                     backgroundColor: '#dcfce7' = light green — change to recolor.
                     borderColor:     '#1f2937' = dark gray   — change to recolor.
                 */}
-                <div
-                  className="grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
-                  style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
-                >
-                  <div className="py-2 px-1 border-r border-gray-800 h-full">ITEM</div>
-                  <div className="py-2 px-2 border-r border-gray-800 h-full">
-                    DESCRIPTION
-                  </div>
-                  <div className="py-2 px-1 border-r border-gray-800 h-full">QTY</div>
-                  <div className="py-2 px-1 border-r border-gray-800 h-full">UNIT</div>
-                  <div className="py-2 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
-                  <div className="py-2 px-2 h-full">NET PRICE</div>
-                  <div className="py-2 px-1 print:hidden"></div>
-                </div>
-
-                {items.map((item, index) => (
-                  <div key={item.id} className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`} style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
-                    <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
-                      {index + 1}
-                      {/* Price warning badge — UI only, hidden in PDF */}
-                      {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
-                        <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
-                      )}
+                  <div
+                    ref={headerRef}
+                    className="grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
+                    style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
+                  >
+                    <div className="py-2 px-1 border-r border-gray-800 h-full">ITEM</div>
+                    <div className="py-2 px-2 border-r border-gray-800 h-full">
+                      DESCRIPTION
                     </div>
-                    <div className="p-0 border-r border-gray-300 h-full flex relative group">
-                      {/* English description — left half of the cell, vertically centered */}
-                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
-                        <textarea
-                          className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[24px] relative z-0"
-                          value={item.description}
-                          placeholder="Type to search product or enter custom description..."
-                          onChange={e => updateItem(index, 'description', e.target.value)}
-                          onFocus={() => setFocusedDescriptionIndex(index)}
-                          onBlur={() => {
-                            setTimeout(() => setFocusedDescriptionIndex(null), 200);
-                            handleProductAutoTranslate(index, item.description, item.description_ar || '');
-                          }}
-                          rows={item.description.split('\n').length || 1}
-                        />
-
-                        {focusedDescriptionIndex === index && item.description.length > 1 && (
-                          <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
-                            {products
-                              .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
-                              .map(p => (
-                                <div
-                                  key={p.id}
-                                  className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
-                                  onClick={() => {
-                                    handleProductSelect(index, p.id.toString());
-                                    setFocusedDescriptionIndex(null);
-                                    handleProductAutoTranslate(index, p.description, '');
-                                  }}
-                                >
-                                  <div className="font-medium">{p.description}</div>
-                                  {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                </div>
-                              ))}
-                          </div>
+                    <div className="py-2 px-1 border-r border-gray-800 h-full">QTY</div>
+                    <div className="py-2 px-1 border-r border-gray-800 h-full">UNIT</div>
+                    <div className="py-2 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
+                    <div className="py-2 px-2 h-full">NET PRICE</div>
+                    <div className="py-2 px-1 print:hidden"></div>
+                  </div>
+                  {items.map((item, index) => (
+                    <div
+                      key={item.id}
+                      ref={el => rowRefs.current[index] = el}
+                      className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`} style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
+                      <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
+                        {index + 1}
+                        {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
+                          <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
                         )}
-                        {/* Action Container for Product Selection Button */}
-                        <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
-                          <div className="relative flex items-center">
-                            <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
-                            <select
-                              className="absolute inset-0 w-full opacity-0 cursor-pointer"
-                              onChange={(e) => handleProductSelect(index, e.target.value)}
-                              value=""
-                              title="Select from Product DB"
-                            >
-                              <option value="">+</option>
-                              {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
-                            </select>
+                      </div>
+                      <div className="p-0 border-r border-gray-300 h-full flex relative group">
+                        <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                          <textarea
+                            className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[24px] relative z-0"
+                            value={item.description}
+                            placeholder="Type to search product..."
+                            onChange={e => updateItem(index, 'description', e.target.value)}
+                            onFocus={() => setFocusedDescriptionIndex(index)}
+                            onBlur={() => {
+                              setTimeout(() => setFocusedDescriptionIndex(null), 200);
+                              handleProductAutoTranslate(index, item.description, item.description_ar || '');
+                            }}
+                            rows={item.description.split('\n').length || 1}
+                          />
+
+                          {focusedDescriptionIndex === index && item.description.length > 1 && (
+                            <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
+                              {products
+                                .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
+                                .map(p => (
+                                  <div
+                                    key={p.id}
+                                    className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                    onClick={() => {
+                                      handleProductSelect(index, p.id.toString());
+                                      setFocusedDescriptionIndex(null);
+                                      handleProductAutoTranslate(index, p.description, '');
+                                    }}
+                                  >
+                                    <div className="font-medium">{p.description}</div>
+                                    {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                          <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
+                            <div className="relative flex items-center">
+                              <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
+                              <select
+                                className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                                onChange={(e) => handleProductSelect(index, e.target.value)}
+                                value=""
+                                title="Select from Product DB"
+                              >
+                                <option value="">+</option>
+                                {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
+                              </select>
+                            </div>
                           </div>
                         </div>
+                        <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
+                        <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
+                          <textarea
+                            dir="rtl"
+                            className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
+                            value={item.description_ar || ''}
+                            onChange={e => updateItem(index, 'description_ar', e.target.value)}
+                            placeholder="الوصف بالعربية..."
+                            rows={(item.description_ar || '').split('\n').length || 1}
+                          />
+                        </div>
                       </div>
-                      <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
-                      {/* Arabic description — right half, vertically centered, RTL */}
-                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
-                        <textarea
-                          dir="rtl"
-                          className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
-                          value={item.description_ar || ''}
-                          onChange={e => updateItem(index, 'description_ar', e.target.value)}
-                          placeholder="الوصف بالعربية..."
-                          rows={(item.description_ar || '').split('\n').length || 1}
+                      <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                        <input
+                          type="number"
+                          className="w-full text-center text-base outline-none bg-transparent"
+                          value={item.qty || ''}
+                          onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
+                          min="1"
                         />
                       </div>
+                      <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                        <input
+                          type="text"
+                          list="unit-suggestions"
+                          className="w-full text-center text-base outline-none bg-transparent"
+                          value={item.unit}
+                          onChange={e => updateItem(index, 'unit', e.target.value)}
+                        />
+                      </div>
+                      <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                        <input
+                          type="text"
+                          className="w-full text-center text-base font-mono outline-none bg-transparent"
+                          value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
+                          onFocus={(e) => {
+                            e.target.type = 'number';
+                            e.target.value = item.unit_price ? item.unit_price.toString() : '';
+                          }}
+                          onBlur={(e) => {
+                            e.target.type = 'text';
+                            e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+                          }}
+                          onChange={e => {
+                            const val = parseFloat(e.target.value);
+                            updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
+                          }}
+                          min="0"
+                          step="0.01"
+                        />
+                      </div>
+                      <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                        <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                      <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
+                        <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
+                          <ArrowUp size={12} />
+                        </button>
+                        <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                          <Trash2 size={14} />
+                        </button>
+                        <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
+                          <ArrowDown size={12} />
+                        </button>
+                      </div>
                     </div>
-                    {/* ── QTY CELL ──────────────────────────────────────────────────────────
-                        text-center  → number is centred in the column
-                        text-base    → locks the input to 16px (same as the row text).
-                                       IMPORTANT: browsers don't auto-inherit font-size
-                                       into <input> elements, so always keep text-base here.
-                        To change the column background, add e.g. bg-gray-50 to the outer <div>.
-                    */}
-                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
-                      <input
-                        type="number"
-                        className="w-full text-center text-base outline-none bg-transparent"
-                        value={item.qty || ''}
-                        onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
-                        min="1"
-                      />
-                    </div>
-                    {/* ── UNIT CELL ─────────────────────────────────────────────────────────
-                        Free-text input (e.g. "set", "lot", "pcs", "m²").
-                        text-base    → keeps font size consistent with the row (see QTY note).
-                        text-center  → centres the unit label in the column.
-                    */}
-                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
-                      <input
-                        type="text"
-                        list="unit-suggestions"
-                        className="w-full text-center text-base outline-none bg-transparent"
-                        value={item.unit}
-                        onChange={e => updateItem(index, 'unit', e.target.value)}
-                      />
-                    </div>
-                    {/* ── UNIT PRICE CELL ───────────────────────────────────────────────────
-                        font-mono    → monospace font keeps all digits aligned vertically.
-                        text-base    → explicit 16px size; critical for <input> elements
-                                       (see QTY note — browsers don't auto-inherit).
-                        text-amber-600 → warning orange color when price is 0 OR below
-                                         the original database price.  Remove this
-                                         conditional class to always show in black.
-
-                        CURRENCY LABEL: change 'SAR' to 'USD', 'EUR', etc.
-                        DECIMAL STEP:  step="0.01" allows cents. Change to step="1" for
-                                       whole numbers only.
-                        COLUMN WIDTH:  set by '110px' in the grid-cols template above.
-                    */}
-                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
-                      <input
-                        type="text"
-                        className="w-full text-center text-base font-mono outline-none bg-transparent"
-                        value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
-                        onFocus={(e) => {
-                          e.target.type = 'number';
-                          e.target.value = item.unit_price ? item.unit_price.toString() : '';
-                        }}
-                        onBlur={(e) => {
-                          e.target.type = 'text';
-                          e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
-                        }}
-                        onChange={e => {
-                          const val = parseFloat(e.target.value);
-                          updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
-                        }}
-                        min="0"
-                        step="0.01"
-                      />
-                    </div>
-                    {/* ── NET PRICE CELL (read-only, auto-calculated) ───────────────────────
-                        This value is calculated automatically: qty × unit_price.
-                        It is a <span>, NOT an input — users cannot type here directly.
-
-                        font-mono    → monospace digits for neat column alignment.
-                        font-medium  → slightly bold to visually distinguish from unit price.
-                        text-base    → explicit 16px to match all other row cells.
-                        text-amber-600 → warning color when unit price is 0.
-
-                        DECIMAL PLACES: .toFixed(2) shows 2 decimal places.
-                                        Change to .toFixed(0) for whole numbers.
-                        CURRENCY LABEL: change 'SAR' to your currency code.
-                    */}
-                    <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
-                      <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
-                      <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                        <ArrowUp size={12} />
-                      </button>
-                      <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                        <Trash2 size={14} />
-                      </button>
-                      <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                        <ArrowDown size={12} />
-                      </button>
-                    </div>
+                  ))}
+                  <div className="p-2 bg-gray-50 border-t border-gray-300 print:hidden">
+                    <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                      <Plus size={16} /> Add Row
+                    </button>
                   </div>
-                ))}
-
-                <div className="p-2 bg-gray-50 border-t border-gray-300 print:hidden">
-                  <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
-                    <Plus size={16} /> Add Row
-                  </button>
                 </div>
               </div>
             </div>
-          </div>
 
           {/* Bottom Section: Terms & Totals */}
           <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
@@ -1944,7 +1994,7 @@ export default function QuoteForm() {
                 TEXT LABELS: 'SUBTOTAL', 'DISCOUNT', 'VAT', 'TOTAL PACKAGE'
                   → Simply change the text directly in the JSX below.
             ────────────────────────────────────────────────────────────────── */}
-            <div className="w-full md:w-64 border-2 border-gray-800 shrink-0 h-fit">
+            <div className="w-full md:w-72 border-2 border-gray-800 shrink-0 h-fit">
               <div className="grid grid-cols-2 border-b border-gray-300 p-2 text-base">
                 <div className="font-bold">SUBTOTAL</div>
                 <div className="flex justify-between items-center font-mono">
@@ -1984,39 +2034,89 @@ export default function QuoteForm() {
                   <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
-              {/* ── GRAND TOTAL ROW ──────────────────────────────────────────
-                  Background color → bg-green-100    (change to e.g. bg-blue-100)
-                  Text color       → text-green-800  (change to e.g. text-blue-800)
-                  Amount font size → text-lg         (change to text-xl for larger)
-                  Currency label   → 'SAR'           (change to 'USD', 'EUR', etc.)
-                  Row label        → 'TOTAL PACKAGE' (change to 'GRAND TOTAL' etc.)
-              */}
               <div className="grid grid-cols-2 p-2 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
                 <div className="font-bold">TOTAL PACKAGE</div>
-                <div className="flex justify-between items-center font-mono font-bold text-lg">
+                <div className="flex justify-between items-center font-mono font-bold text-lg bg-green-300 text-black px-0 py-1 rounded-lg">
                   <span className="mr-2">SAR</span>
                   <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
             </div>
+
           </div>
 
-          {/* ── FOOTER AREA ───────────────────────────────────────────────────
-              If a footer image is uploaded via Admin Settings, it is shown here.
-
-              FOOTER IMAGE MAX HEIGHT: style={{ maxHeight: '100px' }}
-                Increase to '150px' or '200px' to show a taller footer image.
-
-              FOOTER TOP BORDER: 'border-t-2 border-gray-800'
-                Change 'border-gray-800' to match your brand color.
-          ────────────────────────────────────────────────────────────────── */}
           <div className="mt-auto">
             {footerImageUrl && (
               <div className="text-center border-t-2 border-gray-800 pt-4 mt-8 flex flex-col gap-2">
-                {/* maxHeight: '100px' → max height of the footer image in pixels */}
                 <img src={footerImageUrl} alt="Footer Logo" className="max-w-full h-auto object-contain mx-auto mb-2" style={{ maxHeight: '100px' }} />
               </div>
             )}
+          </div>
+        </div>
+
+        {/* ── ANALYSIS SIDEBAR (Floating outside the form) ────────────────── */}
+        <div className="w-[305px] shrink-0 print:hidden hidden xl:flex flex-col pt-8">
+          {/* Spacer to align with table headers */}
+          <div style={{ height: formTopHeight }} className="flex flex-col justify-end">
+             <div className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded-lg shadow-sm z-10 box-border">
+                <span className="font-bold text-sm text-gray-800">M.U. %</span>
+                <input
+                  type="number"
+                  value={markup}
+                  onChange={e => setMarkup(parseFloat(e.target.value) || 0)}
+                  className="w-16 p-1 bg-yellow-300 text-black font-bold outline-none text-center rounded border border-yellow-400"
+                />
+              </div>
+          </div>
+
+          <div className="border border-gray-800 bg-white shadow-xl rounded-sm">
+            <div className="grid grid-cols-3 font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50" style={{ height: headerHeight }}>
+              <div className="border-r border-gray-800 flex items-center justify-center">Manual</div>
+              <div className="border-r border-gray-800 flex items-center justify-center">BASE</div>
+              <div className="flex items-center justify-center">TOTAL</div>
+            </div>
+
+            <div className="flex flex-col">
+              {items.map((item, index) => (
+                <div key={`side-${item.id}`} className="grid grid-cols-3 border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group" style={{ height: rowHeights[index] || 40 }}>
+                  <div className="p-1 flex items-center border-r border-gray-200">
+                    <input
+                      type="number"
+                      className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
+                      value={item.manual_price !== undefined ? item.manual_price : ''}
+                      onChange={e => {
+                        if (e.target.value === '') updateItem(index, 'manual_price', undefined);
+                        else updateItem(index, 'manual_price', parseFloat(e.target.value));
+                      }}
+                    />
+                  </div>
+                  <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
+                    {item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                  </div>
+                  <div className="p-1 flex items-center justify-center text-[13px] font-mono">
+                    {item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 p-1 font-bold text-base mt-4 bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+            <div className="flex justify-between items-center px-1">
+              <span className="text-gray-600">B.Total</span>
+              <span className="font-mono">{baseTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </div>
+            <div className="flex justify-between items-center px-1 bg-green-50 rounded">
+              <span className="text-green-800">MU</span>
+              <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </div>
+            
+            <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">
+              <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-xs">TTL PROFIT</div>
+              <div className="bg-yellow-400 px-2 py-1 flex items-center justify-center font-mono text-sm">
+                 {markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
           </div>
         </div>
 

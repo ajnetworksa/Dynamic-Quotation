@@ -93,11 +93,22 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     quote_id TEXT UNIQUE NOT NULL,
     date TEXT NOT NULL,
+    expiry_date TEXT,
     customer_id INTEGER,
     subject TEXT,
+    subject_ar TEXT,
     subtotal REAL,
     tax REAL,
     grand_total REAL,
+    discount REAL DEFAULT 0,
+    status TEXT DEFAULT 'Draft',
+    type TEXT DEFAULT 'Quotation',
+    
+    -- ── PRICING ANALYSIS FIELDS ───────────────────────────────────────────
+    -- markup: The global profit percentage set in the QuoteForm sidebar.
+    -- Used to automatically calculate unit_price for new items.
+    markup REAL DEFAULT 8,
+    
     FOREIGN KEY(customer_id) REFERENCES customers(id)
   );
 
@@ -106,11 +117,22 @@ db.exec(`
     quote_id TEXT NOT NULL,
     product_id INTEGER,
     description TEXT,
+    description_ar TEXT,
     qty REAL,
     unit TEXT,
+    
+    -- ── PRICING ANALYSIS FIELDS ───────────────────────────────────────────
+    -- original_price: The database price at the time the product was added.
+    -- This is treated as the 'BASE' cost in the analysis sidebar.
+    original_price REAL,
+    
+    -- manual_price: A user override entered in the sidebar. If set, this 
+    -- takes precedence over the markup-calculated unit_price.
+    manual_price REAL,
+    
     unit_price REAL,
     net_price REAL,
-    FOREIGN KEY(quote_id) REFERENCES quotes(quote_id)
+    FOREIGN KEY(quote_id) REFERENCES quotes(quote_id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -183,6 +205,9 @@ addColumnIfNotExists('products', 'description_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'expiry_date', 'TEXT');
 addColumnIfNotExists('quotes', 'followup_date', 'TEXT');
 addColumnIfNotExists('quotes', 'followup_note', 'TEXT');
+addColumnIfNotExists('quotes', 'markup', 'REAL DEFAULT 8');
+addColumnIfNotExists('quote_items', 'original_price', 'REAL');
+addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -498,7 +523,7 @@ app.post('/api/quotes', requireAuth, (req, res) => {
     quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, items,
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
-    custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date
+    custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup
   } = req.body;
   const updated_at = new Date().toISOString();
   const author_id = (req as any).user.id;
@@ -509,6 +534,7 @@ app.post('/api/quotes', requireAuth, (req, res) => {
     db.transaction(() => {
       const existing = db.prepare('SELECT id, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
 
+      // Save main quote data, including the pricing markup
       if (existing) {
         const prevStatus = existing.status;
         db.prepare(`
@@ -517,18 +543,18 @@ app.post('/api/quotes', requireAuth, (req, res) => {
             note_header = ?, note = ?, note_ar = ?, payment = ?, payment_ar = ?, warranty = ?, warranty_ar = ?, 
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
-            custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?
+            custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null,
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
           quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
-        // Activity log: updated
+        
         const action = prevStatus !== (status || 'Draft')
           ? `Status changed to ${status || 'Draft'}`
           : 'Updated';
@@ -540,27 +566,27 @@ app.post('/api/quotes', requireAuth, (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id, vat_rate || 15, expiry_date || null
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id, vat_rate || 15, expiry_date || null, markup ?? 8
         );
-        // Activity log: created
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at);
       }
 
-      const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      // Save each line item along with its original base price and any manual analysis overrides
+      const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       for (const item of items) {
-        insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price);
+        insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price, item.original_price ?? null, item.manual_price ?? null);
       }
     })();
-
     res.json({ success: true });
   } catch (error: any) {
+    console.error('Save quote error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -681,8 +707,8 @@ app.post('/api/db/import', requireAuth, requireAdmin, express.json({ limit: '50m
           id, quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, updated_at,
           note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar, 
           mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, markup
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       (quotes || []).forEach((q: any, i: number) => {
         try {
@@ -694,15 +720,15 @@ app.post('/api/db/import', requireAuth, requireAdmin, express.json({ limit: '50m
             q.mobilization ?? null, q.mobilization_ar ?? null, q.duration ?? null, q.duration_ar ?? null,
             q.bank_details ?? null, q.bank_details_ar ?? null, q.footer ?? null, q.footer_ar ?? null,
             q.custom_field_header ?? 'CUSTOM:', q.custom_field ?? null, q.custom_field_ar ?? null,
-            q.status ?? 'Draft', q.type ?? 'Quotation', q.revision_of ?? null, q.author_id ?? null, q.vat_rate ?? 15
+            q.status ?? 'Draft', q.type ?? 'Quotation', q.revision_of ?? null, q.author_id ?? null, q.vat_rate ?? 15, q.markup ?? 8
           );
         } catch (err: any) { logError('quotes', i, { id: q.id, quote_id: q.quote_id }, err); throw err; }
       });
 
-      const insertQuoteItem = db.prepare('INSERT INTO quote_items (id, quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertQuoteItem = db.prepare('INSERT INTO quote_items (id, quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       (quote_items || []).forEach((qi: any, i: number) => {
         try {
-          insertQuoteItem.run(qi.id, qi.quote_id, qi.product_id ?? null, qi.description ?? null, qi.description_ar ?? null, qi.qty ?? 0, qi.unit ?? null, qi.unit_price ?? 0, qi.net_price ?? 0);
+          insertQuoteItem.run(qi.id, qi.quote_id, qi.product_id ?? null, qi.description ?? null, qi.description_ar ?? null, qi.qty ?? 0, qi.unit ?? null, qi.unit_price ?? 0, qi.net_price ?? 0, qi.original_price ?? null, qi.manual_price ?? null);
         } catch (err: any) { logError('quote_items', i, { id: qi.id, quote_id: qi.quote_id }, err); throw err; }
       });
     })();

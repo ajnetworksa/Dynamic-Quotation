@@ -276,3 +276,25 @@ The SQLite file (`quotes.db`) will be downloaded as-is. Keep periodic backups if
 - Dark mode UI
 - Inventory integration (live stock & pricing)
 - Dashboard analytics (revenue, acceptance rate)
+
+---
+
+## 📈 Module 14 — Pricing Analysis Sidebar
+
+**File:** `src/components/QuoteForm.tsx`
+
+The Pricing Analysis side-panel (visible only on `xl` screens) allows you to manage margins and track original database costs without affecting the public-facing document.
+
+| Feature | Description |
+|---|---|
+| **M.U. %** | Global Markup Percentage. Changes to this value automatically scale the `UNIT PRICE` of all items (unless manually overridden). |
+| **Manual Column** | Enter a price here to override the markup calculation for a specific row. |
+| **BASE Column** | Displays the original database price (`original_price`) of the product at the time it was added. |
+| **TOTAL Column** | Shows the base total cost (`base_price * qty`) for that row. |
+| **B.Total** | Sum of all BASE totals (your cost). |
+| **MU (Profit)** | The immediate profit margin (`Subtotal - B.Total`). |
+| **TTL PROFIT** | Highlighted summary of the total markup gain. |
+
+### Visual Warnings
+- **Red Bold Price:** If you enter a `Manual` price that is **lower** than the `BASE` database price, the input text turns red to warn you that you are selling below cost.
+- **Syncing Row Heights:** The side-panel uses a `ResizeObserver` to lock its row heights to the main table. This keeps the data aligned even if descriptions span multiple lines.
