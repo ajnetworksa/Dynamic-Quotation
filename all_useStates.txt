@@ -1,0 +1,61 @@
+﻿
+LineNumber Line                                                                                                        
+---------- ----                                                                                                        
+        67   const [logoUrl, setLogoUrl] = useState<string | null>(null);                                              
+        68   const [footerImageUrl, setFooterImageUrl] = useState<string | null>(null);                                
+        69   const [isSending, setIsSending] = useState(false);                                                        
+        78   const [formTopHeight, setFormTopHeight] = useState<number>(0);                                            
+        83   const [logoSize, setLogoSize] = useState(24);                                                             
+        84   const [themeColors, setThemeColors] = useState<ThemeColors>({                                             
+        91   const [customers, setCustomers] = useState<Customer[]>([]);                                               
+        92   const [products, setProducts] = useState<Product[]>([]);                                                  
+        94   const [quoteId, setQuoteId] = useState('');                                                               
+        95   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);                                 
+        96   const [expiryDate, setExpiryDate] = useState(() => {                                                      
+       101   const [selectedCustomerId, setSelectedCustomerId] = useState('');                                         
+       102   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);                          
+       103   const [customerSearch, setCustomerSearch] = useState('');                                                 
+       104   const [showOverwriteModal, setShowOverwriteModal] = useState(false);                                      
+       105   const [showTemplateModal, setShowTemplateModal] = useState(false);                                        
+       106   const [templateName, setTemplateName] = useState('');                                                     
+       108   const [subject, setSubject] = useState('');                                                               
+       109   const [subjectAr, setSubjectAr] = useState('');                                                           
+       110   const [items, setItems] = useState<QuoteItem[]>([]);                                                      
+       111   const [discount, setDiscount] = useState(0);                                                              
+       112   const [status, setStatus] = useState('Draft');                                                            
+       113   const [type, setType] = useState('Quotation');                                                            
+       118   const [markup, setMarkup] = useState(8);                                                                  
+       126   const [rowHeights, setRowHeights] = useState<number[]>([]);                                               
+       127   const [headerHeight, setHeaderHeight] = useState<number>(44);                                             
+       180   const [vatRate, setVatRate] = useState(15);                                                               
+       198   const [noteHeader, setNoteHeader] = useState('NOTE:');                                                    
+       202   const [note, setNote] = useState('Any additional work|device will be considered Change Order\nInternet ...
+       203   const [noteAr, setNoteAr] = useState('سيتم اعتبار أي عمل إضافي | جهاز بمثابة أمر تغيير\nيتم توفير مصدر ...
+       204   const [lastNoteTrigger, setLastNoteTrigger] = useState(note); // tracks last translated note to avoid r...
+       207   const [payment, setPayment] = useState('Full Payment in ADVANCE');                                        
+       208   const [paymentAr, setPaymentAr] = useState('الدفع الكامل مقدما');                                         
+       211   const [warranty, setWarranty] = useState("2 YEARS limited warranty and/or supplier's recommendation");    
+       212   const [warrantyAr, setWarrantyAr] = useState('ضمان محدود لمدة عامين و/أو توصية المورد');                  
+       215   const [manpower, setManpower] = useState('2 Technicians, 1 Supervisor');                                  
+       216   const [manpowerAr, setManpowerAr] = useState('فنيين، 1 مشرف 2');                                          
+       219   const [mobilization, setMobilization] = useState('3-4 days upon confirmation of payment');                
+       220   const [mobilizationAr, setMobilizationAr] = useState('أيام بعد تأكيد الدفع 4-3');                         
+       223   const [duration, setDuration] = useState('1-2 Working Days');                                             
+       224   const [durationAr, setDurationAr] = useState('أيام عمل 2-1');                                             
+       228   const [bankDetails, setBankDetails] = useState('ALINMA BANK - Account: 68206662020000\nIBAN: SA03050000...
+       229   const [bankDetailsAr, setBankDetailsAr] = useState('بنك الإنماء - الحساب: 68206662020000\nالأيبان: SA03...
+       232   const [footer, setFooter] = useState('Thank you for your business!');                                     
+       233   const [footerAr, setFooterAr] = useState('شكرا لتعاملكم معنا!');                                          
+       235   const [customFields, setCustomFields] = useState<CustomField[]>([]);                                      
+       243   const [draftBanner, setDraftBanner] = useState(false);                                                    
+       246   const [templates, setTemplates] = useState<{ name: string; data: any }[]>([]);                            
+       266   const [showNote, setShowNote] = useState(true);                                                           
+       267   const [showPayment, setShowPayment] = useState(true);                                                     
+       268   const [showWarranty, setShowWarranty] = useState(true);                                                   
+       269   const [showManpower, setShowManpower] = useState(true);                                                   
+       270   const [showMobilization, setShowMobilization] = useState(true);                                           
+       271   const [showDuration, setShowDuration] = useState(true);                                                   
+       272   const [showBankDetails, setShowBankDetails] = useState(true);                                             
+       273   const [showCustomField, setShowCustomField] = useState(false);                                            
+
+
