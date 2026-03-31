@@ -82,7 +82,7 @@ export default function QuoteForm() {
   // saved in the database via the Settings page.
   const [logoSize, setLogoSize] = useState(24);
   const [themeColors, setThemeColors] = useState<ThemeColors>({
-    headerBg: "#dcfce7",
+    headerBg: "#039737a6",
     headerText: "#1f2937",
     stripeBg: "#f9fafb",
     totalsBg: "#f3f4f6"
@@ -165,7 +165,7 @@ export default function QuoteForm() {
   // EXCEPT for those where a manual price override has been set.
   useEffect(() => {
     setItems(prevItems => prevItems.map(item => {
-      if (item.manual_price !== undefined || item.original_price === undefined) {
+      if ((item.manual_price !== undefined && item.manual_price !== null) || item.original_price === undefined || item.original_price === null) {
         return item;
       }
       const newUnitPrice = item.original_price * (1 + markup / 100);
@@ -562,8 +562,8 @@ export default function QuoteForm() {
         return {
           ...item,
           id: crypto.randomUUID(),
-          original_price: original_price,
-          manual_price: item.manual_price
+          original_price: original_price !== null ? original_price : undefined,
+          manual_price: item.manual_price !== null ? item.manual_price : undefined
         };
       }));
     }
@@ -1100,8 +1100,8 @@ export default function QuoteForm() {
             if (!el.dataset.pdfRoot) el.style.padding = '0';
           });
 
-          clonedDoc.querySelectorAll('.min-w-\\[900px\\]').forEach((el: any) => {
-            el.classList.remove('min-w-[900px]');
+          clonedDoc.querySelectorAll('.min-w-\\[1200px\\]').forEach((el: any) => {
+            el.classList.remove('min-w-[1200px]');
             el.style.minWidth = '0';
           });
 
@@ -1141,7 +1141,7 @@ export default function QuoteForm() {
       // ── CHANGE IMAGE FORMAT / QUALITY HERE ───────────────────────────────
       // First arg: 'image/jpeg' (smaller file) or 'image/png' (lossless, larger)
       // Second arg (only for JPEG): quality from 0.0 to 1.0. 0.8 = 80% quality.
-      const imgData = canvas.toDataURL('image/png', 1);
+      const imgData = canvas.toDataURL('image/jpeg', 1);
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -1157,7 +1157,7 @@ export default function QuoteForm() {
       pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
       heightLeft -= pageHeight;
 
-      while (heightLeft > 0) {
+      while (heightLeft > 1) { // 1mm threshold prevents blank pages from fractional pixel rounding
         position = heightLeft - imgHeight;
         pdf.addPage();
         pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
@@ -1422,27 +1422,27 @@ export default function QuoteForm() {
           className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 print:shadow-none print:border-none flex-1 transition-all flex flex-col"
         >
           <div ref={formTopRef} className="flex flex-col">
-          {/* App Configuration / Status selectors - Print Hidden */}
-          <div className="flex flex-wrap gap-4 mb-6 print:hidden bg-gray-50 p-4 rounded-lg border border-gray-200">
-            <div className="flex flex-col">
-              <label className="text-xs font-bold text-gray-500 uppercase">Document Type</label>
-              <select value={type} onChange={(e) => setType(e.target.value)} className="bg-transparent border-b border-gray-300 outline-none font-medium py-1">
-                <option value="Quotation">Quotation</option>
-                <option value="Tax Invoice">Tax Invoice</option>
-              </select>
+            {/* App Configuration / Status selectors - Print Hidden */}
+            <div className="flex flex-wrap gap-4 mb-6 print:hidden bg-gray-50 p-4 rounded-lg border border-gray-200">
+              <div className="flex flex-col">
+                <label className="text-xs font-bold text-gray-500 uppercase">Document Type</label>
+                <select value={type} onChange={(e) => setType(e.target.value)} className="bg-transparent border-b border-gray-300 outline-none font-medium py-1">
+                  <option value="Quotation">Quotation</option>
+                  <option value="Tax Invoice">Tax Invoice</option>
+                </select>
+              </div>
+              <div className="flex flex-col">
+                <label className="text-xs font-bold text-gray-500 uppercase">Status</label>
+                <select value={status} onChange={(e) => setStatus(e.target.value)} className="bg-transparent border-b border-gray-300 outline-none font-medium py-1">
+                  <option value="Draft">Draft</option>
+                  <option value="Sent">Sent</option>
+                  <option value="Accepted">Accepted</option>
+                  <option value="Rejected">Rejected</option>
+                </select>
+              </div>
             </div>
-            <div className="flex flex-col">
-              <label className="text-xs font-bold text-gray-500 uppercase">Status</label>
-              <select value={status} onChange={(e) => setStatus(e.target.value)} className="bg-transparent border-b border-gray-300 outline-none font-medium py-1">
-                <option value="Draft">Draft</option>
-                <option value="Sent">Sent</option>
-                <option value="Accepted">Accepted</option>
-                <option value="Rejected">Rejected</option>
-              </select>
-            </div>
-          </div>
 
-          {/* ── DOCUMENT HEADER (Title + Quote ID/Date + Logo) ─────────────────
+            {/* ── DOCUMENT HEADER (Title + Quote ID/Date + Logo) ─────────────────
               The big title on the left (QUOTATION / TAX INVOICE) is driven by
               the {type} variable set in the Document Type dropdown.
 
@@ -1451,42 +1451,42 @@ export default function QuoteForm() {
 
               TITLE COLOR: change 'text-gray-900' to e.g. 'text-indigo-900'.
           ────────────────────────────────────────────────────────────────── */}
-          <div className="flex flex-col md:flex-row justify-between items-start pb-2 mb-2">
-            <div className="mb-4 md:mb-0">
-              {/* ── Document title: QUOTATION or TAX INVOICE ─────────────── */}
-              <h1 className="text-3xl md:text-4xl font-bold text-gray-900 tracking-tight mb-4 uppercase break-words">{type}</h1>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-lg">
-                <span className="font-semibold text-gray-700">Quote ID / رقم العرض:</span>
-                <input type="text" value={quoteId} onChange={e => setQuoteId(e.target.value)} className="font-mono text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+            <div className="flex flex-col md:flex-row justify-between items-start pb-2 mb-2">
+              <div className="mb-4 md:mb-0">
+                {/* ── Document title: QUOTATION or TAX INVOICE ─────────────── */}
+                <h1 className="text-3xl md:text-4xl font-bold text-gray-900 tracking-tight mb-4 uppercase break-words">{type}</h1>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-lg">
+                  <span className="font-semibold text-gray-700">Quote ID / رقم العرض:</span>
+                  <input type="text" value={quoteId} onChange={e => setQuoteId(e.target.value)} className="font-mono text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
 
-                <span className="font-semibold text-gray-700">Date / التاريخ:</span>
-                <input type="date" value={date} onChange={e => setDate(e.target.value)} className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+                  <span className="font-semibold text-gray-700">Date / التاريخ:</span>
+                  <input type="date" value={date} onChange={e => setDate(e.target.value)} className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
 
-                <span className="font-semibold text-gray-700">Valid Until / صالح لغاية:</span>
-                <input type="date" value={expiryDate} onChange={e => setExpiryDate(e.target.value)} className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+                  <span className="font-semibold text-gray-700">Valid Until / صالح لغاية:</span>
+                  <input type="date" value={expiryDate} onChange={e => setExpiryDate(e.target.value)} className="text-gray-900 outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 bg-transparent" />
+                </div>
+              </div>
+              <div className="text-right flex flex-col items-end">
+                {logoUrl ? (
+                  <img
+                    src={logoUrl}
+                    alt="Company Logo"
+                    className="object-contain mb-2"
+                    style={{ height: `${logoSize * 0.25}rem` }} // Convert tailwind spacing (e.g. h-24 is 6rem)
+                  />
+                ) : (
+                  <div className="flex-col items-end">
+                    <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-2">
+                      <div className="text-green-600 font-bold text-2xl">AJ</div>
+                    </div>
+                    <h2 className="text-xl font-bold text-gray-900">NETWORK</h2>
+                    <h2 className="text-xl font-bold text-gray-900">SOLUTIONS</h2>
+                  </div>
+                )}
               </div>
             </div>
-            <div className="text-right flex flex-col items-end">
-              {logoUrl ? (
-                <img
-                  src={logoUrl}
-                  alt="Company Logo"
-                  className="object-contain mb-2"
-                  style={{ height: `${logoSize * 0.25}rem` }} // Convert tailwind spacing (e.g. h-24 is 6rem)
-                />
-              ) : (
-                <div className="flex-col items-end">
-                  <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-2">
-                    <div className="text-green-600 font-bold text-2xl">AJ</div>
-                  </div>
-                  <h2 className="text-xl font-bold text-gray-900">NETWORK</h2>
-                  <h2 className="text-xl font-bold text-gray-900">SOLUTIONS</h2>
-                </div>
-              )}
-            </div>
-          </div>
 
-          {/* ── CUSTOMER INFO BOX ─────────────────────────────────────────────
+            {/* ── CUSTOMER INFO BOX ─────────────────────────────────────────────
               The bordered section showing customer name, address, subject, etc.
 
               OUTER BORDER THICKNESS: change 'border-2' (2px). Options: border, border-2, border-4.
@@ -1497,276 +1497,276 @@ export default function QuoteForm() {
               SECTION HEADER TEXT SIZE:
                 Change 'text-lg' to 'text-sm', 'text-base', 'text-xl', etc.
           ────────────────────────────────────────────────────────────────── */}
-          <div className="border-2 border-gray-800 mb-6">
-            {/* Header bar: "CUSTOMER INFO" label
+            <div className="border-2 border-gray-800 mb-6">
+              {/* Header bar: "CUSTOMER INFO" label
                 Background color → bg-gray-100 | Text size → text-lg */}
-            <div className="bg-gray-100 px-4 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
-              CUSTOMER INFO
-            </div>
-            <div className="px-4 py-2 grid grid-cols-[100px_1fr_100px_1fr] gap-y-0.5 text-base items-center">
-              <span className="font-bold flex items-center">Customer:</span>
-              <div className="relative w-full z-50 flex items-center">
-                <input
-                  type="text"
-                  className="w-full p-1 border border-gray-300 rounded outline-none focus:border-indigo-500 print:appearance-none print:border-none print:bg-transparent"
-                  placeholder="Search or select customer..."
-                  value={customerSearch}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setCustomerSearch(val);
-                    const c = customers.find(cust => cust.name.toLowerCase() === val.toLowerCase());
-                    if (c) {
-                      setSelectedCustomerId(c.id);
-                      setSelectedCustomer(c);
-                    } else {
-                      setSelectedCustomerId('');
-                      setSelectedCustomer(null);
-                    }
-                  }}
-                  onFocus={() => setCustomerFocused(true)}
-                  onBlur={() => setTimeout(() => setCustomerFocused(false), 200)}
-                />
-                {customerFocused && customerSearch.length > 0 && (
-                  <div className="absolute top-full mt-1 z-[100] w-full bg-white border border-gray-200 rounded shadow-lg max-h-40 overflow-y-auto print:hidden">
-                    {customers
-                      .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) && c.name.toLowerCase() !== customerSearch.toLowerCase())
-                      .map(c => (
-                        <div
-                          key={c.id}
-                          className="cursor-pointer hover:bg-gray-100 px-3 py-2 text-sm"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            setCustomerSearch(c.name);
-                            setSelectedCustomerId(c.id);
-                            setSelectedCustomer(c);
-                            setCustomerFocused(false);
-                          }}
-                        >
-                          {c.name}
-                        </div>
-                      ))}
-                  </div>
-                )}
+              <div className="bg-gray-100 px-4 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
+                CUSTOMER INFO
               </div>
-
-              <span className="font-bold pl-4 flex items-center">Mobile:</span>
-              <input
-                type="text"
-                className="font-mono flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
-                value={selectedCustomer?.mobile || ''}
-                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, mobile: e.target.value })}
-              />
-
-              <span className="font-bold flex items-center">Address:</span>
-              <input
-                type="text"
-                className="col-span-3 flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
-                value={selectedCustomer?.address || ''}
-                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, address: e.target.value })}
-              />
-
-              <span className="font-bold flex items-center">Contact:</span>
-              <input
-                type="text"
-                className="flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
-                value={selectedCustomer?.contact || ''}
-                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, contact: e.target.value })}
-              />
-
-              <span className="font-bold pl-4 flex items-center">E-mail:</span>
-              <input
-                type="text"
-                className="flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
-                value={selectedCustomer?.email || ''}
-                onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, email: e.target.value })}
-              />
-
-              <span className="font-bold flex items-center" style={{ marginTop: '8px' }}>Subject:</span>
-              <div className="col-span-3 flex items-center border border-gray-300 rounded focus-within:border-indigo-500 overflow-hidden print:border-none print:p-0 bg-white print:bg-transparent group/subject" style={{ marginTop: '8px', alignItems: 'center' }}>
-                <div className="flex-1 flex items-center">
+              <div className="px-4 py-2 grid grid-cols-[100px_1fr_100px_1fr] gap-y-0.5 text-base items-center">
+                <span className="font-bold flex items-center">Customer:</span>
+                <div className="relative w-full z-50 flex items-center">
                   <input
                     type="text"
-                    className="flex-1 py-1.5 px-2 outline-none bg-transparent"
-                    value={subject}
-                    onChange={e => setSubject(e.target.value)}
-                    onBlur={() => handleAutoTranslate(subject, subjectAr, setSubjectAr)}
-                    placeholder="e.g., Supply, Installation and Configuration of IP Video Doorbell"
+                    className="w-full p-1 border border-gray-300 rounded outline-none focus:border-indigo-500 print:appearance-none print:border-none print:bg-transparent"
+                    placeholder="Search or select customer..."
+                    value={customerSearch}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCustomerSearch(val);
+                      const c = customers.find(cust => cust.name.toLowerCase() === val.toLowerCase());
+                      if (c) {
+                        setSelectedCustomerId(c.id);
+                        setSelectedCustomer(c);
+                      } else {
+                        setSelectedCustomerId('');
+                        setSelectedCustomer(null);
+                      }
+                    }}
+                    onFocus={() => setCustomerFocused(true)}
+                    onBlur={() => setTimeout(() => setCustomerFocused(false), 200)}
                   />
+                  {customerFocused && customerSearch.length > 0 && (
+                    <div className="absolute top-full mt-1 z-[100] w-full bg-white border border-gray-200 rounded shadow-lg max-h-40 overflow-y-auto print:hidden">
+                      {customers
+                        .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) && c.name.toLowerCase() !== customerSearch.toLowerCase())
+                        .map(c => (
+                          <div
+                            key={c.id}
+                            className="cursor-pointer hover:bg-gray-100 px-3 py-2 text-sm"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setCustomerSearch(c.name);
+                              setSelectedCustomerId(c.id);
+                              setSelectedCustomer(c);
+                              setCustomerFocused(false);
+                            }}
+                          >
+                            {c.name}
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
-                <div className="w-px h-6 bg-gray-200 print:hidden mx-1"></div>
+
+                <span className="font-bold pl-4 flex items-center">Mobile:</span>
                 <input
                   type="text"
-                  dir="rtl"
-                  className="flex-1 py-1.5 px-2 outline-none bg-transparent text-right"
-                  value={subjectAr}
-                  onChange={e => setSubjectAr(e.target.value)}
-                  placeholder="توليد وتركيب وتكوين جرس الباب بالفيديو IP"
+                  className="font-mono flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                  value={selectedCustomer?.mobile || ''}
+                  onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, mobile: e.target.value })}
                 />
+
+                <span className="font-bold flex items-center">Address:</span>
+                <input
+                  type="text"
+                  className="col-span-3 flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                  value={selectedCustomer?.address || ''}
+                  onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, address: e.target.value })}
+                />
+
+                <span className="font-bold flex items-center">Contact:</span>
+                <input
+                  type="text"
+                  className="flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                  value={selectedCustomer?.contact || ''}
+                  onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, contact: e.target.value })}
+                />
+
+                <span className="font-bold pl-4 flex items-center">E-mail:</span>
+                <input
+                  type="text"
+                  className="flex items-center outline-none bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 w-full"
+                  value={selectedCustomer?.email || ''}
+                  onChange={e => selectedCustomer && setSelectedCustomer({ ...selectedCustomer, email: e.target.value })}
+                />
+
+                <span className="font-bold flex items-center" style={{ marginTop: '8px' }}>Subject:</span>
+                <div className="col-span-3 flex items-center border border-gray-300 rounded focus-within:border-indigo-500 overflow-hidden print:border-none print:p-0 bg-white print:bg-transparent group/subject" style={{ marginTop: '8px', alignItems: 'center' }}>
+                  <div className="flex-1 flex items-center">
+                    <input
+                      type="text"
+                      className="flex-1 py-1.5 px-2 outline-none bg-transparent"
+                      value={subject}
+                      onChange={e => setSubject(e.target.value)}
+                      onBlur={() => handleAutoTranslate(subject, subjectAr, setSubjectAr)}
+                      placeholder="e.g., Supply, Installation and Configuration of IP Video Doorbell"
+                    />
+                  </div>
+                  <div className="w-px h-6 bg-gray-200 print:hidden mx-1"></div>
+                  <input
+                    type="text"
+                    dir="rtl"
+                    className="flex-1 py-1.5 px-2 outline-none bg-transparent text-right"
+                    value={subjectAr}
+                    onChange={e => setSubjectAr(e.target.value)}
+                    placeholder="توليد وتركيب وتكوين جرس الباب بالفيديو IP"
+                  />
+                </div>
               </div>
             </div>
-          </div>
 
           </div>
 
           {/* ── ITEMS TABLE ─────────────────────────────────────────────────── */}
           <div className="w-full border-2 border-gray-800 min-w-0 mb-6" style={{ marginTop: '0px', borderColor: '#1f2937' }}>
-              <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
-                <div className={`min-w-[900px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
-                  {/* ── TABLE HEADER ROW ──────────────────────────────────────────
+            <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
+              <div className={`min-w-[1200px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
+                {/* ── TABLE HEADER ROW ──────────────────────────────────────────
                     backgroundColor: '#dcfce7' = light green — change to recolor.
                     borderColor:     '#1f2937' = dark gray   — change to recolor.
                 */}
-                  <div
-                    ref={headerRef}
-                    className="grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
-                    style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
-                  >
-                    <div className="py-2 px-1 border-r border-gray-800 h-full">ITEM</div>
-                    <div className="py-2 px-2 border-r border-gray-800 h-full">
-                      DESCRIPTION
-                    </div>
-                    <div className="py-2 px-1 border-r border-gray-800 h-full">QTY</div>
-                    <div className="py-2 px-1 border-r border-gray-800 h-full">UNIT</div>
-                    <div className="py-2 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
-                    <div className="py-2 px-2 h-full">NET PRICE</div>
-                    <div className="py-2 px-1 print:hidden"></div>
+                <div
+                  ref={headerRef}
+                  className="grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
+                  style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
+                >
+                  <div className="py-2 px-1 border-r border-gray-800 h-full">ITEM</div>
+                  <div className="py-2 px-2 border-r border-gray-800 h-full">
+                    DESCRIPTION
                   </div>
-                  {items.map((item, index) => (
-                    <div
-                      key={item.id}
-                      ref={el => rowRefs.current[index] = el}
-                      className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`} style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
-                      <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
-                        {index + 1}
-                        {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
-                          <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
-                        )}
-                      </div>
-                      <div className="p-0 border-r border-gray-300 h-full flex relative group">
-                        <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
-                          <textarea
-                            className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[24px] relative z-0"
-                            value={item.description}
-                            placeholder="Type to search product..."
-                            onChange={e => updateItem(index, 'description', e.target.value)}
-                            onFocus={() => setFocusedDescriptionIndex(index)}
-                            onBlur={() => {
-                              setTimeout(() => setFocusedDescriptionIndex(null), 200);
-                              handleProductAutoTranslate(index, item.description, item.description_ar || '');
-                            }}
-                            rows={item.description.split('\n').length || 1}
-                          />
+                  <div className="py-2 px-1 border-r border-gray-800 h-full">QTY</div>
+                  <div className="py-2 px-1 border-r border-gray-800 h-full">UNIT</div>
+                  <div className="py-2 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
+                  <div className="py-2 px-2 h-full">NET PRICE</div>
+                  <div className="py-2 px-1 print:hidden"></div>
+                </div>
+                {items.map((item, index) => (
+                  <div
+                    key={item.id}
+                    ref={el => rowRefs.current[index] = el}
+                    className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`} style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
+                    <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
+                      {index + 1}
+                      {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
+                        <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
+                      )}
+                    </div>
+                    <div className="p-0 border-r border-gray-300 h-full flex relative group">
+                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                        <textarea
+                          className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
+                          value={item.description}
+                          placeholder="Type to search product..."
+                          onChange={e => updateItem(index, 'description', e.target.value)}
+                          onFocus={() => setFocusedDescriptionIndex(index)}
+                          onBlur={() => {
+                            setTimeout(() => setFocusedDescriptionIndex(null), 200);
+                            handleProductAutoTranslate(index, item.description, item.description_ar || '');
+                          }}
+                          rows={item.description.split('\n').length || 1}
+                        />
 
-                          {focusedDescriptionIndex === index && item.description.length > 1 && (
-                            <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
-                              {products
-                                .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
-                                .map(p => (
-                                  <div
-                                    key={p.id}
-                                    className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
-                                    onClick={() => {
-                                      handleProductSelect(index, p.id.toString());
-                                      setFocusedDescriptionIndex(null);
-                                      handleProductAutoTranslate(index, p.description, '');
-                                    }}
-                                  >
-                                    <div className="font-medium">{p.description}</div>
-                                    {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-                          <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
-                            <div className="relative flex items-center">
-                              <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
-                              <select
-                                className="absolute inset-0 w-full opacity-0 cursor-pointer"
-                                onChange={(e) => handleProductSelect(index, e.target.value)}
-                                value=""
-                                title="Select from Product DB"
-                              >
-                                <option value="">+</option>
-                                {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
-                              </select>
-                            </div>
+                        {focusedDescriptionIndex === index && item.description.length > 1 && (
+                          <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
+                            {products
+                              .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
+                              .map(p => (
+                                <div
+                                  key={p.id}
+                                  className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                  onClick={() => {
+                                    handleProductSelect(index, p.id.toString());
+                                    setFocusedDescriptionIndex(null);
+                                    handleProductAutoTranslate(index, p.description, '');
+                                  }}
+                                >
+                                  <div className="font-medium">{p.description}</div>
+                                  {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                        <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
+                          <div className="relative flex items-center">
+                            <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
+                            <select
+                              className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                              onChange={(e) => handleProductSelect(index, e.target.value)}
+                              value=""
+                              title="Select from Product DB"
+                            >
+                              <option value="">+</option>
+                              {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
+                            </select>
                           </div>
                         </div>
-                        <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
-                        <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
-                          <textarea
-                            dir="rtl"
-                            className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
-                            value={item.description_ar || ''}
-                            onChange={e => updateItem(index, 'description_ar', e.target.value)}
-                            placeholder="الوصف بالعربية..."
-                            rows={(item.description_ar || '').split('\n').length || 1}
-                          />
-                        </div>
                       </div>
-                      <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
-                        <input
-                          type="number"
-                          className="w-full text-center text-base outline-none bg-transparent"
-                          value={item.qty || ''}
-                          onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
-                          min="1"
+                      <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
+                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
+                        <textarea
+                          dir="rtl"
+                          className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
+                          value={item.description_ar || ''}
+                          onChange={e => updateItem(index, 'description_ar', e.target.value)}
+                          placeholder="الوصف بالعربية..."
+                          rows={(item.description_ar || '').split('\n').length || 1}
                         />
-                      </div>
-                      <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
-                        <input
-                          type="text"
-                          list="unit-suggestions"
-                          className="w-full text-center text-base outline-none bg-transparent"
-                          value={item.unit}
-                          onChange={e => updateItem(index, 'unit', e.target.value)}
-                        />
-                      </div>
-                      <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
-                        <input
-                          type="text"
-                          className="w-full text-center text-base font-mono outline-none bg-transparent"
-                          value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
-                          onFocus={(e) => {
-                            e.target.type = 'number';
-                            e.target.value = item.unit_price ? item.unit_price.toString() : '';
-                          }}
-                          onBlur={(e) => {
-                            e.target.type = 'text';
-                            e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
-                          }}
-                          onChange={e => {
-                            const val = parseFloat(e.target.value);
-                            updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
-                          }}
-                          min="0"
-                          step="0.01"
-                        />
-                      </div>
-                      <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
-                        <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </div>
-                      <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
-                        <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                          <ArrowUp size={12} />
-                        </button>
-                        <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                          <Trash2 size={14} />
-                        </button>
-                        <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                          <ArrowDown size={12} />
-                        </button>
                       </div>
                     </div>
-                  ))}
-                  <div className="p-2 bg-gray-50 border-t border-gray-300 print:hidden">
-                    <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
-                      <Plus size={16} /> Add Row
-                    </button>
+                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                      <input
+                        type="number"
+                        className="w-full text-center text-base outline-none bg-transparent"
+                        value={item.qty || ''}
+                        onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
+                        min="1"
+                      />
+                    </div>
+                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                      <input
+                        type="text"
+                        list="unit-suggestions"
+                        className="w-full text-center text-base outline-none bg-transparent"
+                        value={item.unit}
+                        onChange={e => updateItem(index, 'unit', e.target.value)}
+                      />
+                    </div>
+                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                      <input
+                        type="text"
+                        className="w-full text-center text-base font-mono outline-none bg-transparent"
+                        value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
+                        onFocus={(e) => {
+                          e.target.type = 'number';
+                          e.target.value = item.unit_price ? item.unit_price.toString() : '';
+                        }}
+                        onBlur={(e) => {
+                          e.target.type = 'text';
+                          e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+                        }}
+                        onChange={e => {
+                          const val = parseFloat(e.target.value);
+                          updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
+                        }}
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
+                    <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                      <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
+                      <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
+                        <ArrowUp size={12} />
+                      </button>
+                      <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                        <Trash2 size={14} />
+                      </button>
+                      <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
+                        <ArrowDown size={12} />
+                      </button>
+                    </div>
                   </div>
+                ))}
+                <div className="p-2 bg-gray-50 border-t border-gray-300 print:hidden">
+                  <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                    <Plus size={16} /> Add Row
+                  </button>
                 </div>
               </div>
             </div>
+          </div>
 
           {/* Bottom Section: Terms & Totals */}
           <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
@@ -2058,15 +2058,15 @@ export default function QuoteForm() {
         <div className="w-[305px] shrink-0 print:hidden hidden xl:flex flex-col pt-8">
           {/* Spacer to align with table headers */}
           <div style={{ height: formTopHeight }} className="flex flex-col justify-end">
-             <div className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded-lg shadow-sm z-10 box-border">
-                <span className="font-bold text-sm text-gray-800">M.U. %</span>
-                <input
-                  type="number"
-                  value={markup}
-                  onChange={e => setMarkup(parseFloat(e.target.value) || 0)}
-                  className="w-16 p-1 bg-yellow-300 text-black font-bold outline-none text-center rounded border border-yellow-400"
-                />
-              </div>
+            <div className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded-lg shadow-sm z-10 box-border">
+              <span className="font-bold text-sm text-gray-800">M.U. %</span>
+              <input
+                type="number"
+                value={markup}
+                onChange={e => setMarkup(parseFloat(e.target.value) || 0)}
+                className="w-16 p-1 bg-yellow-300 text-black font-bold outline-none text-center rounded border border-yellow-400"
+              />
+            </div>
           </div>
 
           <div className="border border-gray-800 bg-white shadow-xl rounded-sm">
@@ -2110,11 +2110,11 @@ export default function QuoteForm() {
               <span className="text-green-800">MU</span>
               <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
-            
+
             <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">
               <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-xs">TTL PROFIT</div>
               <div className="bg-yellow-400 px-2 py-1 flex items-center justify-center font-mono text-sm">
-                 {markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
           </div>
