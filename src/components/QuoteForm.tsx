@@ -1609,157 +1609,161 @@ export default function QuoteForm() {
           </div>
 
           {/* ── ITEMS TABLE ─────────────────────────────────────────────────── */}
-          <div className="w-full border-2 border-gray-800 min-w-0 mb-6" style={{ marginTop: '0px', borderColor: '#1f2937' }}>
+          <div className="w-full min-w-0 mb-6">
             <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
-              <div className={`min-w-[1200px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
-                {/* ── TABLE HEADER ROW ──────────────────────────────────────────
+              <div className={`min-w-[1350px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
+                <div className="border-2" style={{ borderColor: '#1f2937' }}>
+                  {/* ── TABLE HEADER ROW ──────────────────────────────────────────
                     backgroundColor: '#dcfce7' = light green — change to recolor.
                     borderColor:     '#1f2937' = dark gray   — change to recolor.
                 */}
-                <div
-                  ref={headerRef}
-                  className="grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
-                  style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
-                >
-                  <div className="py-2 px-1 border-r border-gray-800 h-full">ITEM</div>
-                  <div className="py-2 px-2 border-r border-gray-800 h-full">
-                    DESCRIPTION
-                  </div>
-                  <div className="py-2 px-1 border-r border-gray-800 h-full">QTY</div>
-                  <div className="py-2 px-1 border-r border-gray-800 h-full">UNIT</div>
-                  <div className="py-2 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
-                  <div className="py-2 px-2 h-full">NET PRICE</div>
-                  <div className="py-2 px-1 print:hidden"></div>
-                </div>
-                {items.map((item, index) => (
                   <div
-                    key={item.id}
-                    ref={el => rowRefs.current[index] = el}
-                    className={`grid grid-cols-[44px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start group print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`} style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
-                    <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
-                      {index + 1}
-                      {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
-                        <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
-                      )}
+                    ref={headerRef}
+                    className="grid grid-cols-[47px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[47px_1fr_64px_64px_110px_110px]"
+                    style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
+                  >
+                    <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">ITEM</div>
+                    <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">
+                      DESCRIPTION
                     </div>
-                    <div className="p-0 border-r border-gray-300 h-full flex relative group">
-                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
-                        <textarea
-                          className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
-                          value={item.description}
-                          placeholder="Type to search product..."
-                          onChange={e => updateItem(index, 'description', e.target.value)}
-                          onFocus={() => setFocusedDescriptionIndex(index)}
-                          onBlur={() => {
-                            setTimeout(() => setFocusedDescriptionIndex(null), 200);
-                            handleProductAutoTranslate(index, item.description, item.description_ar || '');
-                          }}
-                          rows={item.description.split('\n').length || 1}
-                        />
+                    <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">QTY</div>
+                    <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">UNIT</div>
+                    <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
+                    <div className="pt-0 pb-3 px-2 h-full">NET PRICE</div>
+                  </div>
+                  {items.map((item, index) => (
+                    <div key={item.id} className="flex items-stretch print:block">
+                      <div
+                        ref={el => rowRefs.current[index] = el}
+                        className={`flex-1 grid grid-cols-[44px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}
+                        style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
+                        <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
+                          {index + 1}
+                          {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
+                            <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
+                          )}
+                        </div>
+                        <div className="p-0 border-r border-gray-300 h-full flex relative group">
+                          <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                            <textarea
+                              className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
+                              value={item.description}
+                              placeholder="Type to search product..."
+                              onChange={e => updateItem(index, 'description', e.target.value)}
+                              onFocus={() => setFocusedDescriptionIndex(index)}
+                              onBlur={() => {
+                                setTimeout(() => setFocusedDescriptionIndex(null), 200);
+                                handleProductAutoTranslate(index, item.description, item.description_ar || '');
+                              }}
+                              rows={item.description.split('\n').length || 1}
+                            />
 
-                        {focusedDescriptionIndex === index && item.description.length > 1 && (
-                          <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
-                            {products
-                              .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
-                              .map(p => (
-                                <div
-                                  key={p.id}
-                                  className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
-                                  onClick={() => {
-                                    handleProductSelect(index, p.id.toString());
-                                    setFocusedDescriptionIndex(null);
-                                    handleProductAutoTranslate(index, p.description, '');
-                                  }}
+                            {focusedDescriptionIndex === index && item.description.length > 1 && (
+                              <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
+                                {products
+                                  .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
+                                  .map(p => (
+                                    <div
+                                      key={p.id}
+                                      className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                      onClick={() => {
+                                        handleProductSelect(index, p.id.toString());
+                                        setFocusedDescriptionIndex(null);
+                                        handleProductAutoTranslate(index, p.description, '');
+                                      }}
+                                    >
+                                      <div className="font-medium">{p.description}</div>
+                                      {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                    </div>
+                                  ))}
+                              </div>
+                            )}
+                            <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
+                              <div className="relative flex items-center">
+                                <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
+                                <select
+                                  className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                                  onChange={(e) => handleProductSelect(index, e.target.value)}
+                                  value=""
+                                  title="Select from Product DB"
                                 >
-                                  <div className="font-medium">{p.description}</div>
-                                  {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                </div>
-                              ))}
+                                  <option value="">+</option>
+                                  {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
+                                </select>
+                              </div>
+                            </div>
                           </div>
-                        )}
-                        <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
-                          <div className="relative flex items-center">
-                            <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
-                            <select
-                              className="absolute inset-0 w-full opacity-0 cursor-pointer"
-                              onChange={(e) => handleProductSelect(index, e.target.value)}
-                              value=""
-                              title="Select from Product DB"
-                            >
-                              <option value="">+</option>
-                              {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
-                            </select>
+                          <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
+                          <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
+                            <textarea
+                              dir="rtl"
+                              className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
+                              value={item.description_ar || ''}
+                              onChange={e => updateItem(index, 'description_ar', e.target.value)}
+                              placeholder="الوصف بالعربية..."
+                              rows={(item.description_ar || '').split('\n').length || 1}
+                            />
                           </div>
                         </div>
+                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                          <input
+                            type="number"
+                            className="w-full text-center text-base outline-none bg-transparent"
+                            value={item.qty || ''}
+                            onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
+                            min="1"
+                          />
+                        </div>
+                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                          <input
+                            type="text"
+                            list="unit-suggestions"
+                            className="w-full text-center text-base outline-none bg-transparent"
+                            value={item.unit}
+                            onChange={e => updateItem(index, 'unit', e.target.value)}
+                          />
+                        </div>
+                        <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                          <input
+                            type="text"
+                            className="w-full text-center text-base font-mono outline-none bg-transparent"
+                            value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
+                            onFocus={(e) => {
+                              e.target.type = 'number';
+                              e.target.value = item.unit_price ? item.unit_price.toString() : '';
+                            }}
+                            onBlur={(e) => {
+                              e.target.type = 'text';
+                              e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+                            }}
+                            onChange={e => {
+                              const val = parseFloat(e.target.value);
+                              updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
+                            }}
+                            min="0"
+                            step="0.01"
+                          />
+                        </div>
+                        <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                          <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
                       </div>
-                      <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
-                      <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
-                        <textarea
-                          dir="rtl"
-                          className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
-                          value={item.description_ar || ''}
-                          onChange={e => updateItem(index, 'description_ar', e.target.value)}
-                          placeholder="الوصف بالعربية..."
-                          rows={(item.description_ar || '').split('\n').length || 1}
-                        />
+                      {/* Controls: hidden on xl (handled by the outside column), visible on smaller screens */}
+                      <div className="w-9 shrink-0 print:hidden xl:hidden flex flex-col items-center justify-start pt-1 gap-1">
+                        <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
+                          <ArrowUp size={12} />
+                        </button>
+                        <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                          <Trash2 size={14} />
+                        </button>
+                        <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
+                          <ArrowDown size={12} />
+                        </button>
                       </div>
                     </div>
-                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
-                      <input
-                        type="number"
-                        className="w-full text-center text-base outline-none bg-transparent"
-                        value={item.qty || ''}
-                        onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
-                        min="1"
-                      />
-                    </div>
-                    <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
-                      <input
-                        type="text"
-                        list="unit-suggestions"
-                        className="w-full text-center text-base outline-none bg-transparent"
-                        value={item.unit}
-                        onChange={e => updateItem(index, 'unit', e.target.value)}
-                      />
-                    </div>
-                    <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
-                      <input
-                        type="text"
-                        className="w-full text-center text-base font-mono outline-none bg-transparent"
-                        value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
-                        onFocus={(e) => {
-                          e.target.type = 'number';
-                          e.target.value = item.unit_price ? item.unit_price.toString() : '';
-                        }}
-                        onBlur={(e) => {
-                          e.target.type = 'text';
-                          e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
-                        }}
-                        onChange={e => {
-                          const val = parseFloat(e.target.value);
-                          updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
-                        }}
-                        min="0"
-                        step="0.01"
-                      />
-                    </div>
-                    <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
-                      <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="px-1 py-0.5 text-center print:hidden flex flex-col items-center justify-start pt-1 gap-1 h-full">
-                      <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                        <ArrowUp size={12} />
-                      </button>
-                      <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                        <Trash2 size={14} />
-                      </button>
-                      <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                        <ArrowDown size={12} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                <div className="p-2 bg-gray-50 border-t border-gray-300 print:hidden">
+                  ))}
+                </div>{/* /border box */}
+                <div className="p-2 print:hidden">
                   <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
                     <Plus size={16} /> Add Row
                   </button>
@@ -1995,9 +1999,9 @@ export default function QuoteForm() {
                   → Simply change the text directly in the JSX below.
             ────────────────────────────────────────────────────────────────── */}
             <div className="w-full md:w-72 border-2 border-gray-800 shrink-0 h-fit">
-              <div className="grid grid-cols-2 border-b border-gray-300 p-2 text-base">
+              <div className="grid grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base text-up">
                 <div className="font-bold">SUBTOTAL</div>
-                <div className="flex justify-between items-center font-mono">
+                <div className="flex justify-between items-center font-mono font-bold">
                   <span>SAR</span>
                   <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
@@ -2036,8 +2040,8 @@ export default function QuoteForm() {
               </div>
               <div className="grid grid-cols-2 p-2 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
                 <div className="font-bold">TOTAL PACKAGE</div>
-                <div className="flex justify-between items-center font-mono font-bold text-lg bg-green-300 text-black px-0 py-1 rounded-lg">
-                  <span className="mr-2">SAR</span>
+                <div className="flex justify-between items-center font-mono font-bold text-lg bg-green-300 text-black rounded-lg">
+                  <span className="mr-1">SAR</span>
                   <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
@@ -2052,6 +2056,25 @@ export default function QuoteForm() {
               </div>
             )}
           </div>
+        </div>
+
+        {/* ── ROW CONTROLS COLUMN (outside the form, aligned to each row) ─── */}
+        <div className="shrink-0 print:hidden hidden xl:flex flex-col pt-8">
+          {/* Spacer matching formTopHeight + headerHeight to align with first row */}
+          <div style={{ height: formTopHeight + headerHeight }}></div>
+          {items.map((item, index) => (
+            <div key={`ctrl-${item.id}`} className="flex flex-col items-center justify-start pt-1 gap-1" style={{ height: rowHeights[index] || 40 }}>
+              <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
+                <ArrowUp size={12} />
+              </button>
+              <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                <Trash2 size={14} />
+              </button>
+              <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
+                <ArrowDown size={12} />
+              </button>
+            </div>
+          ))}
         </div>
 
         {/* ── ANALYSIS SIDEBAR (Floating outside the form) ────────────────── */}
