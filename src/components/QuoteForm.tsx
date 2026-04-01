@@ -1697,7 +1697,7 @@ export default function QuoteForm() {
                           <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
                             <textarea
                               dir="rtl"
-                              className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[24px]"
+                              className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[40px]"
                               value={item.description_ar || ''}
                               onChange={e => updateItem(index, 'description_ar', e.target.value)}
                               placeholder="الوصف بالعربية..."
@@ -1705,7 +1705,7 @@ export default function QuoteForm() {
                             />
                           </div>
                         </div>
-                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
                           <input
                             type="number"
                             className="w-full text-center text-base outline-none bg-transparent"
@@ -1714,7 +1714,7 @@ export default function QuoteForm() {
                             min="1"
                           />
                         </div>
-                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center">
+                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
                           <input
                             type="text"
                             list="unit-suggestions"
@@ -1723,7 +1723,7 @@ export default function QuoteForm() {
                             onChange={e => updateItem(index, 'unit', e.target.value)}
                           />
                         </div>
-                        <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                        <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5 font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
                           <input
                             type="text"
                             className="w-full text-center text-base font-mono outline-none bg-transparent"
@@ -1744,7 +1744,7 @@ export default function QuoteForm() {
                             step="0.01"
                           />
                         </div>
-                        <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                        <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
                           <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       </div>
@@ -2006,7 +2006,7 @@ export default function QuoteForm() {
                   <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
-              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
+              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
                 <div className="font-bold flex items-center whitespace-nowrap">DISCOUNT <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span></div>
                 <div className="flex justify-between items-center font-mono">
                   <span>SAR</span>
@@ -2021,12 +2021,12 @@ export default function QuoteForm() {
                   />
                 </div>
               </div>
-              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
+              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
                 <div className="font-bold flex items-center whitespace-nowrap">
                   VAT
                   <input
                     type="number"
-                    className="w-12 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
+                    className="w-9 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
                     value={vatRate}
                     onChange={e => setVatRate(parseFloat(e.target.value) || 0)}
                     min="0"
@@ -2038,10 +2038,10 @@ export default function QuoteForm() {
                   <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
-              <div className="grid grid-cols-2 p-2 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
+              <div className="grid grid-cols-2 border-gray-300 p-2 pt-0 pb-3 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
                 <div className="font-bold">TOTAL PACKAGE</div>
-                <div className="flex justify-between items-center font-mono font-bold text-lg bg-green-300 text-black rounded-lg">
-                  <span className="mr-1">SAR</span>
+                <div className="flex justify-between items-center font-mono font-bold text-md rounded-md bg-green-400 text-black pt-0 pb-3">
+                  <span className="mr-2">SAR</span>
                   <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
