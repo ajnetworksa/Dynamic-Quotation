@@ -1619,7 +1619,7 @@ export default function QuoteForm() {
                 */}
                   <div
                     ref={headerRef}
-                    className="grid grid-cols-[47px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[47px_1fr_64px_64px_110px_110px]"
+                    className="grid grid-cols-[44px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
                     style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
                   >
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">ITEM</div>
