@@ -1619,7 +1619,7 @@ export default function QuoteForm() {
                 */}
                   <div
                     ref={headerRef}
-                    className="grid grid-cols-[46px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[46px_1fr_64px_64px_110px_110px]"
+                    className="grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[48px_1fr_64px_64px_110px_110px]"
                     style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
                   >
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">ITEM</div>
@@ -1635,7 +1635,7 @@ export default function QuoteForm() {
                     <div key={item.id} className="flex items-stretch print:block">
                       <div
                         ref={el => rowRefs.current[index] = el}
-                        className={`flex-1 grid grid-cols-[46px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[46px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}
+                        className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}
                         style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                         <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
                           {index + 1}
