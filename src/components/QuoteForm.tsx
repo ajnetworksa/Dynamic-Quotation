@@ -1500,7 +1500,7 @@ export default function QuoteForm() {
             <div className="border-2 border-gray-800 mb-6">
               {/* Header bar: "CUSTOMER INFO" label
                 Background color → bg-gray-100 | Text size → text-lg */}
-              <div className="bg-gray-100 px-4 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
+              <div className="bg-gray-100 px-3 pt-0 pb-3 border-b-2 border-gray-800 font-bold text-lg">
                 CUSTOMER INFO
               </div>
               <div className="px-4 py-2 grid grid-cols-[100px_1fr_100px_1fr] gap-y-0.5 text-base items-center">
@@ -1508,7 +1508,7 @@ export default function QuoteForm() {
                 <div className="relative w-full z-50 flex items-center">
                   <input
                     type="text"
-                    className="w-full p-1 border border-gray-300 rounded outline-none focus:border-indigo-500 print:appearance-none print:border-none print:bg-transparent"
+                    className="w-full p-0 border border-gray-300 rounded outline-none focus:border-indigo-500 print:appearance-none print:border-none print:bg-transparent"
                     placeholder="Search or select customer..."
                     value={customerSearch}
                     onChange={(e) => {
@@ -1586,7 +1586,7 @@ export default function QuoteForm() {
                   <div className="flex-1 flex items-center">
                     <input
                       type="text"
-                      className="flex-1 py-1.5 px-2 outline-none bg-transparent"
+                      className="flex-1 py-0.5 px-0 outline-none bg-transparent"
                       value={subject}
                       onChange={e => setSubject(e.target.value)}
                       onBlur={() => handleAutoTranslate(subject, subjectAr, setSubjectAr)}
@@ -1619,7 +1619,7 @@ export default function QuoteForm() {
                 */}
                   <div
                     ref={headerRef}
-                    className="grid grid-cols-[44px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[44px_1fr_64px_64px_110px_110px]"
+                    className="grid grid-cols-[46px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[46px_1fr_64px_64px_110px_110px]"
                     style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
                   >
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">ITEM</div>
@@ -1635,7 +1635,7 @@ export default function QuoteForm() {
                     <div key={item.id} className="flex items-stretch print:block">
                       <div
                         ref={el => rowRefs.current[index] = el}
-                        className={`flex-1 grid grid-cols-[44px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[44px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}
+                        className={`flex-1 grid grid-cols-[46px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[46px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}
                         style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                         <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
                           {index + 1}
