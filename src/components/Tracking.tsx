@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar } from 'lucide-react';
+import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import QuoteDiffViewer from './QuoteDiffViewer';
 
 interface Quote {
   id: number;
@@ -49,6 +50,9 @@ export default function Tracking() {
   const [followupQuoteId, setFollowupQuoteId] = useState<string | null>(null);
   const [followupDate, setFollowupDate] = useState('');
   const [followupNote, setFollowupNote] = useState('');
+
+  // Version Diff
+  const [diffBaseId, setDiffBaseId] = useState<string | null>(null);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -316,8 +320,12 @@ export default function Tracking() {
               };
               const overdue = quote.followup_date && quote.followup_date < new Date().toISOString().split('T')[0] && !['Accepted', 'Rejected'].includes(quote.status || '');
               return (
-                <tr key={quote.id} className={`hover:bg-gray-50 even:bg-gray-50/50 transition-colors ${overdue ? 'bg-amber-50/50' : ''}`}>
-                  <td className="p-4 text-center">
+                <tr 
+                  key={quote.id} 
+                  onClick={() => handleRecall(quote.quote_id)}
+                  className={`hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer ${overdue ? 'bg-amber-50/50' : ''}`}
+                >
+                  <td className="p-4 text-center cursor-default" onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       className="cursor-pointer"
@@ -330,7 +338,7 @@ export default function Tracking() {
                       }}
                     />
                   </td>
-                  <td className="p-4 font-medium text-indigo-600">
+                  <td className="p-4 font-medium text-indigo-600 hover:text-indigo-800 transition-colors hover:underline">
                     {quote.quote_id}
                     {quote.revision_of && <span className="block text-xs text-gray-400">Rev of: {quote.revision_of}</span>}
                   </td>
@@ -358,7 +366,7 @@ export default function Tracking() {
                   <td className="p-4 text-gray-500 text-sm">
                     {quote.updated_at ? new Date(quote.updated_at).toLocaleString() : '-'}
                   </td>
-                  <td className="p-4 text-right">
+                  <td className="p-4 text-right cursor-default" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => fetchTimeline(quote.quote_id)}
@@ -384,6 +392,13 @@ export default function Tracking() {
                         title="Open in Form"
                       >
                         <FileText size={16} /> Open
+                      </button>
+                      <button
+                        onClick={() => setDiffBaseId(quote.quote_id)}
+                        className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                        title="Compare Versions"
+                      >
+                        <Layers size={18} />
                       </button>
                       {user.role === 'admin' && (
                         <button
@@ -540,6 +555,11 @@ export default function Tracking() {
           </div>
         )
       }
+
+      {/* Quote Diff Viewer Modal */}
+      {diffBaseId && (
+        <QuoteDiffViewer baseQuoteId={diffBaseId} onClose={() => setDiffBaseId(null)} />
+      )}
 
     </div >
   );

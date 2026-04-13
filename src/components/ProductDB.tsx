@@ -28,7 +28,7 @@ export default function ProductDB() {
   };
 
   const handleAdd = async () => {
-    if (!editForm.description || !editForm.unit_price) return;
+    if (!editForm.description || editForm.unit_price === undefined || editForm.unit_price === null) return;
     await fetch('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
