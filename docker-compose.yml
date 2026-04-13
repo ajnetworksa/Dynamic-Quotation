@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: dynamic-quotation
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./quotes.db:/app/quotes.db
+      - ./uploads:/app/uploads
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - APP_URL=${APP_URL}
+    restart: unless-stopped
