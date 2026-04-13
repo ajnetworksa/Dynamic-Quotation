@@ -1750,9 +1750,24 @@ export default function QuoteForm() {
 
                             {focusedDescriptionIndex === index && item.description.length > 1 && (
                               <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
-                                {products
-                                  .filter(p => p.description.toLowerCase().includes(item.description.toLowerCase()) && p.description.toLowerCase() !== item.description.toLowerCase())
-                                  .map(p => (
+                                {(() => {
+                                  const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+                                  const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+                                  
+                                  if (searchTerms.length === 0) return [];
+
+                                  return products
+                                    .filter(p => {
+                                      const desc = p.description.toLowerCase();
+                                      if (desc === item.description.toLowerCase()) return false;
+                                      
+                                      const normDesc = normalize(desc);
+                                      return searchTerms.every(term => {
+                                        const nTerm = normalize(term);
+                                        return desc.includes(term) || (nTerm && normDesc.includes(nTerm));
+                                      });
+                                    })
+                                    .map(p => (
                                     <div
                                       key={p.id}
                                       className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
@@ -1765,9 +1780,10 @@ export default function QuoteForm() {
                                       <div className="font-medium">{p.description}</div>
                                       {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
                                     </div>
-                                  ))}
-                              </div>
-                            )}
+                                    ))
+                                  })()}
+                                </div>
+                              )}
                             <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
                               <div className="relative flex items-center">
                                 <ChevronDown size={14} className="text-gray-400 pointer-events-none" />

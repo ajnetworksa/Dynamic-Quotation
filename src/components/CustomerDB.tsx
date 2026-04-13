@@ -78,15 +78,28 @@ export default function CustomerDB() {
     setEditForm(customer);
   };
 
-  const q = search.toLowerCase();
-  const filtered = customers.filter(c =>
-    !q ||
-    c.name?.toLowerCase().includes(q) ||
-    c.address?.toLowerCase().includes(q) ||
-    c.contact?.toLowerCase().includes(q) ||
-    c.mobile?.toLowerCase().includes(q) ||
-    c.email?.toLowerCase().includes(q)
-  );
+  const tokens = search.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+  const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+
+  const filtered = customers.filter(c => {
+    if (tokens.length === 0) return true;
+    
+    const normName = normalize(c.name);
+    const normAddress = normalize(c.address);
+    const normMobile = normalize(c.mobile);
+
+    return tokens.every(token => {
+      const nToken = normalize(token);
+      return (
+        c.name?.toLowerCase().includes(token) ||
+        c.address?.toLowerCase().includes(token) ||
+        c.contact?.toLowerCase().includes(token) ||
+        c.mobile?.toLowerCase().includes(token) ||
+        c.email?.toLowerCase().includes(token) ||
+        (nToken && (normName.includes(nToken) || normAddress.includes(nToken) || normMobile.includes(nToken)))
+      );
+    });
+  });
 
   const totalPages = Math.ceil(filtered.length / rowsPerPage) || 1;
   const safePage = Math.min(currentPage, totalPages);

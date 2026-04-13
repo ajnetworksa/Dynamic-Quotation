@@ -150,14 +150,30 @@ export default function Tracking() {
     document.body.removeChild(link);
   };
 
-  const q = search.toLowerCase();
+  const tokens = search.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+  const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+
   let filtered = quotes.filter(quote => {
-    const matchSearch = !q ||
-      quote.quote_id?.toLowerCase().includes(q) ||
-      quote.customer_name?.toLowerCase().includes(q) ||
-      quote.subject?.toLowerCase().includes(q) ||
-      quote.status?.toLowerCase().includes(q) ||
-      quote.type?.toLowerCase().includes(q);
+    const matchSearch = (() => {
+      if (tokens.length === 0) return true;
+      
+      const normId = normalize(quote.quote_id);
+      const normCustomer = normalize(quote.customer_name);
+      const normSubject = normalize(quote.subject);
+
+      return tokens.every(token => {
+        const nToken = normalize(token);
+        return (
+          quote.quote_id?.toLowerCase().includes(token) ||
+          quote.customer_name?.toLowerCase().includes(token) ||
+          quote.subject?.toLowerCase().includes(token) ||
+          quote.status?.toLowerCase().includes(token) ||
+          quote.type?.toLowerCase().includes(token) ||
+          (nToken && (normId.includes(nToken) || normCustomer.includes(nToken) || normSubject.includes(nToken)))
+        );
+      });
+    })();
+
     const matchStatus = !statusFilter || (quote.status || 'Draft') === statusFilter;
     const matchType = !typeFilter || (quote.type || 'Quotation') === typeFilter;
     const matchDateFrom = !dateFrom || quote.date >= dateFrom;
