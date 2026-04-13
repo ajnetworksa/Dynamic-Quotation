@@ -400,9 +400,10 @@ export default function Tracking() {
                       >
                         <Layers size={18} />
                       </button>
-                      {user.role === 'admin' && (
+                      {(user.role === 'admin' || user.permissions?.canDeleteData) && (
                         <button
-                          onClick={async () => {
+                          onClick={async (e) => {
+                            e.stopPropagation();
                             if (!confirm('Are you sure you want to delete this record?')) return;
                             await fetch(`/api/quotes/${quote.quote_id}`, { method: 'DELETE' });
                             fetchQuotes();

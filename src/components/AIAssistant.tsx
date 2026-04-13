@@ -14,7 +14,6 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -24,6 +23,11 @@ export default function AIAssistant() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  // Permission check — only admins or users with canUseAI can see the chatbot
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const canUseAI = currentUser.role === 'admin' || !!currentUser.permissions?.canUseAI;
+  if (!canUseAI) return null;
 
   const handleSend = async () => {
     if (!input.trim()) return;

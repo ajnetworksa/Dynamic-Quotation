@@ -231,6 +231,7 @@ addColumnIfNotExists('quotes', 'markup', 'REAL DEFAULT 8');
 addColumnIfNotExists('quote_items', 'original_price', 'REAL');
 addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
 addColumnIfNotExists('system_logs', 'type', 'TEXT DEFAULT "Unknown"');
+addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -310,9 +311,11 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
   const session = db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(token) as { user_id: number } | undefined;
   if (!session) return res.status(401).json({ error: 'Unauthorized' });
 
-  const user = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(session.user_id);
+  const user = db.prepare('SELECT id, username, role, permissions FROM users WHERE id = ?').get(session.user_id);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
+  // Parse permissions JSON safely
+  (user as any).permissions = (() => { try { return JSON.parse((user as any).permissions || '{}'); } catch { return {}; } })();
   (req as any).user = user;
   next();
 };
@@ -321,6 +324,18 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
 const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if ((req as any).user.role !== 'admin') {
     return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+};
+
+const hasPermission = (user: any, perm: string) => {
+  if (user.role === 'admin') return true;
+  return !!user.permissions?.[perm];
+};
+
+const requirePermission = (perm: string) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!hasPermission((req as any).user, perm)) {
+    return res.status(403).json({ error: `Forbidden: Missing ${perm} permission` });
   }
   next();
 };
@@ -355,12 +370,10 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   const passwordMatch = user ? await bcrypt.compare(password, user.password) : false;
 
   if (user && passwordMatch) {
-    // ── SECURITY: Cryptographically secure session token ──────────────────
-    // crypto.randomBytes(32) generates 32 bytes of OS-level random data.
-    // hex encodes to 64 characters — effectively unguessable.
     const token = crypto.randomBytes(32).toString('hex');
     db.prepare('INSERT INTO sessions (token, user_id) VALUES (?, ?)').run(token, user.id);
-    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+    const permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role, permissions } });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -378,17 +391,20 @@ app.get('/api/me', requireAuth, (req, res) => {
   res.json((req as any).user);
 });
 
-// ── Users Management (Admin only) ─────────────────────────────────────────────
-app.get('/api/users', requireAuth, requireAdmin, (req, res) => {
-  // Never return the password field — even though it's hashed, no need to expose it
-  const users = db.prepare('SELECT id, username, role FROM users').all();
-  res.json(users);
+// ── Users Management ─────────────────────────────────────────────────────────
+app.get('/api/users', requireAuth, requirePermission('canManageUsers'), (req, res) => {
+  const users = db.prepare('SELECT id, username, role, permissions FROM users').all() as any[];
+  // Parse permissions for each user
+  const parsed = users.map(u => ({
+    ...u,
+    permissions: (() => { try { return JSON.parse(u.permissions || '{}'); } catch { return {}; } })()
+  }));
+  res.json(parsed);
 });
 
-app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
-  const { username, password, role } = req.body;
+app.post('/api/users', requireAuth, requirePermission('canManageUsers'), async (req, res) => {
+  const { username, password, role, permissions } = req.body;
 
-  // Validate before hashing
   if (
     typeof username !== 'string' || !username.trim() || username.length > 128 ||
     typeof password !== 'string' || !password || password.length > 128
@@ -397,33 +413,33 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
   }
 
   try {
-    // ── SECURITY: Hash the password before storing ────────────────────────
     const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const info = db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run(username.trim(), hashed, role);
+    const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
+    const info = db.prepare('INSERT INTO users (username, password, role, permissions) VALUES (?, ?, ?, ?)').run(username.trim(), hashed, role, permStr);
     res.json({ id: info.lastInsertRowid });
   } catch (error: any) {
     res.status(400).json({ error: 'Username might already exist' });
   }
 });
 
-app.put('/api/users/:id', requireAuth, requireAdmin, async (req, res) => {
-  const { username, password, role } = req.body;
+app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), async (req, res) => {
+  const { username, password, role, permissions } = req.body;
 
-  // Validate username
   if (typeof username !== 'string' || !username.trim() || username.length > 128) {
     return res.status(400).json({ error: 'Invalid username.' });
   }
+
+  const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
 
   try {
     if (password) {
       if (typeof password !== 'string' || password.length > 128) {
         return res.status(400).json({ error: 'Invalid password.' });
       }
-      // ── SECURITY: Hash the new password before updating ───────────────
       const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
-      db.prepare('UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?').run(username.trim(), hashed, role, req.params.id);
+      db.prepare('UPDATE users SET username = ?, password = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), hashed, role, permStr, req.params.id);
     } else {
-      db.prepare('UPDATE users SET username = ?, role = ? WHERE id = ?').run(username.trim(), role, req.params.id);
+      db.prepare('UPDATE users SET username = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), role, permStr, req.params.id);
     }
     res.json({ success: true });
   } catch (error: any) {
@@ -431,7 +447,7 @@ app.put('/api/users/:id', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', requireAuth, requireAdmin, (req, res) => {
+app.delete('/api/users/:id', requireAuth, requirePermission('canManageUsers'), (req, res) => {
   // Prevent deleting the last admin
   const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as { count: number };
   const userToDelete = db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id) as { role: string };
@@ -467,7 +483,7 @@ app.put('/api/customers/:id', requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/customers/:id', requireAuth, requireAdmin, (req, res) => {
+app.delete('/api/customers/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
   const stmt = db.prepare('DELETE FROM customers WHERE id = ?');
   stmt.run(req.params.id);
   res.json({ success: true });
@@ -493,7 +509,7 @@ app.put('/api/products/:id', requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/products/:id', requireAuth, requireAdmin, (req, res) => {
+app.delete('/api/products/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
   const stmt = db.prepare('DELETE FROM products WHERE id = ?');
   stmt.run(req.params.id);
   res.json({ success: true });
@@ -675,7 +691,7 @@ app.post('/api/quotes', requireAuth, (req, res) => {
   }
 });
 
-app.delete('/api/quotes/:quote_id', requireAuth, requireAdmin, (req, res) => {
+app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
   try {
     db.transaction(() => {
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(req.params.quote_id);
@@ -738,7 +754,7 @@ app.get('/api/customers/stats', requireAuth, (req, res) => {
 });
 
 // ── Database Export / Import ───────────────────────────────────────────────────
-app.get('/api/db/export', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/db/export', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
   try {
     const customers = db.prepare('SELECT * FROM customers').all();
     const products = db.prepare('SELECT * FROM products').all();
@@ -754,7 +770,7 @@ app.get('/api/db/export', requireAuth, requireAdmin, (req, res) => {
 // The global limit is 1mb. This specific route needs 50mb for large imports.
 // We override body-parser just for this endpoint using express.json({ limit })
 // as inline middleware before the handler.
-app.post('/api/db/import', requireAuth, requireAdmin, express.json({ limit: '50mb' }), (req, res) => {
+app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenance'), express.json({ limit: '50mb' }), (req, res) => {
   const { customers, products, quotes, quote_items } = req.body;
   const importErrors: string[] = [];
 
@@ -825,7 +841,7 @@ app.post('/api/db/import', requireAuth, requireAdmin, express.json({ limit: '50m
 });
 
 // ── Settings / System ─────────────────────────────────────────────────────────
-app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/backup', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
   const file = path.resolve(process.cwd(), 'quotes.db');
   res.download(file, `AJ_Network_DB_Backup_${new Date().toISOString().split('T')[0]}.db`);
 });
@@ -839,7 +855,7 @@ app.get('/api/settings/:key', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/settings', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), (req, res) => {
   const { key, value } = req.body;
   try {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
@@ -1022,7 +1038,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
 });
 
 // ── SYSTEM LOGS ENDPOINTS ──────────────────────────────────────────────────
-app.get('/api/admin/logs', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/logs', requireAuth, requirePermission('canManageSettings'), (req, res) => {
   try {
     // Return all logs, ordered descending by ID
     const logs = db.prepare('SELECT * FROM system_logs ORDER BY id DESC LIMIT 500').all();
@@ -1032,7 +1048,7 @@ app.get('/api/admin/logs', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-app.delete('/api/admin/logs', requireAuth, requireAdmin, (req, res) => {
+app.delete('/api/admin/logs', requireAuth, requirePermission('canManageSettings'), (req, res) => {
   try {
     db.prepare('DELETE FROM system_logs').run();
     res.json({ success: true });
