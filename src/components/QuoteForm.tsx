@@ -18,8 +18,8 @@
 // =============================================================================
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search } from 'lucide-react';
+import { useSearchParams, useLocation } from 'react-router-dom';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx-js-style';
@@ -61,12 +61,22 @@ interface CustomField {
   valueAr: string;
 }
 
+interface ThemeColors {
+  headerBg: string;
+  headerText: string;
+  stripeBg: string;
+  totalsBg: string;
+}
+
 export default function QuoteForm() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const recallQuoteId = searchParams.get('recall');
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [footerImageUrl, setFooterImageUrl] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isRfqLoading, setIsRfqLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── SIDEBAR ALIGNMENT REFS ──────────────────────────────────────────────
   // printRef wraps the actual document. formTopRef wraps the header section
@@ -293,19 +303,51 @@ export default function QuoteForm() {
     init();
   }, [recallQuoteId]);
 
+  // Refetch list of customers and products in the background when returning to the tab
+  useEffect(() => {
+    if (location.pathname === '/quote') {
+      fetchCustomers();
+      fetchProducts();
+    }
+  }, [location.pathname]);
+
+  // Refetch lists when the browser tab gains focus (e.g. from another tab or window)
+  // or via a regular background sync every 15 seconds so data is always fresh.
+  // Using refs so the callbacks always call the latest version (no stale closures).
+  useEffect(() => {
+    const handleFocus = () => {
+      fetchCustomersRef.current();
+      fetchProductsRef.current();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    const interval = setInterval(handleFocus, 15000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const fetchCustomers = async () => {
-    const res = await fetch('/api/customers');
+    const res = await fetch(`/api/customers?_t=${Date.now()}`);
     const data = await res.json();
     setCustomers(data);
     return data;
   };
 
   const fetchProducts = async () => {
-    const res = await fetch('/api/products');
+    const res = await fetch(`/api/products?_t=${Date.now()}`);
     const data = await res.json();
     setProducts(data);
     return data;
   };
+
+  // Keep a ref to always-latest fetch functions so focus/interval never get stale closures
+  const fetchCustomersRef = useRef(fetchCustomers);
+  const fetchProductsRef  = useRef(fetchProducts);
+  useEffect(() => { fetchCustomersRef.current = fetchCustomers; });
+  useEffect(() => { fetchProductsRef.current  = fetchProducts; });
 
   const fetchLogo = async () => {
     try {
@@ -337,9 +379,8 @@ export default function QuoteForm() {
     }
   };
 
-  const handleAutoTranslate = async (text: string, currentAr: string, setterAr: (val: string) => void, force = false) => {
+  const handleAutoTranslate = async (text: string, currentAr: string, setterAr: (val: string) => void, force = true) => {
     if (!text) return;
-    if (currentAr && !force) return; // Only auto-translate if empty or forced
     try {
       const res = await fetch('/api/translate', {
         method: 'POST',
@@ -374,11 +415,11 @@ export default function QuoteForm() {
   };
 
   const handleTranslateAll = async () => {
-    const isConfirm = confirm('This will translate all empty Arabic fields based on English content. Proceed?');
+    const isConfirm = confirm('This will force translate ALL Arabic fields based on current English content. Proceed?');
     if (!isConfirm) return;
 
     // 1. Subject
-    if (subject && !subjectAr) {
+    if (subject) {
       const trans = await translateSingle(subject);
       if (trans) setSubjectAr(trans);
     }
@@ -387,7 +428,7 @@ export default function QuoteForm() {
     const newItems = [...items];
     let itemsChanged = false;
     for (let i = 0; i < newItems.length; i++) {
-      if (newItems[i].description && !newItems[i].description_ar) {
+      if (newItems[i].description) {
         const trans = await translateSingle(newItems[i].description);
         if (trans) {
           newItems[i].description_ar = trans;
@@ -398,31 +439,31 @@ export default function QuoteForm() {
     if (itemsChanged) setItems(newItems);
 
     // 3. Terms
-    if (note && !noteAr) {
+    if (note) {
       const trans = await translateSingle(note);
       if (trans) setNoteAr(trans);
     }
-    if (payment && !paymentAr) {
+    if (payment) {
       const trans = await translateSingle(payment);
       if (trans) setPaymentAr(trans);
     }
-    if (warranty && !warrantyAr) {
+    if (warranty) {
       const trans = await translateSingle(warranty);
       if (trans) setWarrantyAr(trans);
     }
-    if (manpower && !manpowerAr) {
+    if (manpower) {
       const trans = await translateSingle(manpower);
       if (trans) setManpowerAr(trans);
     }
-    if (mobilization && !mobilizationAr) {
+    if (mobilization) {
       const trans = await translateSingle(mobilization);
       if (trans) setMobilizationAr(trans);
     }
-    if (duration && !durationAr) {
+    if (duration) {
       const trans = await translateSingle(duration);
       if (trans) setDurationAr(trans);
     }
-    if (bankDetails && !bankDetailsAr) {
+    if (bankDetails) {
       const trans = await translateSingle(bankDetails);
       if (trans) setBankDetailsAr(trans);
     }
@@ -431,7 +472,7 @@ export default function QuoteForm() {
     const newCFs = [...customFields];
     let cfChanged = false;
     for (let i = 0; i < newCFs.length; i++) {
-      if (newCFs[i].value && !newCFs[i].valueAr) {
+      if (newCFs[i].value) {
         const trans = await translateSingle(newCFs[i].value);
         if (trans) {
           newCFs[i].valueAr = trans;
@@ -444,9 +485,8 @@ export default function QuoteForm() {
     alert('Translation process complete!');
   };
 
-  const handleProductAutoTranslate = async (index: number, text: string, currentAr: string, force = false) => {
+  const handleProductAutoTranslate = async (index: number, text: string, currentAr: string, force = true) => {
     if (!text) return;
-    if (currentAr && !force) return; // Only auto-translate if empty or forced
     try {
       const res = await fetch('/api/translate', {
         method: 'POST',
@@ -643,6 +683,56 @@ export default function QuoteForm() {
       });
       // Force auto-translate since we picked a known product without an arabic description yet
       handleProductAutoTranslate(index, product.description, product.description_ar || '');
+    }
+  };
+
+  const handleRfqUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsRfqLoading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/rfq/parse', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}` // Ensure we hit the API properly
+        },
+        body: formData
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data.items && data.items.length > 0) {
+          const mappedItems: QuoteItem[] = data.items.map((it: any) => ({
+            id: crypto.randomUUID(),
+            description: it.description,
+            description_ar: '', // Will let user auto-translate it later
+            qty: it.qty || 1,
+            unit: it.unit || 'set',
+            unit_price: 0,
+            net_price: 0
+          }));
+          
+          setItems(prev => {
+            const temp = prev.filter(p => p.description.trim() !== '');
+            return [...temp, ...mappedItems];
+          });
+          alert('RFQ Parsed successfully! Prices are set to 0. Please verify descriptions.');
+        } else {
+          alert('AI did not find any items or returned an invalid format.');
+        }
+      } else {
+        const err = await res.json();
+        alert(`Failed: ${err.error || 'Server error'}`);
+      }
+    } catch (err: any) {
+      alert(`Upload error: ${err.message}`);
+    } finally {
+      setIsRfqLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -1763,10 +1853,19 @@ export default function QuoteForm() {
                     </div>
                   ))}
                 </div>{/* /border box */}
-                <div className="p-2 print:hidden">
+                <div className="p-2 print:hidden flex items-center gap-4">
                   <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
                     <Plus size={16} /> Add Row
                   </button>
+                  <button 
+                    onClick={() => fileInputRef.current?.click()} 
+                    disabled={isRfqLoading}
+                    className="flex items-center gap-1 text-sm bg-purple-100 text-purple-700 hover:bg-purple-200 px-3 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    {isRfqLoading ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
+                    {isRfqLoading ? 'Parsing AI...' : 'Import from RFQ'}
+                  </button>
+                  <input type="file" ref={fileInputRef} hidden accept="image/*,application/pdf" onChange={handleRfqUpload} />
                 </div>
               </div>
             </div>

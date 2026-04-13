@@ -24,6 +24,7 @@ import Tracking from './components/Tracking';
 import Settings from './components/Settings';
 import Login from './components/Login';
 import UsersDB from './components/UsersDB';
+import AIAssistant from './components/AIAssistant';
 
 // Global fetch interceptor for auth token
 const originalFetch = window.fetch;
@@ -151,6 +152,7 @@ function MainLayout({ user, handleLogout }: { user: any, handleLogout: () => voi
           )}
         </Routes>
       </main>
+      <AIAssistant />
     </div>
   );
 }

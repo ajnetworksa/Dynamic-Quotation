@@ -21,9 +21,21 @@ import bcrypt from 'bcrypt';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
+import 'dotenv/config';
+import multer from 'multer';
+import OpenAI from 'openai';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+// Setup OpenAI (OpenRouter) Client
+const openai = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.OPENROUTER_API_KEY || "dummy_key_to_prevent_startup_crash",
+});
+
+// Setup multer for memory storage
+const upload = multer({ storage: multer.memoryStorage() });
 
 // ── SECURITY: HTTP headers ────────────────────────────────────────────────────
 // helmet() automatically sets a suite of security headers, including:
@@ -160,6 +172,16 @@ db.exec(`
     actor TEXT,
     timestamp TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    source TEXT NOT NULL,
+    type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    details TEXT,
+    timestamp TEXT NOT NULL
+  );
 `);
 
 const addColumnIfNotExists = (table: string, column: string, type: string) => {
@@ -208,6 +230,7 @@ addColumnIfNotExists('quotes', 'followup_note', 'TEXT');
 addColumnIfNotExists('quotes', 'markup', 'REAL DEFAULT 8');
 addColumnIfNotExists('quote_items', 'original_price', 'REAL');
 addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
+addColumnIfNotExists('system_logs', 'type', 'TEXT DEFAULT "Unknown"');
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -240,6 +263,42 @@ for (const u of allUsers) {
     db.prepare('UPDATE users SET password = ? WHERE id = ?').run(rehashed, u.id);
   }
 }
+
+// ── SYSTEM LOGGING & GLOBAL ERROR HANDLING ────────────────────────────────────
+const logSystemError = (source: string, type: string, message: string, details: string | null = null) => {
+  try {
+    db.prepare('INSERT INTO system_logs (level, source, type, message, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)').run('ERROR', source, type, message, details, new Date().toISOString());
+  } catch (e) {
+    console.error('Failed to write to system logs:', e);
+  }
+};
+
+const cleanupLogs = () => {
+  try {
+    const settingRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('logExpirationDays') as { value: string } | undefined;
+    const days = settingRow ? parseInt(settingRow.value, 10) : 7;
+    // days = 0 means Never expire
+    if (days > 0) {
+      const expirationDate = new Date();
+      expirationDate.setDate(expirationDate.getDate() - days);
+      db.prepare('DELETE FROM system_logs WHERE timestamp < ?').run(expirationDate.toISOString());
+    }
+  } catch (e) {
+    console.error('Failed to cleanup logs:', e);
+  }
+};
+// Run cleanup on startup
+cleanupLogs();
+
+// Catch uncaught exceptions globally
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  logSystemError('Process', 'UncaughtException', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason: any) => {
+  console.error('Unhandled Rejection:', reason);
+  logSystemError('Process', 'UnhandledRejection', reason?.message || String(reason), reason?.stack || null);
+});
 
 // ── Auth Middleware ───────────────────────────────────────────────────────────
 // Validates the Bearer token in the Authorization header against the sessions table.
@@ -482,6 +541,31 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
   } else {
     res.status(404).json({ error: 'Quote not found' });
   }
+});
+
+app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
+  const quoteId = req.params.quote_id;
+  // Get base ID: 'AJ-12345-R2' -> 'AJ-12345'
+  const baseIdMatch = quoteId.match(/^(AJ-\d+)/);
+  if (!baseIdMatch) return res.status(400).json({ error: 'Invalid Quote ID format' });
+  
+  const baseId = baseIdMatch[1];
+  
+  // Fetch all quotes starting with this base ID 
+  const history = db.prepare(`
+    SELECT q.*, c.name as customer_name 
+    FROM quotes q 
+    LEFT JOIN customers c ON q.customer_id = c.id
+    WHERE q.quote_id LIKE ? 
+    ORDER BY q.quote_id ASC
+  `).all(`${baseId}%`) as any[];
+
+  // Fetch items for all of them
+  for (const q of history) {
+    q.items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(q.quote_id);
+  }
+
+  res.json(history);
 });
 
 app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
@@ -788,6 +872,180 @@ app.post('/api/translate', requireAuth, async (req, res) => {
     console.error('Translation error:', error);
     res.status(500).json({ error: 'Translation failed' });
   }
+});
+
+// ── AI & Automation API ───────────────────────────────────────────────────────
+// RFQ Parsing (Multimodal LLM extraction)
+app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) => {
+  if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
+    return res.status(400).json({ error: 'Please set OPENROUTER_API_KEY in your .env file to use AI features.' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  try {
+    const base64Data = req.file.buffer.toString('base64');
+    const mimeType = req.file.mimetype;
+    
+    const messages = [
+      {
+        role: "user",
+        // @ts-ignore
+        content: [
+          {
+            type: "text",
+            text: "You are a professional estimator. Extract line items from this Request for Quotation (RFQ) document. " +
+                  "Return a JSON array ONLY, where each object has: " +
+                  "1. 'description' (string, the name or details of the product/service), " +
+                  "2. 'qty' (number, the requested quantity), " +
+                  "3. 'unit' (string, the unit of measure like 'pcs', 'ls', 'meters'). " +
+                  "Do not include any other markdown formatting or conversational text, just the raw JSON array."
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${mimeType};base64,${base64Data}`
+            }
+          }
+        ]
+      }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: "google/gemma-3-27b-it:free", // Multimodal free model
+      // @ts-ignore
+      messages: messages,
+      temperature: 0.1,
+    });
+
+    const aiRes = response.choices[0]?.message?.content || '[]';
+    
+    let cleaned = aiRes.trim();
+    // Strip out <think> blocks common in DeepSeek R1 and other reasoning models
+    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+    if (cleaned.toLowerCase().startsWith('```json')) cleaned = cleaned.substring(7);
+    if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```/, '');
+    if (cleaned.endsWith('```')) cleaned = cleaned.replace(/```$/, '');
+    cleaned = cleaned.trim();
+
+    const items = JSON.parse(cleaned);
+    res.json({ items });
+  } catch (err: any) {
+    console.error('RFQ Parse Error:', err);
+    res.status(500).json({ error: 'Failed to process RFQ document. Ensure the file is an image and OpenRouter API key is set.' });
+  }
+});
+
+// Database Assistant (Text-to-SQL)
+app.post('/api/ai/chat', requireAuth, async (req, res) => {
+  if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
+    return res.status(400).json({ error: 'Please set OPENROUTER_API_KEY in your .env file to use AI features.' });
+  }
+
+  const { question } = req.body;
+  if (!question) return res.status(400).json({ error: 'No question provided' });
+
+  try {
+    const schemaDefs = `
+      Table Customers (id INTEGER, name TEXT, address TEXT, contact TEXT, mobile TEXT, email TEXT);
+      Table Quotes (id INTEGER, quote_id TEXT, date TEXT, customer_id INTEGER, subtotal REAL, tax REAL, grand_total REAL, status TEXT, markup REAL);
+      Table Quote_Items (id INTEGER, quote_id TEXT, product_id INTEGER, description TEXT, qty REAL, unit_price REAL, net_price REAL, original_price REAL, manual_price REAL);
+    `;
+
+    // Phase 1: Generate SQL formulation
+    const sqlResponse = await openai.chat.completions.create({
+      model: "openrouter/free", // Automatically routes to best available free model
+      messages: [
+        {
+          role: "system",
+          content: "You are an SQLite expert. Based on the following schema, generate ONLY a valid readonly SELECT query to answer the user's question. DO NOT include formatting like ```sql...```, just the query text. If you cannot answer it, return 'INVALID'.\n\n" + schemaDefs
+        },
+        { role: "user", content: question }
+      ],
+      temperature: 0,
+    });
+
+    const query = sqlResponse.choices[0]?.message?.content?.trim() || "";
+    
+    let cleanedQuery = query.trim();
+    // Strip out <think> blocks common in DeepSeek R1 and other reasoning models
+    cleanedQuery = cleanedQuery.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+    if (cleanedQuery.toLowerCase().startsWith('```sql')) cleanedQuery = cleanedQuery.substring(6);
+    if (cleanedQuery.startsWith('```')) cleanedQuery = cleanedQuery.replace(/^```/, '');
+    if (cleanedQuery.endsWith('```')) cleanedQuery = cleanedQuery.replace(/```$/, '');
+    cleanedQuery = cleanedQuery.trim();
+
+    if (cleanedQuery === 'INVALID' || !cleanedQuery.toUpperCase().startsWith('SELECT')) {
+      logSystemError('AI Assistant', 'QueryValidationError', `Data Assistant generated invalid SQL`, `Original Output:\n${query}\n\nCleaned Query:\n${cleanedQuery}`);
+      return res.json({ answer: "I'm sorry, I couldn't understand how to fetch that information from the database securely." });
+    }
+
+    // Execute query
+    let rows;
+    try {
+      rows = db.prepare(cleanedQuery).all();
+    } catch (sqlErr: any) {
+      logSystemError('AI Assistant', 'SQLException', `Database execution error: ${sqlErr.message}`, `Query: ${cleanedQuery}\n\nStack: ${sqlErr.stack || sqlErr}`);
+      return res.json({ answer: `Database execution error: ${sqlErr.message}` });
+    }
+
+    // Phase 2: Natural Language Summary of Results
+    const summaryResponse = await openai.chat.completions.create({
+      model: "openrouter/free",
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant. Provide a brief, professional answer to the user's question using the raw JSON data provided from the database. Do not mention SQLite or queries."
+        },
+        {
+          role: "user",
+          content: `Question: ${question}\nData limit applied. Database result: ${JSON.stringify(rows).substring(0, 1500)}`
+        }
+      ],
+      temperature: 0.3,
+    });
+
+    res.json({
+      answer: summaryResponse.choices[0]?.message?.content?.trim(),
+      data: rows,
+      query: cleanedQuery
+    });
+
+  } catch (err: any) {
+    console.error('AI Chat Error:', err);
+    res.status(500).json({ error: 'AI Assistant failed' });
+  }
+});
+
+// ── SYSTEM LOGS ENDPOINTS ──────────────────────────────────────────────────
+app.get('/api/admin/logs', requireAuth, requireAdmin, (req, res) => {
+  try {
+    // Return all logs, ordered descending by ID
+    const logs = db.prepare('SELECT * FROM system_logs ORDER BY id DESC LIMIT 500').all();
+    res.json(logs);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/admin/logs', requireAuth, requireAdmin, (req, res) => {
+  try {
+    db.prepare('DELETE FROM system_logs').run();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── GLOBAL EXPRESS ERROR HANDLER ──────────────────────────────────────────────
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Unhandled API Error:', err);
+  logSystemError('Express API', 'UnhandledRouteError', `Error in ${req.method} ${req.url}: ${err.message}`, err.stack);
+  res.status(500).json({ error: 'Internal Server Error' });
 });
 
 // ── Server Startup ────────────────────────────────────────────────────────────

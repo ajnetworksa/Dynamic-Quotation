@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 export default function Settings() {
@@ -29,6 +29,14 @@ export default function Settings() {
     stripeBg: '#e5e7eb',
     totalsBg: '#f3f4f6'
   });
+
+  const [logs, setLogs] = useState<any[]>([]);
+  const [logsStatus, setLogsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [logExpirationDays, setLogExpirationDays] = useState<number>(7);
+  const [logExpirationStatus, setLogExpirationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
+
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => {
     fetch('/api/settings/logo')
@@ -65,7 +73,74 @@ export default function Settings() {
         if (data.value) setThemeColors(JSON.parse(data.value));
       })
       .catch(console.error);
+
+    fetch('/api/settings/logExpirationDays')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setLogExpirationDays(parseInt(data.value, 10));
+      })
+      .catch(console.error);
+
+    if (user.role === 'admin') {
+      fetchLogs();
+    }
   }, []);
+
+  const fetchLogs = async () => {
+    try {
+      setLogsStatus('loading');
+      const res = await fetch('/api/admin/logs', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLogs(data);
+        setLogsStatus('success');
+      } else {
+        setLogsStatus('error');
+      }
+    } catch {
+      setLogsStatus('error');
+    }
+  };
+
+  const handleClearLogs = async () => {
+    if (!confirm('Are you sure you want to clear all system logs?')) return;
+    try {
+      const res = await fetch('/api/admin/logs', {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        setLogs([]);
+      }
+    } catch (error) {
+      console.error('Failed to clear logs:', error);
+    }
+  };
+
+  const handleSaveLogExpiration = async (days: number) => {
+    setLogExpirationDays(days);
+    setLogExpirationStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ key: 'logExpirationDays', value: days.toString() })
+      });
+      if (res.ok) {
+        setLogExpirationStatus('success');
+        setTimeout(() => setLogExpirationStatus('idle'), 3000);
+      } else {
+        setLogExpirationStatus('error');
+      }
+    } catch {
+      setLogExpirationStatus('error');
+    }
+  };
 
   const handleExportDB = async () => {
     setExportStatus('loading');
@@ -642,6 +717,126 @@ export default function Settings() {
           </div>
         </div>
       </div>
+
+      {/* System Logs (Admin Only) */}
+      {user.role === 'admin' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="p-6 border-b border-gray-200 bg-gray-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="flex items-center gap-3">
+              <TerminalSquare className="text-gray-700" />
+              <h2 className="text-xl font-semibold text-gray-800">System Logs</h2>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-700">Expire:</span>
+                <div className="relative">
+                  <select
+                    value={logExpirationDays}
+                    onChange={(e) => handleSaveLogExpiration(parseInt(e.target.value, 10))}
+                    className="appearance-none pl-3 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  >
+                    <option value="1">1 Day</option>
+                    <option value="2">2 Days</option>
+                    <option value="7">7 Days</option>
+                    <option value="14">14 Days</option>
+                    <option value="30">30 Days</option>
+                    <option value="0">Never</option>
+                  </select>
+                  <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                </div>
+              </div>
+              <button
+                onClick={fetchLogs}
+                disabled={logsStatus === 'loading'}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                <RefreshCw size={16} className={logsStatus === 'loading' ? 'animate-spin' : ''} /> Refresh
+              </button>
+              <button
+                onClick={handleClearLogs}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors text-sm font-medium"
+              >
+                <Trash2 size={16} /> Clear Logs
+              </button>
+            </div>
+          </div>
+          
+          <div className="p-6">
+            <p className="text-gray-600 mb-4 text-sm">
+              Displays backend errors, database execution failures, and AI exceptions for troubleshooting.
+              <span className="ml-2 text-indigo-600">
+                {logExpirationStatus === 'loading' && 'Saving expiration...'}
+                {logExpirationStatus === 'success' && 'Expiration saved!'}
+                {logExpirationStatus === 'error' && 'Failed to save expiration.'}
+              </span>
+            </p>
+
+            {logsStatus === 'loading' ? (
+              <div className="flex items-center gap-2 text-gray-500 justify-center py-8">
+                <Loader2 size={18} className="animate-spin" /> Loading logs...
+              </div>
+            ) : logs.length === 0 ? (
+              <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                No system errors logged.
+              </div>
+            ) : (
+              <div className="overflow-hidden border border-gray-200 rounded-lg">
+                <table className="w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-gray-50 text-gray-600 border-b border-gray-200">
+                    <tr>
+                      <th className="p-3 font-medium">Timestamp</th>
+                      <th className="p-3 font-medium">Source</th>
+                      <th className="p-3 font-medium">Type</th>
+                      <th className="p-3 font-medium">Message</th>
+                      <th className="p-3 font-medium text-right">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {logs.map((log) => (
+                      <React.Fragment key={log.id}>
+                        <tr className="hover:bg-gray-50">
+                          <td className="p-3 text-gray-500">{new Date(log.timestamp).toLocaleString()}</td>
+                          <td className="p-3">
+                            <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-md text-xs font-medium">
+                              {log.source}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <span className="px-2 py-1 bg-red-100 text-red-700 rounded-md text-xs font-semibold">
+                              {log.type}
+                            </span>
+                          </td>
+                          <td className="p-3 text-gray-800 truncate max-w-xs">{log.message}</td>
+                          <td className="p-3 text-right">
+                            {log.details && (
+                              <button
+                                onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                                className="text-indigo-600 hover:text-indigo-800 text-xs font-medium underline"
+                              >
+                                {expandedLogId === log.id ? 'Hide Details' : 'View Details'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                        {expandedLogId === log.id && log.details && (
+                          <tr className="bg-gray-800">
+                            <td colSpan={5} className="p-0">
+                              <pre className="p-4 text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap font-mono m-0">
+                                {log.details}
+                              </pre>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

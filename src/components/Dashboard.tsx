@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award } from 'lucide-react';
+import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award, Repeat2 } from 'lucide-react';
 
 interface Quote {
     id: number;
@@ -85,6 +85,24 @@ export default function Dashboard() {
         }).slice(0, 6);
 
     const handleRecall = (quote_id: string) => navigate(`/quote?recall=${quote_id}`);
+
+    // Repeat customers: customers with 2+ quotes, sorted by quote count desc
+    const customerQuoteMap: Record<string, { count: number; accepted: number; lastDate: string; lastStatus: string; lastId: string }> = {};
+    quotes.forEach(q => {
+        const name = q.customer_name || 'Unknown';
+        if (!customerQuoteMap[name]) customerQuoteMap[name] = { count: 0, accepted: 0, lastDate: '', lastStatus: '', lastId: '' };
+        customerQuoteMap[name].count++;
+        if (q.status === 'Accepted') customerQuoteMap[name].accepted++;
+        if (!customerQuoteMap[name].lastDate || (q.date || '') > customerQuoteMap[name].lastDate) {
+            customerQuoteMap[name].lastDate = q.date || '';
+            customerQuoteMap[name].lastStatus = q.status || 'Draft';
+            customerQuoteMap[name].lastId = q.quote_id;
+        }
+    });
+    const repeatCustomers = Object.entries(customerQuoteMap)
+        .filter(([, v]) => v.count >= 2)
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, 8);
 
     return (
         <div className="space-y-6 max-w-7xl mx-auto">
@@ -268,6 +286,77 @@ export default function Dashboard() {
                     </div>
                 </div>
             </div>
+
+            {/* Repeat Customers Panel */}
+            {repeatCustomers.length > 0 && (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-2">
+                        <Repeat2 size={18} className="text-indigo-500" />
+                        <h2 className="text-lg font-bold text-gray-800">Repeat Customers</h2>
+                        <span className="ml-auto text-xs text-gray-400">Customers with 2+ quotes</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                                    <th className="px-5 py-3 text-left font-semibold">Customer</th>
+                                    <th className="px-5 py-3 text-center font-semibold">Quotes</th>
+                                    <th className="px-5 py-3 text-center font-semibold">Won</th>
+                                    <th className="px-5 py-3 text-center font-semibold">Win Rate</th>
+                                    <th className="px-5 py-3 text-center font-semibold">Last Status</th>
+                                    <th className="px-5 py-3 text-center font-semibold">Last Quote</th>
+                                    <th className="px-5 py-3 text-right font-semibold">Latest Date</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {repeatCustomers.map(([name, v], i) => {
+                                    const winRate = Math.round((v.accepted / v.count) * 100);
+                                    const winColor = winRate >= 60 ? 'text-emerald-600' : winRate >= 30 ? 'text-amber-600' : 'text-red-500';
+                                    const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50';
+                                    return (
+                                        <tr key={name} className={`${rowBg} hover:bg-indigo-50/40 transition-colors`}>
+                                            <td className="px-5 py-3">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold flex items-center justify-center shrink-0">
+                                                        {name.charAt(0).toUpperCase()}
+                                                    </div>
+                                                    <span className="font-medium text-gray-900 truncate max-w-[200px]" title={name}>{name}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-5 py-3 text-center">
+                                                <button
+                                                    onClick={() => navigate(`/tracking?customer=${encodeURIComponent(name)}`)}
+                                                    title={`View all quotes for ${name}`}
+                                                    className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 font-bold text-sm hover:bg-indigo-600 hover:text-white transition-colors cursor-pointer"
+                                                >{v.count}</button>
+                                            </td>
+                                            <td className="px-5 py-3 text-center font-semibold text-emerald-600">{v.accepted}</td>
+                                            <td className="px-5 py-3 text-center">
+                                                <span className={`font-bold ${winColor}`}>{winRate}%</span>
+                                                <div className="mt-1 h-1 rounded-full bg-gray-200 w-16 mx-auto">
+                                                    <div className={`h-full rounded-full ${ winRate >= 60 ? 'bg-emerald-400' : winRate >= 30 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${winRate}%` }} />
+                                                </div>
+                                            </td>
+                                            <td className="px-5 py-3 text-center">
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${STATUS_COLORS[v.lastStatus] || STATUS_COLORS.Draft}`}>
+                                                    {v.lastStatus}
+                                                </span>
+                                            </td>
+                                            <td className="px-5 py-3 text-center">
+                                                <button
+                                                    onClick={() => handleRecall(v.lastId)}
+                                                    className="text-indigo-600 hover:text-indigo-800 font-mono text-xs font-semibold hover:underline"
+                                                >{v.lastId}</button>
+                                            </td>
+                                            <td className="px-5 py-3 text-right text-xs text-gray-400 whitespace-nowrap">{v.lastDate}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
