@@ -17,6 +17,7 @@ export default function ProductDB() {
   const [isAdding, setIsAdding] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [lastTranslatedDesc, setLastTranslatedDesc] = useState('');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => { fetchProducts(); }, []);
@@ -57,8 +58,29 @@ export default function ProductDB() {
   };
 
   const startEdit = (product: Product) => {
+    setLastTranslatedDesc(product.description);
     setIsEditing(product.id);
     setEditForm(product);
+  };
+
+  const handleAutoTranslate = async (text: string) => {
+    if (!text || text === lastTranslatedDesc) return;
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.translation) {
+          setEditForm(prev => ({ ...prev, description_ar: data.translation }));
+          setLastTranslatedDesc(text);
+        }
+      }
+    } catch (e) {
+      console.error('Translation failed', e);
+    }
   };
 
   const tokens = search.toLowerCase().split(/\s+/).filter(t => t.length > 0);
@@ -119,7 +141,11 @@ export default function ProductDB() {
               )}
             </div>
             <button
-              onClick={() => { setIsAdding(true); setEditForm({ unit: 'set', unit_price: 0 }); }}
+              onClick={() => { 
+                setIsAdding(true); 
+                setEditForm({ unit: 'set', unit_price: 0 }); 
+                setLastTranslatedDesc('');
+              }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap"
             >
               <Plus size={18} /> Add Product
@@ -146,7 +172,10 @@ export default function ProductDB() {
                 <td className="p-4 text-gray-500">New</td>
                 <td className="p-4">
                   <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Product description"
-                    value={editForm.description || ''} onChange={e => setEditForm({ ...editForm, description: e.target.value })} />
+                    value={editForm.description || ''} 
+                    onChange={e => setEditForm({ ...editForm, description: e.target.value })} 
+                    onBlur={e => handleAutoTranslate(e.target.value)}
+                  />
                 </td>
                 <td className="p-4">
                   <input type="text" dir="rtl" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-right" placeholder="وصف المنتج"
@@ -175,7 +204,10 @@ export default function ProductDB() {
                 <td className="p-4">
                   {isEditing === product.id ? (
                     <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={editForm.description || ''} onChange={e => setEditForm({ ...editForm, description: e.target.value })} />
+                      value={editForm.description || ''} 
+                      onChange={e => setEditForm({ ...editForm, description: e.target.value })} 
+                      onBlur={e => handleAutoTranslate(e.target.value)}
+                    />
                   ) : (
                     <span className="font-medium text-gray-900">{product.description}</span>
                   )}
