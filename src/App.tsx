@@ -115,11 +115,11 @@ function MainLayout({ user, handleLogout }: { user: any, handleLogout: () => voi
               <NavItem to="/products" icon={Database} label="Product DB" />
               <NavItem to="/customers" icon={Users} label="Customer DB" />
               <NavItem to="/tracking" icon={History} label="Tracking" />
-              {user?.role === 'admin' && (
-                <>
-                  <NavItem to="/users" icon={Shield} label="Users" />
-                  <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
-                </>
+              {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
+                <NavItem to="/users" icon={Shield} label="Users" />
+              )}
+              {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
+                <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
               )}
               <button
                 onClick={handleLogout}
@@ -144,11 +144,11 @@ function MainLayout({ user, handleLogout }: { user: any, handleLogout: () => voi
           <Route path="/products" element={<ProductDB />} />
           <Route path="/customers" element={<CustomerDB />} />
           <Route path="/tracking" element={<Tracking />} />
-          {user?.role === 'admin' && (
-            <>
-              <Route path="/users" element={<UsersDB />} />
-              <Route path="/settings" element={<Settings />} />
-            </>
+          {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
+            <Route path="/users" element={<UsersDB />} />
+          )}
+          {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
+            <Route path="/settings" element={<Settings />} />
           )}
         </Routes>
       </main>

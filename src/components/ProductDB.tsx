@@ -196,7 +196,7 @@ export default function ProductDB() {
                   ) : (
                     <div className="flex justify-end gap-2">
                       <button onClick={() => startEdit(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={18} /></button>
-                      {user.role === 'admin' && (
+                      {(user.role === 'admin' || user.permissions?.canDeleteData) && (
                         <button onClick={() => handleDelete(product.id)} className="p-2 text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
                       )}
                     </div>

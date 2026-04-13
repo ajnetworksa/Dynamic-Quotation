@@ -1857,14 +1857,20 @@ export default function QuoteForm() {
                   <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
                     <Plus size={16} /> Add Row
                   </button>
-                  <button 
-                    onClick={() => fileInputRef.current?.click()} 
-                    disabled={isRfqLoading}
-                    className="flex items-center gap-1 text-sm bg-purple-100 text-purple-700 hover:bg-purple-200 px-3 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
-                  >
-                    {isRfqLoading ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
-                    {isRfqLoading ? 'Parsing AI...' : 'Import from RFQ'}
-                  </button>
+                  {(() => {
+                    const u = JSON.parse(localStorage.getItem('user') || '{}');
+                    const canRFQ = u.role === 'admin' || !!u.permissions?.canUseRFQ;
+                    return canRFQ ? (
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isRfqLoading}
+                        className="flex items-center gap-1 text-sm bg-purple-100 text-purple-700 hover:bg-purple-200 px-3 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
+                      >
+                        {isRfqLoading ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
+                        {isRfqLoading ? 'Parsing AI...' : 'Import from RFQ'}
+                      </button>
+                    ) : null;
+                  })()}
                   <input type="file" ref={fileInputRef} hidden accept="image/*,application/pdf" onChange={handleRfqUpload} />
                 </div>
               </div>
@@ -2177,70 +2183,78 @@ export default function QuoteForm() {
         </div>
 
         {/* ── ANALYSIS SIDEBAR (Floating outside the form) ────────────────── */}
-        <div className="w-[305px] shrink-0 print:hidden hidden xl:flex flex-col pt-8">
-          {/* Spacer to align with table headers */}
-          <div style={{ height: formTopHeight }} className="flex flex-col justify-end">
-            <div className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded-lg shadow-sm z-10 box-border">
-              <span className="font-bold text-sm text-gray-800">M.U. %</span>
-              <input
-                type="number"
-                value={markup}
-                onChange={e => setMarkup(parseFloat(e.target.value) || 0)}
-                className="w-16 p-1 bg-yellow-300 text-black font-bold outline-none text-center rounded border border-yellow-400"
-              />
-            </div>
-          </div>
+        {(() => {
+          const u = JSON.parse(localStorage.getItem('user') || '{}');
+          const canOverride = u.role === 'admin' || !!u.permissions?.canOverridePrice;
+          if (!canOverride) return null;
 
-          <div className="border border-gray-800 bg-white shadow-xl rounded-sm">
-            <div className="grid grid-cols-3 font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50" style={{ height: headerHeight }}>
-              <div className="border-r border-gray-800 flex items-center justify-center">Manual</div>
-              <div className="border-r border-gray-800 flex items-center justify-center">BASE</div>
-              <div className="flex items-center justify-center">TOTAL</div>
-            </div>
+          return (
+            <div className="w-[305px] shrink-0 print:hidden hidden xl:flex flex-col pt-8">
+              {/* Spacer to align with table headers */}
+              <div style={{ height: formTopHeight }} className="flex flex-col justify-end">
+                <div className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded-lg shadow-sm z-10 box-border">
+                  <span className="font-bold text-sm text-gray-800">M.U. %</span>
+                  <input
+                    type="number"
+                    value={markup}
+                    onChange={e => setMarkup(parseFloat(e.target.value) || 0)}
+                    className="w-16 p-1 bg-yellow-300 text-black font-bold outline-none text-center rounded border border-yellow-400"
+                  />
+                </div>
+              </div>
 
-            <div className="flex flex-col">
-              {items.map((item, index) => (
-                <div key={`side-${item.id}`} className="grid grid-cols-3 border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group" style={{ height: rowHeights[index] || 40 }}>
-                  <div className="p-1 flex items-center border-r border-gray-200">
-                    <input
-                      type="number"
-                      className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
-                      value={item.manual_price !== undefined ? item.manual_price : ''}
-                      onChange={e => {
-                        if (e.target.value === '') updateItem(index, 'manual_price', undefined);
-                        else updateItem(index, 'manual_price', parseFloat(e.target.value));
-                      }}
-                    />
-                  </div>
-                  <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
-                    {item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                  </div>
-                  <div className="p-1 flex items-center justify-center text-[13px] font-mono">
-                    {item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+              <div className="border border-gray-800 bg-white shadow-xl rounded-sm">
+                <div className="grid grid-cols-3 font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50" style={{ height: headerHeight }}>
+                  <div className="border-r border-gray-800 flex items-center justify-center">Manual</div>
+                  <div className="border-r border-gray-800 flex items-center justify-center">BASE</div>
+                  <div className="flex items-center justify-center">TOTAL</div>
+                </div>
+
+                <div className="flex flex-col">
+                  {items.map((item, index) => (
+                    <div key={`side-${item.id}`} className="grid grid-cols-3 border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group" style={{ height: rowHeights[index] || 40 }}>
+                      <div className="p-1 flex items-center border-r border-gray-200">
+                        <input
+                          type="number"
+                          className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
+                          value={item.manual_price !== undefined ? item.manual_price : ''}
+                          onChange={e => {
+                            if (e.target.value === '') updateItem(index, 'manual_price', undefined);
+                            else updateItem(index, 'manual_price', parseFloat(e.target.value));
+                          }}
+                        />
+                      </div>
+                      <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
+                        {item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                      </div>
+                      <div className="p-1 flex items-center justify-center text-[13px] font-mono">
+                        {item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 p-1 font-bold text-base mt-4 bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+                <div className="flex justify-between items-center px-1">
+                  <span className="text-gray-600">B.Total</span>
+                  <span className="font-mono">{baseTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between items-center px-1 bg-green-50 rounded">
+                  <span className="text-green-800">MU</span>
+                  <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+
+                <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">
+                  <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-xs">TTL PROFIT</div>
+                  <div className="bg-yellow-400 px-2 py-1 flex items-center justify-center font-mono text-sm">
+                    {markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2 p-1 font-bold text-base mt-4 bg-white border border-gray-200 rounded-lg shadow-sm p-4">
-            <div className="flex justify-between items-center px-1">
-              <span className="text-gray-600">B.Total</span>
-              <span className="font-mono">{baseTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-            </div>
-            <div className="flex justify-between items-center px-1 bg-green-50 rounded">
-              <span className="text-green-800">MU</span>
-              <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-            </div>
-
-            <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">
-              <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-xs">TTL PROFIT</div>
-              <div className="bg-yellow-400 px-2 py-1 flex items-center justify-center font-mono text-sm">
-                {markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* Overwrite Confirmation Modal */}
         {showOverwriteModal && (
