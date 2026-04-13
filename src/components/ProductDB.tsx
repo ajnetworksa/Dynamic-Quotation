@@ -61,14 +61,31 @@ export default function ProductDB() {
     setEditForm(product);
   };
 
-  const q = search.toLowerCase();
-  const filtered = products.filter(p =>
-    !q ||
-    p.description?.toLowerCase().includes(q) ||
-    p.description_ar?.toLowerCase().includes(q) ||
-    p.unit?.toLowerCase().includes(q) ||
-    String(p.unit_price).includes(q)
-  );
+  const tokens = search.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+  const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+
+  const filtered = products.filter(p => {
+    if (tokens.length === 0) return true;
+    
+    const desc = p.description?.toLowerCase() || '';
+    const descAr = p.description_ar?.toLowerCase() || '';
+    const normDesc = normalize(desc);
+    const normDescAr = normalize(descAr);
+    
+    // Check if ALL tokens match at least one field (either normally or normalized)
+    const allTokensMatch = tokens.every(token => {
+      const nToken = normalize(token);
+      return (
+        desc.includes(token) || 
+        descAr.includes(token) ||
+        (nToken && (normDesc.includes(nToken) || normDescAr.includes(nToken))) ||
+        p.unit?.toLowerCase().includes(token) ||
+        String(p.unit_price).includes(token)
+      );
+    });
+
+    return allTokensMatch;
+  });
 
   const totalPages = Math.ceil(filtered.length / rowsPerPage) || 1;
   const safePage = Math.min(currentPage, totalPages);
