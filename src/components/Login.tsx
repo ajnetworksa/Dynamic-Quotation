@@ -4,6 +4,7 @@ import { FileText, Lock, User } from 'lucide-react';
 export default function Login({ onLogin }: { onLogin: (token: string, user: any) => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -16,7 +17,7 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password, rememberMe })
       });
 
       if (res.ok) {
@@ -83,6 +84,19 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
                 placeholder="Enter your password"
               />
             </div>
+          </div>
+
+          <div className="flex items-center">
+            <input
+              id="remember-me"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+            />
+            <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900">
+              Remember me
+            </label>
           </div>
 
           <button

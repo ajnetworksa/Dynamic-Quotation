@@ -24,6 +24,7 @@ import crypto from 'crypto';
 import 'dotenv/config';
 import multer from 'multer';
 import OpenAI from 'openai';
+import { z, ZodSchema } from 'zod';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -72,6 +73,19 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+});
+
+// ── SECURITY: Global API rate limiter ─────────────────────────────────────────
+// Applies to all /api/* routes EXCEPT /api/login (which has its own stricter limit).
+// 200 requests per 15 minutes per IP is generous for normal app use and blocks
+// automated scraping/DoS without affecting real users.
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/api/login', // login has its own limiter
+  message: { error: 'Too many requests. Please slow down.' },
 });
 
 // ── BCRYPT COST FACTOR ────────────────────────────────────────────────────────
@@ -162,6 +176,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
 
@@ -232,6 +247,9 @@ addColumnIfNotExists('quote_items', 'original_price', 'REAL');
 addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
 addColumnIfNotExists('system_logs', 'type', 'TEXT DEFAULT "Unknown"');
 addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
+// Migrate existing sessions: add expires_at if column is missing.
+// Existing rows get a 7-day grace window so active users aren't suddenly logged out.
+addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -291,6 +309,23 @@ const cleanupLogs = () => {
 // Run cleanup on startup
 cleanupLogs();
 
+// ── SESSION CLEANUP: remove expired sessions every hour ──────────────────────
+// Prevents the sessions table from growing unbounded. Runs on startup and
+// then every 60 minutes. SQLite handles this fine synchronously on the same
+// connection — better-sqlite3 is synchronous by design.
+const cleanupExpiredSessions = () => {
+  try {
+    const result = db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(new Date().toISOString());
+    if (result.changes > 0) {
+      console.log(`🗑️  Cleaned up ${result.changes} expired session(s)`);
+    }
+  } catch (e) {
+    console.error('Session cleanup failed:', e);
+  }
+};
+cleanupExpiredSessions(); // Run on startup
+setInterval(cleanupExpiredSessions, 60 * 60 * 1000); // Then every hour
+
 // Catch uncaught exceptions globally
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
@@ -308,8 +343,15 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
-  const session = db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(token) as { user_id: number } | undefined;
+  const session = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token = ?').get(token) as { user_id: number; expires_at: string } | undefined;
   if (!session) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Reject expired sessions immediately (server-side check).
+  // The cleanup interval handles DB garbage collection separately.
+  if (new Date(session.expires_at) < new Date()) {
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(token); // eager cleanup
+    return res.status(401).json({ error: 'Session expired. Please log in again.' });
+  }
 
   const user = db.prepare('SELECT id, username, role, permissions FROM users WHERE id = ?').get(session.user_id);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -340,7 +382,119 @@ const requirePermission = (perm: string) => (req: express.Request, res: express.
   next();
 };
 
+// ── ZOD VALIDATION MIDDLEWARE ─────────────────────────────────────────────────
+// Wraps a Zod schema into an Express middleware.
+// On parse failure → 400 { error: 'Validation failed', details: [...field errors] }
+// On success       → attaches validated + type-safe body to req.body and calls next()
+const validate = (schema: ZodSchema) =>
+  (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: (result.error as any).errors.map((e: any) => `${e.path.join('.')}: ${e.message}`)
+      });
+    }
+    req.body = result.data; // replace with coerced/stripped data
+    next();
+  };
+
+// ── ZOD SCHEMAS ───────────────────────────────────────────────────────────────
+const CustomerSchema = z.object({
+  name:    z.string().min(1).max(200),
+  address: z.string().max(500).optional(),
+  contact: z.string().max(200).optional(),
+  mobile:  z.string().max(50).optional(),
+  email:   z.string().email().optional().or(z.literal('')),
+});
+
+const ProductSchema = z.object({
+  description:    z.string().min(1).max(500),
+  description_ar: z.string().max(500).optional(),
+  unit:           z.string().max(50).optional(),
+  unit_price:     z.number().nonnegative(),
+});
+
+const UserCreateSchema = z.object({
+  username:    z.string().min(1).max(128),
+  password:    z.string().min(4).max(128),
+  role:        z.enum(['admin', 'user']).default('user'),
+  permissions: z.record(z.string(), z.boolean()).optional().default({}),
+});
+
+const UserUpdateSchema = UserCreateSchema.extend({
+  password: z.string().min(4).max(128).optional(), // optional on update
+});
+
+const QuoteItemSchema = z.object({
+  product_id:     z.number().int().nullable().optional(),
+  description:    z.string().max(1000).optional().default(''),
+  description_ar: z.string().max(1000).optional(),
+  qty:            z.number().nonnegative().default(1),
+  unit:           z.string().max(50).optional(),
+  unit_price:     z.number().nonnegative().default(0),
+  net_price:      z.number().nonnegative().default(0),
+  original_price: z.number().nonnegative().nullable().optional(),
+  manual_price:   z.number().nonnegative().nullable().optional(),
+});
+
+const QuoteSchema = z.object({
+  quote_id:          z.string().min(1).max(50),
+  date:              z.string().min(1),
+  customer_id:       z.number().int().nullable().optional(),
+  subject:           z.string().max(500).optional(),
+  subject_ar:        z.string().max(500).optional(),
+  discount:          z.number().nonnegative().optional().default(0),
+  subtotal:          z.number().nonnegative(),
+  tax:               z.number().nonnegative(),
+  grand_total:       z.number().nonnegative(),
+  vat_rate:          z.number().min(0).max(100).optional().default(15),
+  markup:            z.number().min(0).max(500).optional().default(8),
+  expiry_date:       z.string().nullable().optional(),
+  status:            z.enum(['Draft','Sent','Approved','Rejected','Invoiced','Cancelled']).optional().default('Draft'),
+  type:              z.enum(['Quotation','Tax Invoice','Proforma']).optional().default('Quotation'),
+  revision_of:       z.string().nullable().optional(),
+  note_header:       z.string().max(100).optional(),
+  note:              z.string().max(5000).optional(),
+  note_ar:           z.string().max(5000).optional(),
+  payment:           z.string().max(1000).optional(),
+  payment_ar:        z.string().max(1000).optional(),
+  warranty:          z.string().max(1000).optional(),
+  warranty_ar:       z.string().max(1000).optional(),
+  manpower:          z.string().max(1000).optional(),
+  manpower_ar:       z.string().max(1000).optional(),
+  mobilization:      z.string().max(1000).optional(),
+  mobilization_ar:   z.string().max(1000).optional(),
+  duration:          z.string().max(1000).optional(),
+  duration_ar:       z.string().max(1000).optional(),
+  bank_details:      z.string().max(2000).optional(),
+  bank_details_ar:   z.string().max(2000).optional(),
+  footer:            z.string().max(2000).optional(),
+  footer_ar:         z.string().max(2000).optional(),
+  custom_field_header: z.string().max(100).optional(),
+  custom_field:      z.string().max(5000).optional(),
+  custom_field_ar:   z.string().max(5000).optional(),
+  items:             z.array(QuoteItemSchema).max(500),
+});
+
+const BulkStatusSchema = z.object({
+  ids:    z.array(z.string().min(1)).min(1).max(500),
+  status: z.enum(['Draft','Sent','Approved','Rejected','Invoiced','Cancelled']),
+});
+
+const FollowupSchema = z.object({
+  followup_date: z.string().nullable().optional(),
+  followup_note: z.string().max(2000).nullable().optional(),
+});
+
+const SettingSchema = z.object({
+  key:   z.string().min(1).max(100),
+  value: z.string().max(10000),
+});
+
 // ── API Routes ────────────────────────────────────────────────────────────────
+// Apply global rate limiter to all /api/* routes (login has its own stricter one)
+app.use('/api/', apiLimiter);
 
 // ── AUTH: Login ───────────────────────────────────────────────────────────────
 // loginLimiter is applied first — blocks brute-force attempts.
@@ -351,7 +505,7 @@ const requirePermission = (perm: string) => (req: express.Request, res: express.
 // credentials regardless of whether the username or password was wrong.
 // This prevents user-enumeration (knowing which usernames exist).
 app.post('/api/login', loginLimiter, async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, rememberMe } = req.body;
 
   // ── Input validation ──────────────────────────────────────────────────────
   // Reject blanks, non-strings, or anything suspiciously long (>128 chars).
@@ -371,7 +525,10 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 
   if (user && passwordMatch) {
     const token = crypto.randomBytes(32).toString('hex');
-    db.prepare('INSERT INTO sessions (token, user_id) VALUES (?, ?)').run(token, user.id);
+    // Sessions expire after 30 days if rememberMe is true, otherwise 12 hours (0.5 days).
+    const days = rememberMe ? 30 : 0.5;
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, user.id, expiresAt);
     const permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
     res.json({ token, user: { id: user.id, username: user.username, role: user.role, permissions } });
   } else {
@@ -402,15 +559,8 @@ app.get('/api/users', requireAuth, requirePermission('canManageUsers'), (req, re
   res.json(parsed);
 });
 
-app.post('/api/users', requireAuth, requirePermission('canManageUsers'), async (req, res) => {
+app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validate(UserCreateSchema), async (req, res) => {
   const { username, password, role, permissions } = req.body;
-
-  if (
-    typeof username !== 'string' || !username.trim() || username.length > 128 ||
-    typeof password !== 'string' || !password || password.length > 128
-  ) {
-    return res.status(400).json({ error: 'Username and password are required (max 128 chars).' });
-  }
 
   try {
     const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -422,12 +572,8 @@ app.post('/api/users', requireAuth, requirePermission('canManageUsers'), async (
   }
 });
 
-app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), async (req, res) => {
+app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), validate(UserUpdateSchema), async (req, res) => {
   const { username, password, role, permissions } = req.body;
-
-  if (typeof username !== 'string' || !username.trim() || username.length > 128) {
-    return res.status(400).json({ error: 'Invalid username.' });
-  }
 
   const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
 
@@ -469,17 +615,17 @@ app.get('/api/customers', requireAuth, (req, res) => {
   res.json(customers);
 });
 
-app.post('/api/customers', requireAuth, (req, res) => {
+app.post('/api/customers', requireAuth, validate(CustomerSchema), (req, res) => {
   const { name, address, contact, mobile, email } = req.body;
   const stmt = db.prepare('INSERT INTO customers (name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?)');
-  const info = stmt.run(name, address, contact, mobile, email);
+  const info = stmt.run(name, address ?? null, contact ?? null, mobile ?? null, email ?? null);
   res.json({ id: info.lastInsertRowid });
 });
 
-app.put('/api/customers/:id', requireAuth, (req, res) => {
+app.put('/api/customers/:id', requireAuth, validate(CustomerSchema), (req, res) => {
   const { name, address, contact, mobile, email } = req.body;
   const stmt = db.prepare('UPDATE customers SET name = ?, address = ?, contact = ?, mobile = ?, email = ? WHERE id = ?');
-  stmt.run(name, address, contact, mobile, email, req.params.id);
+  stmt.run(name, address ?? null, contact ?? null, mobile ?? null, email ?? null, req.params.id);
   res.json({ success: true });
 });
 
@@ -495,17 +641,17 @@ app.get('/api/products', requireAuth, (req, res) => {
   res.json(products);
 });
 
-app.post('/api/products', requireAuth, (req, res) => {
+app.post('/api/products', requireAuth, validate(ProductSchema), (req, res) => {
   const { description, description_ar, unit, unit_price } = req.body;
   const stmt = db.prepare('INSERT INTO products (description, description_ar, unit, unit_price) VALUES (?, ?, ?, ?)');
-  const info = stmt.run(description, description_ar, unit, unit_price);
+  const info = stmt.run(description, description_ar ?? null, unit ?? null, unit_price);
   res.json({ id: info.lastInsertRowid });
 });
 
-app.put('/api/products/:id', requireAuth, (req, res) => {
+app.put('/api/products/:id', requireAuth, validate(ProductSchema), (req, res) => {
   const { description, description_ar, unit, unit_price } = req.body;
   const stmt = db.prepare('UPDATE products SET description = ?, description_ar = ?, unit = ?, unit_price = ? WHERE id = ?');
-  stmt.run(description, description_ar, unit, unit_price, req.params.id);
+  stmt.run(description, description_ar ?? null, unit ?? null, unit_price, req.params.id);
   res.json({ success: true });
 });
 
@@ -618,7 +764,7 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/quotes', requireAuth, (req, res) => {
+app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
   const {
     quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, items,
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
@@ -711,7 +857,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
 });
 
 // ── Bulk Status Update ────────────────────────────────────────────────────────
-app.patch('/api/quotes/bulk-status', requireAuth, (req, res) => {
+app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (req, res) => {
   const { ids, status } = req.body;
   if (!Array.isArray(ids) || !status) return res.status(400).json({ error: 'ids and status required' });
   const actor = (req as any).user?.username || 'system';
@@ -730,7 +876,7 @@ app.patch('/api/quotes/bulk-status', requireAuth, (req, res) => {
 });
 
 // ── Follow-up ─────────────────────────────────────────────────────────────────
-app.patch('/api/quotes/:quote_id/followup', requireAuth, (req, res) => {
+app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema), (req, res) => {
   const { followup_date, followup_note } = req.body;
   try {
     db.prepare('UPDATE quotes SET followup_date = ?, followup_note = ? WHERE quote_id = ?').run(followup_date || null, followup_note || null, req.params.quote_id);
@@ -855,7 +1001,7 @@ app.get('/api/settings/:key', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), (req, res) => {
+app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), validate(SettingSchema), (req, res) => {
   const { key, value } = req.body;
   try {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
