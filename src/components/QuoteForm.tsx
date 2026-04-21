@@ -142,6 +142,8 @@ export default function QuoteForm() {
   const [discount, setDiscount] = useState(0);
   const [status, setStatus] = useState('Draft');
   const [type, setType] = useState('Quotation');
+  const [version, setVersion] = useState(1);
+  const [showConflictModal, setShowConflictModal] = useState(false);
 
   // Global markup percentage added for automated pricing.
   // When products are added from the DB, their unit_price is calculated as:
@@ -745,6 +747,7 @@ export default function QuoteForm() {
       setDiscount(data.discount || 0);
       setStatus(data.status || 'Draft');
       setType(data.type || 'Quotation');
+      setVersion(data.version || 1);
       setVatRate(data.vat_rate !== undefined ? data.vat_rate : 15);
       setMarkup(data.markup !== undefined ? data.markup : 8);
       setPayment(data.payment || 'Full Payment in ADVANCE');
@@ -1021,7 +1024,7 @@ export default function QuoteForm() {
   const tax = discountedSubtotal * (vatRate / 100);
   const grandTotal = discountedSubtotal + tax;
 
-  const performSave = async () => {
+  const performSave = async (force: boolean = false) => {
     const payload = {
       quote_id: quoteId,
       date,
@@ -1067,7 +1070,9 @@ export default function QuoteForm() {
         net_price: item.net_price,
         original_price: item.original_price, // Added base price tracking
         manual_price: item.manual_price      // Added manual price tracking
-      }))
+      })),
+      version,
+      force
     };
 
     const res = await fetch('/api/quotes', {
@@ -1077,9 +1082,14 @@ export default function QuoteForm() {
     });
 
     if (res.ok) {
+      const data = await res.json();
+      setVersion(data.version || 1); // Update local version lock to the newly saved version
       alert(recallQuoteId === quoteId ? 'Quote updated successfully!' : 'Quote data is recorded to Tracking section!');
-      localStorage.removeItem('quote_draft'); // clear auto-saved draft on successful record
+      localStorage.removeItem('quote_draft'); // clear local draft just in case
       setShowOverwriteModal(false);
+      setShowConflictModal(false);
+    } else if (res.status === 409) {
+      setShowConflictModal(true);
     } else {
       const error = await res.json();
       alert(`Failed to record quote: ${error.error}`);
@@ -1118,10 +1128,9 @@ export default function QuoteForm() {
     }, 100);
   };
 
-  // ── DRAFT AUTO-SAVE: write every 30 seconds ────────────────────────────────
+  // ── DRAFT AUTO-SAVE: write every 30 seconds to the DB ─────────────────────
   useEffect(() => {
-    if (recallQuoteId) return; // Don't auto-save when editing a recalled quote
-    const save = () => {
+    const save = async () => {
       if (!quoteId && items.every(i => !i.description)) return; // Nothing worth saving
       const draft = {
         quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate,
@@ -1131,7 +1140,16 @@ export default function QuoteForm() {
         bankDetails, bankDetailsAr, footer, footerAr, customFields,
         savedAt: new Date().toISOString(),
       };
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      
+      try {
+        await fetch('/api/quotes/autosave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quote_id: quoteId, draft_data: draft })
+        });
+      } catch (e) {
+        console.warn('Autosave failed:', e);
+      }
     };
     const timer = setInterval(save, 30000);
     return () => clearInterval(timer);
@@ -2586,6 +2604,45 @@ export default function QuoteForm() {
                   className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors"
                 >
                   Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Version Conflict Modal */}
+        {showConflictModal && (
+          <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+            <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Version Conflict</h3>
+              <p className="text-gray-600 mb-6">The server has a newer version of this quote. Another user may have modified it since you opened it.</p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => setShowConflictModal(false)}
+                  className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium rounded-lg transition-colors border border-gray-300"
+                >
+                  Cancel (Review my changes)
+                </button>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="w-full py-2 px-4 bg-blue-100 hover:bg-blue-200 text-blue-800 font-medium rounded-lg transition-colors"
+                >
+                  Reload from Server (Discard mine)
+                </button>
+                <button
+                  onClick={() => {
+                    setShowConflictModal(false);
+                    handleCreateRevision();
+                  }}
+                  className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Save as New Revision
+                </button>
+                <button
+                  onClick={() => performSave(true)}
+                  className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Force Overwrite Server Version
                 </button>
               </div>
             </div>

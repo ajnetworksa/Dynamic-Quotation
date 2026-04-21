@@ -130,6 +130,9 @@ db.exec(`
     status TEXT DEFAULT 'Draft',
     type TEXT DEFAULT 'Quotation',
     
+    version INTEGER DEFAULT 1,
+    draft_data TEXT,
+    
     -- ── PRICING ANALYSIS FIELDS ───────────────────────────────────────────
     -- markup: The global profit percentage set in the QuoteForm sidebar.
     -- Used to automatically calculate unit_price for new items.
@@ -247,6 +250,8 @@ addColumnIfNotExists('quote_items', 'original_price', 'REAL');
 addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
 addColumnIfNotExists('system_logs', 'type', 'TEXT DEFAULT "Unknown"');
 addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
+addColumnIfNotExists('quotes', 'version', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'draft_data', 'TEXT');
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -475,6 +480,8 @@ const QuoteSchema = z.object({
   custom_field:      z.string().max(5000).optional(),
   custom_field_ar:   z.string().max(5000).optional(),
   items:             z.array(QuoteItemSchema).max(500),
+  version:           z.number().int().optional(),
+  force:             z.boolean().optional(),
 });
 
 const BulkStatusSchema = z.object({
@@ -695,6 +702,16 @@ app.get('/api/quotes', requireAuth, (req, res) => {
   res.json(quotes);
 });
 
+// ── Optimistic Concurrency Lock ───────────────────────────────────────────────
+app.get('/api/quotes/:quote_id/lock', requireAuth, (req, res) => {
+  try {
+    const row = db.prepare('SELECT version FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number } | undefined;
+    res.json({ version: row ? row.version : 1 });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch lock' });
+  }
+});
+
 app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
   const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ?').get(req.params.quote_id);
   if (quote) {
@@ -764,32 +781,70 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
   }
 });
 
+// ── Autosave ──────────────────────────────────────────────────────────────────
+app.post('/api/quotes/autosave', requireAuth, (req, res) => {
+  const { quote_id, draft_data } = req.body;
+  if (!quote_id) return res.status(400).json({ error: 'quote_id is required' });
+  
+  try {
+    const actor = (req as any).user?.username || 'system';
+    const timestamp = new Date().toISOString();
+    
+    // Check if the quote exists
+    const existing = db.prepare('SELECT id FROM quotes WHERE quote_id = ?').get(quote_id);
+    
+    if (existing) {
+      db.prepare('UPDATE quotes SET draft_data = ? WHERE quote_id = ?').run(JSON.stringify(draft_data), quote_id);
+    } else {
+      // Create a shell quote row just for the draft
+      db.prepare(`
+        INSERT INTO quotes (quote_id, date, status, type, draft_data) 
+        VALUES (?, ?, 'Draft', 'Quotation', ?)
+      `).run(quote_id, new Date().toISOString().split('T')[0], JSON.stringify(draft_data));
+      
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
+        quote_id, 'Draft Created (Autosave)', actor, timestamp
+      );
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Autosave error:', error);
+    res.status(500).json({ error: 'Failed to autosave' });
+  }
+});
+
 app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
   const {
     quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, items,
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
-    custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup
+    custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
+    version, force
   } = req.body;
   const updated_at = new Date().toISOString();
-  const author_id = (req as any).user.id;
-
   const actor = (req as any).user?.username || 'system';
 
   try {
-    db.transaction(() => {
-      const existing = db.prepare('SELECT id, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    const existing = db.prepare('SELECT id, version, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    let finalVersion = 1;
 
-      // Save main quote data, including the pricing markup
+    db.transaction(() => {
       if (existing) {
-        const prevStatus = existing.status;
+        // Optimistic Concurrency Check
+        if (!force && (version || 1) < (existing.version || 1)) {
+          throw new Error('VERSION_CONFLICT');
+        }
+        finalVersion = (existing.version || 1) + 1;
+
         db.prepare(`
           UPDATE quotes SET 
             date = ?, customer_id = ?, subject = ?, subject_ar = ?, discount = ?, subtotal = ?, tax = ?, grand_total = ?, updated_at = ?,
             note_header = ?, note = ?, note_ar = ?, payment = ?, payment_ar = ?, warranty = ?, warranty_ar = ?, 
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
-            custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?
+            custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?,
+            version = ?, draft_data = NULL
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
@@ -797,11 +852,11 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          quote_id
+          finalVersion, quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
         
-        const action = prevStatus !== (status || 'Draft')
+        const action = existing.status !== (status || 'Draft')
           ? `Status changed to ${status || 'Draft'}`
           : 'Updated';
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, action, actor, updated_at);
@@ -812,26 +867,28 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id, vat_rate || 15, expiry_date || null, markup ?? 8
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, 1
         );
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at);
       }
 
-      // Save each line item along with its original base price and any manual analysis overrides
       const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       for (const item of items) {
         insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price, item.original_price ?? null, item.manual_price ?? null);
       }
     })();
-    res.json({ success: true });
+    res.json({ success: true, version: finalVersion });
   } catch (error: any) {
+    if (error.message === 'VERSION_CONFLICT') {
+      return res.status(409).json({ error: 'This quote was modified by someone else since you opened it.' });
+    }
     console.error('Save quote error:', error);
     res.status(500).json({ error: error.message });
   }
