@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx-js-style';
@@ -109,6 +109,12 @@ export default function QuoteForm() {
   // Developer mode: when ON, the Analysis Sidebar shows a RULE column
   // auditing which MU formula applies to each row (like Excel's formula audit).
   // Persisted in localStorage so it survives page navigations.
+  // Row reorder mode — loaded from Settings. 'click' = arrows, 'drag' = drag handles.
+  const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
+  // Drag-and-drop state: which row index is being dragged, and which is the current drop target.
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
 
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -440,9 +446,135 @@ export default function QuoteForm() {
         }
       }
 
+      const resRowMode = await fetch('/api/settings/rowReorderMode');
+      if (resRowMode.ok) {
+        const dataRowMode = await resRowMode.json();
+        if (dataRowMode.value) setRowReorderMode(dataRowMode.value as 'click' | 'drag');
+      }
+
     } catch (e) {
       console.error('Failed to fetch settings', e);
     }
+  };
+
+  // ── POINTER-EVENT DRAG-AND-DROP ───────────────────────────────────────────
+  // Works for both mouse and touch. Two entry points:
+  //   1. Grip handle → drag starts immediately on pointerdown
+  //   2. Row body    → drag starts after 600 ms long-press
+  // Both use setPointerCapture so pointermove always fires on the captured
+  // element; we then use elementFromPoint to find which row we hover over.
+
+  const dragSrcRef = useRef<number | null>(null);          // row being dragged
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStartRef = useRef({ x: 0, y: 0 });       // detect cancel-on-move
+
+  const pointerFinalizeDrag = (targetIndex: number) => {
+    const src = dragSrcRef.current;
+    dragSrcRef.current = null;
+    setDragIndex(null);
+    setDragOverIndex(null);
+    if (src !== null && src !== targetIndex) {
+      setItems(prev => {
+        const next = [...prev];
+        const [moved] = next.splice(src, 1);
+        next.splice(targetIndex, 0, moved);
+        return next;
+      });
+    }
+  };
+
+  const pointerCancelDrag = () => {
+    dragSrcRef.current = null;
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  // Shared pointermove handler once dragging is active (called on captured element)
+  const onDragPointerMove = (e: React.PointerEvent) => {
+    if (dragSrcRef.current === null) return;
+    // Temporarily release capture so elementFromPoint can see other elements
+    const el = e.currentTarget as HTMLElement;
+    el.releasePointerCapture(e.pointerId);
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    el.setPointerCapture(e.pointerId);
+    const rowEl = target?.closest('[data-row-index]') as HTMLElement | null;
+    if (rowEl) {
+      const idx = parseInt(rowEl.dataset.rowIndex ?? '-1');
+      if (idx >= 0) setDragOverIndex(idx);
+    }
+  };
+
+  // ── GRIP HANDLE pointer handlers (immediate drag) ──────────────────────────
+  const onGripPointerDown = (e: React.PointerEvent, index: number) => {
+    if (rowReorderMode !== 'drag') return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragSrcRef.current = index;
+    setDragIndex(index);
+  };
+
+  const onGripPointerMove = (e: React.PointerEvent) => {
+    onDragPointerMove(e);
+  };
+
+  const onGripPointerUp = (e: React.PointerEvent) => {
+    if (dragSrcRef.current === null) return;
+    const el = e.currentTarget as HTMLElement;
+    el.releasePointerCapture(e.pointerId);
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    const rowEl = target?.closest('[data-row-index]') as HTMLElement | null;
+    const targetIdx = rowEl ? parseInt(rowEl.dataset.rowIndex ?? '-1') : -1;
+    pointerFinalizeDrag(targetIdx >= 0 ? targetIdx : dragSrcRef.current ?? 0);
+  };
+
+  // ── ROW BODY pointer handlers (long-press drag) ────────────────────────────
+  const onRowBodyPointerDown = (e: React.PointerEvent, index: number) => {
+    if (rowReorderMode !== 'drag') return;
+    if ((e.target as HTMLElement).closest('.product-dropdown')) return;
+    const tag = (e.target as HTMLElement).tagName;
+    if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(tag)) return;
+    longPressStartRef.current = { x: e.clientX, y: e.clientY };
+    const el = e.currentTarget as HTMLElement;
+    // Capture now so we keep receiving events; release if long-press is cancelled
+    el.setPointerCapture(e.pointerId);
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      dragSrcRef.current = index;
+      setDragIndex(index);
+      navigator.vibrate?.(50);
+    }, 600);
+  };
+
+  const onRowBodyPointerMove = (e: React.PointerEvent) => {
+    if (dragSrcRef.current !== null) {
+      // Drag is active — track hover target
+      onDragPointerMove(e);
+      return;
+    }
+    // Not yet dragging — cancel long-press if finger moved too much
+    if (longPressTimerRef.current) {
+      const dx = e.clientX - longPressStartRef.current.x;
+      const dy = e.clientY - longPressStartRef.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 8) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+    }
+  };
+
+  const onRowBodyPointerUp = (e: React.PointerEvent) => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    if (dragSrcRef.current === null) return;
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    const rowEl = target?.closest('[data-row-index]') as HTMLElement | null;
+    const targetIdx = rowEl ? parseInt(rowEl.dataset.rowIndex ?? '-1') : -1;
+    pointerFinalizeDrag(targetIdx >= 0 ? targetIdx : dragSrcRef.current ?? 0);
   };
 
   const handleAutoTranslate = async (text: string, currentAr: string, setterAr: (val: string) => void, force = true) => {
@@ -1812,10 +1944,22 @@ export default function QuoteForm() {
                     <div className="pt-0 pb-3 px-2 h-full">NET PRICE</div>
                   </div>
                   {items.map((item, index) => (
-                    <div key={item.id} className="flex items-stretch print:block">
+                    <div
+                      key={item.id}
+                      data-row-index={index}
+                      className="flex items-stretch print:block"
+                      onPointerDown={rowReorderMode === 'drag' ? (e) => onRowBodyPointerDown(e, index) : undefined}
+                      onPointerMove={rowReorderMode === 'drag' ? onRowBodyPointerMove : undefined}
+                      onPointerUp={rowReorderMode === 'drag' ? onRowBodyPointerUp : undefined}
+                      onPointerCancel={rowReorderMode === 'drag' ? pointerCancelDrag : undefined}
+                    >
                       <div
                         ref={el => rowRefs.current[index] = el}
-                        className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}`}
+                        className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
+                          ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
+                          ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
+                          ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
+                        `}
                         style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                         <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
                           {index + 1}
@@ -1842,7 +1986,7 @@ export default function QuoteForm() {
                             />
 
                             {focusedDescriptionIndex === index && item.description.length > 1 && (
-                              <div className="absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
+                              <div className="product-dropdown absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
                                 {(() => {
                                   const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
                                   const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
@@ -1948,16 +2092,31 @@ export default function QuoteForm() {
                         </div>
                       </div>
                       {/* Controls: hidden on xl (handled by the outside column), visible on smaller screens */}
-                      <div className="w-9 shrink-0 print:hidden xl:hidden flex flex-col items-center justify-start pt-1 gap-1">
-                        <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                          <ArrowUp size={12} />
-                        </button>
-                        <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                          <Trash2 size={14} />
-                        </button>
-                        <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                          <ArrowDown size={12} />
-                        </button>
+                      <div className="w-9 shrink-0 print:hidden xl:hidden flex flex-col items-center justify-center gap-1">
+                        {rowReorderMode === 'drag' ? (
+                          <div
+                            className="text-gray-400 hover:text-gray-600 cursor-grab active:cursor-grabbing touch-none select-none p-1"
+                            title="Drag to reorder"
+                            onPointerDown={(e) => onGripPointerDown(e, index)}
+                            onPointerMove={onGripPointerMove}
+                            onPointerUp={onGripPointerUp}
+                            onPointerCancel={pointerCancelDrag}
+                          >
+                            <GripVertical size={16} />
+                          </div>
+                        ) : (
+                          <>
+                            <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
+                              <ArrowUp size={12} />
+                            </button>
+                            <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                              <Trash2 size={14} />
+                            </button>
+                            <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
+                              <ArrowDown size={12} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -2277,16 +2436,41 @@ export default function QuoteForm() {
           {/* Spacer matching formTopHeight + headerHeight to align with first row */}
           <div style={{ height: formTopHeight + headerHeight }}></div>
           {items.map((item, index) => (
-            <div key={`ctrl-${item.id}`} className="flex flex-col items-center justify-start pt-1 gap-1" style={{ height: rowHeights[index] || 40 }}>
-              <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                <ArrowUp size={12} />
-              </button>
-              <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                <Trash2 size={14} />
-              </button>
-              <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                <ArrowDown size={12} />
-              </button>
+            <div
+              key={`ctrl-${item.id}`}
+              className="flex flex-col items-center justify-center gap-1"
+              style={{ height: rowHeights[index] || 40 }}
+            >
+              {rowReorderMode === 'drag' ? (
+                <>
+                  <div
+                    className="text-gray-400 hover:text-gray-600 cursor-grab active:cursor-grabbing touch-none select-none p-1 transition-colors"
+                    title="Drag to reorder"
+                    onPointerDown={(e) => onGripPointerDown(e, index)}
+                    onPointerMove={onGripPointerMove}
+                    onPointerUp={onGripPointerUp}
+                    onPointerCancel={pointerCancelDrag}
+                  >
+                    <GripVertical size={16} />
+                  </div>
+                  <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                    <Trash2 size={14} />
+                  </button>
+                </>
+              ) : (
+                // In click mode: original arrow buttons.
+                <>
+                  <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
+                    <ArrowUp size={12} />
+                  </button>
+                  <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
+                    <Trash2 size={14} />
+                  </button>
+                  <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
+                    <ArrowDown size={12} />
+                  </button>
+                </>
+              )}
             </div>
           ))}
         </div>

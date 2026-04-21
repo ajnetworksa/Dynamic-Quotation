@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 
 export default function Settings() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -43,6 +43,10 @@ export default function Settings() {
   const [excludedKeywords, setExcludedKeywords] = useState<string[]>(['Installation']);
   const [muFilterInput, setMuFilterInput] = useState({ zero: '', excluded: '' });
   const [muFilterStatus, setMuFilterStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
+  const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
+  const [rowReorderStatus, setRowReorderStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Developer mode
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
@@ -102,6 +106,11 @@ export default function Settings() {
           if (parsed.excluded) setExcludedKeywords(parsed.excluded);
         }
       })
+      .catch(console.error);
+
+    fetch('/api/settings/rowReorderMode')
+      .then(res => res.json())
+      .then(data => { if (data.value) setRowReorderMode(data.value as 'click' | 'drag'); })
       .catch(console.error);
 
     fetch('/api/settings/developerMode')
@@ -400,6 +409,21 @@ export default function Settings() {
       setMuFilterStatus('error');
     }
     setTimeout(() => setMuFilterStatus('idle'), 3000);
+  };
+
+  const handleRowReorderToggle = async (val: 'click' | 'drag') => {
+    setRowReorderMode(val);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'rowReorderMode', value: val })
+      });
+      setRowReorderStatus('success');
+    } catch {
+      setRowReorderStatus('error');
+    }
+    setTimeout(() => setRowReorderStatus('idle'), 2000);
   };
 
   const handleDevModeToggle = async (val: boolean) => {
@@ -1023,6 +1047,57 @@ export default function Settings() {
         <div className="px-6 pb-4 h-6">
           {muFilterStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> MU filters saved successfully</span>}
           {muFilterStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save MU filters</span>}
+        </div>
+      </div>
+
+      {/* Row Reorder Mode */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-lg">⠿</div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Row Reorder Mode</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Choose how items are reordered in the Quote Form</p>
+          </div>
+        </div>
+        <div className="p-6 flex items-center justify-between gap-8">
+          <div className="space-y-3 flex-1">
+            <div
+              onClick={() => handleRowReorderToggle('click')}
+              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                rowReorderMode === 'click' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                rowReorderMode === 'click' ? 'border-indigo-500' : 'border-gray-300'
+              }`}>
+                {rowReorderMode === 'click' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+              </div>
+              <div>
+                <p className="font-semibold text-gray-800">↑ ↓ Click Arrows</p>
+                <p className="text-sm text-gray-500 mt-0.5">Up and down arrow buttons appear beside each row. Click once per step to move rows.</p>
+              </div>
+            </div>
+            <div
+              onClick={() => handleRowReorderToggle('drag')}
+              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                rowReorderMode === 'drag' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                rowReorderMode === 'drag' ? 'border-indigo-500' : 'border-gray-300'
+              }`}>
+                {rowReorderMode === 'drag' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+              </div>
+              <div>
+                <p className="font-semibold text-gray-800">⠿ Drag &amp; Drop</p>
+                <p className="text-sm text-gray-500 mt-0.5">A grip handle replaces the arrows. Click and drag any row to reorder it instantly.</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            {rowReorderStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
+            {rowReorderStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
+          </div>
         </div>
       </div>
 
