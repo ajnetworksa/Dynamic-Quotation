@@ -98,6 +98,19 @@ export default function QuoteForm() {
     totalsBg: "#f3f4f6"
   });
 
+  // MU filter keywords loaded from Settings → Admin → "MU Calculation Filters"
+  // zeroMarkup: items matching these keywords have 0 markup (base = net price)
+  // excluded:   items matching these keywords are skipped entirely from MU
+  const [muFilters, setMuFilters] = useState<{ zeroMarkup: string[]; excluded: string[] }>({
+    zeroMarkup: [],
+    excluded: [],
+  });
+
+  // Developer mode: when ON, the Analysis Sidebar shows a RULE column
+  // auditing which MU formula applies to each row (like Excel's formula audit).
+  // Persisted in localStorage so it survives page navigations.
+  const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
+
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
@@ -308,6 +321,7 @@ export default function QuoteForm() {
     if (location.pathname === '/quote') {
       fetchCustomers();
       fetchProducts();
+      fetchMuFilters();
     }
   }, [location.pathname]);
 
@@ -318,6 +332,7 @@ export default function QuoteForm() {
     const handleFocus = () => {
       fetchCustomersRef.current();
       fetchProductsRef.current();
+      fetchMuFiltersRef.current();
     };
 
     window.addEventListener('focus', handleFocus);
@@ -345,9 +360,37 @@ export default function QuoteForm() {
 
   // Keep a ref to always-latest fetch functions so focus/interval never get stale closures
   const fetchCustomersRef = useRef(fetchCustomers);
-  const fetchProductsRef  = useRef(fetchProducts);
+  const fetchProductsRef = useRef(fetchProducts);
   useEffect(() => { fetchCustomersRef.current = fetchCustomers; });
-  useEffect(() => { fetchProductsRef.current  = fetchProducts; });
+  useEffect(() => { fetchProductsRef.current = fetchProducts; });
+
+  // Standalone muFilters fetcher — called on mount, route-change and window focus
+  // so changes saved in Settings are always reflected without a page reload.
+  const fetchMuFilters = async () => {
+    try {
+      const res = await fetch(`/api/settings/muFilters?_t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.value) {
+          const parsed = JSON.parse(data.value);
+          setMuFilters({ zeroMarkup: parsed.zeroMarkup || [], excluded: parsed.excluded || [] });
+        } else {
+          // No saved filters yet — keep defaults
+        }
+      }
+    } catch { /* silent — non-critical */ }
+  };
+  const fetchMuFiltersRef = useRef(fetchMuFilters);
+  useEffect(() => { fetchMuFiltersRef.current = fetchMuFilters; });
+
+  // Developer mode toggle — also listen for changes from Settings page via storage event
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'developerMode') setDeveloperMode(e.newValue === 'true');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const fetchLogo = async () => {
     try {
@@ -372,6 +415,29 @@ export default function QuoteForm() {
       if (resTheme.ok) {
         const dataTheme = await resTheme.json();
         if (dataTheme.value) setThemeColors(JSON.parse(dataTheme.value));
+      }
+
+      const resMuFilters = await fetch('/api/settings/muFilters');
+      if (resMuFilters.ok) {
+        const dataMu = await resMuFilters.json();
+        if (dataMu.value) {
+          const parsed = JSON.parse(dataMu.value);
+          setMuFilters({
+            zeroMarkup: parsed.zeroMarkup || [],
+            excluded: parsed.excluded || []
+          });
+        }
+      }
+
+      // Also sync developer mode from DB in case it was set on another device
+      const resDevMode = await fetch('/api/settings/developerMode');
+      if (resDevMode.ok) {
+        const dataDevMode = await resDevMode.json();
+        if (dataDevMode.value) {
+          const val = dataDevMode.value === 'true';
+          setDeveloperMode(val);
+          localStorage.setItem('developerMode', String(val));
+        }
       }
 
     } catch (e) {
@@ -702,7 +768,7 @@ export default function QuoteForm() {
         },
         body: formData
       });
-      
+
       if (res.ok) {
         const data = await res.json();
         if (data.items && data.items.length > 0) {
@@ -715,7 +781,7 @@ export default function QuoteForm() {
             unit_price: 0,
             net_price: 0
           }));
-          
+
           setItems(prev => {
             const temp = prev.filter(p => p.description.trim() !== '');
             return [...temp, ...mappedItems];
@@ -793,7 +859,31 @@ export default function QuoteForm() {
   };
 
   const subtotal = items.reduce((sum, item) => sum + (item.net_price || 0), 0);
-  const baseTotal = items.reduce((sum, item) => sum + ((item.original_price || 0) * item.qty), 0);
+
+  // Helper: returns which MU formula rule applies to this item.
+  // Used in both baseTotal calculation and (when developerMode is ON) the sidebar RULE column.
+  const getMuRule = (item: QuoteItem) => {
+    const desc = item.description || '';
+    const matches = (kws: string[]) => kws.some(kw => kw && new RegExp(kw, 'i').test(desc));
+    if (matches(muFilters.excluded)) return { code: 'EXCL', label: 'Excluded', color: 'bg-red-100 text-red-700' };
+    if (matches(muFilters.zeroMarkup)) return { code: 'ZM', label: 'Zero Markup', color: 'bg-amber-100 text-amber-700' };
+    if (item.manual_price !== undefined && item.manual_price !== null && item.manual_price >= 0)
+      return { code: 'MAN', label: 'Manual Base', color: 'bg-blue-100 text-blue-700' };
+    if (item.original_price !== undefined && item.original_price !== null)
+      return { code: 'DB', label: 'DB Price', color: 'bg-green-100 text-green-700' };
+    return { code: '--', label: 'No base price', color: 'bg-gray-100 text-gray-500' };
+  };
+
+  const baseTotal = items.reduce((sum, item) => {
+    const rule = getMuRule(item);
+    if (rule.code === 'EXCL') return sum;
+    if (rule.code === 'ZM') return sum + (item.net_price || 0);
+    // MAN: manual price only changes the customer-facing unit price.
+    // The base cost anchor stays at original_price (the DB cost).
+    // If the item was typed manually (no original_price), base is 0.
+    if (rule.code === 'MAN') return sum + ((item.original_price || 0) * item.qty);
+    return sum + ((item.original_price || 0) * item.qty); // DB or --
+  }, 0);
   const markupProfit = subtotal - baseTotal;
   const discountedSubtotal = Math.max(0, subtotal - discount);
   const tax = discountedSubtotal * (vatRate / 100);
@@ -1729,9 +1819,12 @@ export default function QuoteForm() {
                         style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                         <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
                           {index + 1}
-                          {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
-                            <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
-                          )}
+                          {/* Only show warning badge for real DB items (those with original_price set) */}
+                          {item.original_price !== undefined && item.original_price !== null && (
+                            (item.unit_price === 0 || item.unit_price < item.original_price)
+                          ) && (
+                              <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
+                            )}
                         </div>
                         <div className="p-0 border-r border-gray-300 h-full flex relative group">
                           <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
@@ -1753,14 +1846,14 @@ export default function QuoteForm() {
                                 {(() => {
                                   const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
                                   const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-                                  
+
                                   if (searchTerms.length === 0) return [];
 
                                   return products
                                     .filter(p => {
                                       const desc = p.description.toLowerCase();
                                       if (desc === item.description.toLowerCase()) return false;
-                                      
+
                                       const normDesc = normalize(desc);
                                       return searchTerms.every(term => {
                                         const nTerm = normalize(term);
@@ -1768,22 +1861,22 @@ export default function QuoteForm() {
                                       });
                                     })
                                     .map(p => (
-                                    <div
-                                      key={p.id}
-                                      className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
-                                      onClick={() => {
-                                        handleProductSelect(index, p.id.toString());
-                                        setFocusedDescriptionIndex(null);
-                                        handleProductAutoTranslate(index, p.description, '');
-                                      }}
-                                    >
-                                      <div className="font-medium">{p.description}</div>
-                                      {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                    </div>
+                                      <div
+                                        key={p.id}
+                                        className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                        onClick={() => {
+                                          handleProductSelect(index, p.id.toString());
+                                          setFocusedDescriptionIndex(null);
+                                          handleProductAutoTranslate(index, p.description, '');
+                                        }}
+                                      >
+                                        <div className="font-medium">{p.description}</div>
+                                        {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                      </div>
                                     ))
-                                  })()}
-                                </div>
-                              )}
+                                })()}
+                              </div>
+                            )}
                             <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
                               <div className="relative flex items-center">
                                 <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
@@ -2220,34 +2313,47 @@ export default function QuoteForm() {
               </div>
 
               <div className="border border-gray-800 bg-white shadow-xl rounded-sm">
-                <div className="grid grid-cols-3 font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50" style={{ height: headerHeight }}>
+                <div className={`grid ${developerMode ? 'grid-cols-4' : 'grid-cols-3'} font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50`} style={{ height: headerHeight }}>
                   <div className="border-r border-gray-800 flex items-center justify-center">Manual</div>
                   <div className="border-r border-gray-800 flex items-center justify-center">BASE</div>
-                  <div className="flex items-center justify-center">TOTAL</div>
+                  <div className={`flex items-center justify-center ${developerMode ? 'border-r border-gray-800' : ''}`}>TOTAL</div>
+                  {developerMode && <div className="flex items-center justify-center text-[11px] text-purple-700">RULE</div>}
                 </div>
 
                 <div className="flex flex-col">
-                  {items.map((item, index) => (
-                    <div key={`side-${item.id}`} className="grid grid-cols-3 border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group" style={{ height: rowHeights[index] || 40 }}>
-                      <div className="p-1 flex items-center border-r border-gray-200">
-                        <input
-                          type="number"
-                          className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
-                          value={item.manual_price !== undefined ? item.manual_price : ''}
-                          onChange={e => {
-                            if (e.target.value === '') updateItem(index, 'manual_price', undefined);
-                            else updateItem(index, 'manual_price', parseFloat(e.target.value));
-                          }}
-                        />
+                  {items.map((item, index) => {
+                    const rule = getMuRule(item);
+                    return (
+                      <div key={`side-${item.id}`} className={`grid ${developerMode ? 'grid-cols-4' : 'grid-cols-3'} border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group`} style={{ height: rowHeights[index] || 40 }}>
+                        <div className="p-1 flex items-center border-r border-gray-200">
+                          <input
+                            type="number"
+                            className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
+                            value={item.manual_price !== undefined ? item.manual_price : ''}
+                            onChange={e => {
+                              if (e.target.value === '') updateItem(index, 'manual_price', undefined);
+                              else updateItem(index, 'manual_price', parseFloat(e.target.value));
+                            }}
+                          />
+                        </div>
+                        <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
+                          {rule.code === 'ZM'
+                            ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : (item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00')}
+                        </div>
+                        <div className={`p-1 flex items-center justify-center text-[13px] font-mono ${developerMode ? 'border-r border-gray-200' : ''}`}>
+                          {rule.code === 'ZM'
+                            ? item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : (item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00')}
+                        </div>
+                        {developerMode && (
+                          <div className="p-1 flex items-center justify-center">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${rule.color}`} title={rule.label}>{rule.code}</span>
+                          </div>
+                        )}
                       </div>
-                      <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
-                        {item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                      </div>
-                      <div className="p-1 flex items-center justify-center text-[13px] font-mono">
-                        {item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
