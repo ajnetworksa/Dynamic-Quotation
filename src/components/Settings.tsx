@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw } from 'lucide-react';
+import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 export default function Settings() {
@@ -35,6 +35,18 @@ export default function Settings() {
   const [logExpirationDays, setLogExpirationDays] = useState<number>(7);
   const [logExpirationStatus, setLogExpirationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
+
+  // ── MU FILTERS ─────────────────────────────────────────────────────────────
+  // zeroMarkupKeywords: item descriptions matching any of these contribute 0 profit to MU
+  // excludedKeywords:   item descriptions matching any of these are skipped entirely from MU
+  const [zeroMarkupKeywords, setZeroMarkupKeywords] = useState<string[]>(['Materials']);
+  const [excludedKeywords, setExcludedKeywords] = useState<string[]>(['Installation']);
+  const [muFilterInput, setMuFilterInput] = useState({ zero: '', excluded: '' });
+  const [muFilterStatus, setMuFilterStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  // Developer mode
+  const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
+  const [devModeStatus, setDevModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
@@ -78,6 +90,28 @@ export default function Settings() {
       .then(res => res.json())
       .then(data => {
         if (data.value) setLogExpirationDays(parseInt(data.value, 10));
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/muFilters')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) {
+          const parsed = JSON.parse(data.value);
+          if (parsed.zeroMarkup) setZeroMarkupKeywords(parsed.zeroMarkup);
+          if (parsed.excluded) setExcludedKeywords(parsed.excluded);
+        }
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/developerMode')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) {
+          const val = data.value === 'true';
+          setDeveloperMode(val);
+          localStorage.setItem('developerMode', String(val));
+        }
       })
       .catch(console.error);
 
@@ -344,6 +378,44 @@ export default function Settings() {
       setThemeStatus('error');
     }
     setTimeout(() => setThemeStatus('idle'), 3000);
+  };
+
+  const handleMuFilterSave = async () => {
+    setMuFilterStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'muFilters',
+          value: JSON.stringify({ zeroMarkup: zeroMarkupKeywords, excluded: excludedKeywords })
+        })
+      });
+      if (res.ok) {
+        setMuFilterStatus('success');
+      } else {
+        setMuFilterStatus('error');
+      }
+    } catch {
+      setMuFilterStatus('error');
+    }
+    setTimeout(() => setMuFilterStatus('idle'), 3000);
+  };
+
+  const handleDevModeToggle = async (val: boolean) => {
+    setDeveloperMode(val);
+    localStorage.setItem('developerMode', String(val)); // instant effect for open QuoteForm tabs
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'developerMode', value: String(val) })
+      });
+      setDevModeStatus('success');
+    } catch {
+      setDevModeStatus('error');
+    }
+    setTimeout(() => setDevModeStatus('idle'), 2000);
   };
 
   const handleDownloadSystemDB = async () => {
@@ -836,6 +908,164 @@ export default function Settings() {
           </div>
         </div>
       )}
+
+      {/* MU Calculation Filters */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Filter className="text-indigo-600" />
+            <div>
+              <h2 className="text-xl font-semibold text-gray-800">MU Calculation Filters</h2>
+              <p className="text-sm text-gray-500 mt-0.5">Control which item types are included in the Markup Profit (MU) calculation</p>
+            </div>
+          </div>
+          <button
+            onClick={handleMuFilterSave}
+            disabled={muFilterStatus === 'loading'}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+          >
+            {muFilterStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Filters'}
+          </button>
+        </div>
+        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+
+          {/* Zero Markup List */}
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">Zero Markup Keywords</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Items whose description contains any of these words are included in MU but contribute <strong>zero profit</strong> (their base cost = their sale price).
+            </p>
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                placeholder="e.g. Materials"
+                value={muFilterInput.zero}
+                onChange={e => setMuFilterInput(f => ({ ...f, zero: e.target.value }))}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && muFilterInput.zero.trim()) {
+                    const kw = muFilterInput.zero.trim();
+                    if (!zeroMarkupKeywords.includes(kw)) setZeroMarkupKeywords(prev => [...prev, kw]);
+                    setMuFilterInput(f => ({ ...f, zero: '' }));
+                  }
+                }}
+                className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <button
+                onClick={() => {
+                  const kw = muFilterInput.zero.trim();
+                  if (kw && !zeroMarkupKeywords.includes(kw)) setZeroMarkupKeywords(prev => [...prev, kw]);
+                  setMuFilterInput(f => ({ ...f, zero: '' }));
+                }}
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {zeroMarkupKeywords.map(kw => (
+                <span key={kw} className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full text-sm font-medium">
+                  {kw}
+                  <button onClick={() => setZeroMarkupKeywords(prev => prev.filter(k => k !== kw))} className="hover:text-red-600 transition-colors">
+                    <X size={13} />
+                  </button>
+                </span>
+              ))}
+              {zeroMarkupKeywords.length === 0 && <span className="text-xs text-gray-400 italic">No keywords added</span>}
+            </div>
+          </div>
+
+          {/* Excluded List */}
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">Excluded Keywords</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Items whose description contains any of these words are <strong>completely excluded</strong> from the MU calculation (neither profit nor cost).
+            </p>
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                placeholder="e.g. Installation"
+                value={muFilterInput.excluded}
+                onChange={e => setMuFilterInput(f => ({ ...f, excluded: e.target.value }))}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && muFilterInput.excluded.trim()) {
+                    const kw = muFilterInput.excluded.trim();
+                    if (!excludedKeywords.includes(kw)) setExcludedKeywords(prev => [...prev, kw]);
+                    setMuFilterInput(f => ({ ...f, excluded: '' }));
+                  }
+                }}
+                className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <button
+                onClick={() => {
+                  const kw = muFilterInput.excluded.trim();
+                  if (kw && !excludedKeywords.includes(kw)) setExcludedKeywords(prev => [...prev, kw]);
+                  setMuFilterInput(f => ({ ...f, excluded: '' }));
+                }}
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {excludedKeywords.map(kw => (
+                <span key={kw} className="flex items-center gap-1.5 px-3 py-1 bg-red-50 border border-red-200 text-red-800 rounded-full text-sm font-medium">
+                  {kw}
+                  <button onClick={() => setExcludedKeywords(prev => prev.filter(k => k !== kw))} className="hover:text-red-600 transition-colors">
+                    <X size={13} />
+                  </button>
+                </span>
+              ))}
+              {excludedKeywords.length === 0 && <span className="text-xs text-gray-400 italic">No keywords added</span>}
+            </div>
+          </div>
+
+        </div>
+        <div className="px-6 pb-4 h-6">
+          {muFilterStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> MU filters saved successfully</span>}
+          {muFilterStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save MU filters</span>}
+        </div>
+      </div>
+
+      {/* Developer Mode */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center text-purple-700 font-mono font-bold text-sm">&lt;/&gt;</div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Developer Mode</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Reveals formula audit information in the Analysis Sidebar — like Excel&apos;s formula view</p>
+          </div>
+        </div>
+        <div className="p-6 flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-sm text-gray-700">When <strong>ON</strong>, the Analysis Sidebar shows a <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold">RULE</span> column for each item:</p>
+            <ul className="text-xs text-gray-500 mt-2 space-y-1 ml-3">
+              <li><span className="inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold mr-1">EXCL</span> Item is excluded from MU entirely</li>
+              <li><span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-bold mr-1">ZM</span> Zero markup — base cost equals sale price</li>
+              <li><span className="inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-bold mr-1">MAN</span> Manual base cost override is active</li>
+              <li><span className="inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded font-bold mr-1">DB</span> Using original DB price as base cost</li>
+              <li><span className="inline-block px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded font-bold mr-1">--</span> No base price known</li>
+            </ul>
+            <p className="text-xs text-gray-400 mt-3">Toggle takes effect immediately. Turn off to hide formula details from regular users.</p>
+          </div>
+          <div className="flex flex-col items-center gap-2 ml-8">
+            <button
+              onClick={() => handleDevModeToggle(!developerMode)}
+              className={`relative inline-flex h-8 w-16 items-center rounded-full transition-colors focus:outline-none ${
+                developerMode ? 'bg-purple-600' : 'bg-gray-200'
+              }`}
+            >
+              <span className={`inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition-transform ${
+                developerMode ? 'translate-x-9' : 'translate-x-1'
+              }`} />
+            </button>
+            <span className={`text-xs font-semibold ${developerMode ? 'text-purple-700' : 'text-gray-400'}`}>
+              {developerMode ? 'ON' : 'OFF'}
+            </span>
+            {devModeStatus === 'success' && <span className="text-emerald-600 text-xs">Saved</span>}
+            {devModeStatus === 'error' && <span className="text-red-600 text-xs">Save failed</span>}
+          </div>
+        </div>
+      </div>
 
     </div>
   );
