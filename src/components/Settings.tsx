@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
+const APP_VERSION = '1.2.4';
 
 export default function Settings() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -1164,6 +1165,15 @@ export default function Settings() {
             {devModeStatus === 'error' && <span className="text-red-600 text-xs">Save failed</span>}
           </div>
         </div>
+      </div>
+      
+      {/* App Version Footer */}
+      <div className="pt-8 pb-12 text-center">
+        <div className="inline-flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-xs font-mono border border-gray-200">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          AJ Quotation System v{APP_VERSION}
+        </div>
+        <p className="text-[10px] text-gray-400 mt-2 uppercase tracking-widest">Powered by AJ Network Solutions</p>
       </div>
     </div>
   );
