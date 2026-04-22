@@ -29,7 +29,7 @@ import fs from 'fs';
 import { z, ZodSchema } from 'zod';
 
 // ── FILE LOGGING FOR BACKEND DEBUGGING ────────────────────────────────────────
-const LOG_FILE = path.join(__dirname, 'error.log');
+const LOG_FILE = path.join(process.cwd(), 'error.log');
 const appendToFileLog = (message: string) => {
   const timestamp = new Date().toISOString();
   const logEntry = `[${timestamp}] ${message}\n`;
