@@ -1154,7 +1154,16 @@ export default function QuoteForm() {
   // ── DRAFT AUTO-SAVE: write every 30 seconds to the DB ─────────────────────
   useEffect(() => {
     const save = async () => {
-      if (!quoteId && items.every(i => !i.description)) return; // Nothing worth saving
+      // Only autosave if the tab is active
+      if (document.visibilityState !== 'visible') return;
+
+      // Don't save if the form is effectively blank (no subject, no customer, and no item descriptions)
+      const isMeaningful = subject.trim() !== '' || 
+                           selectedCustomerId !== '' || 
+                           items.some(i => i.description.trim() !== '');
+      
+      if (!isMeaningful) return;
+
       const draft = {
         quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate,
         selectedCustomerId, selectedCustomer, customerSearch,
@@ -1168,7 +1177,11 @@ export default function QuoteForm() {
         await fetch('/api/quotes/autosave', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ quote_id: quoteId, draft_data: draft })
+          body: JSON.stringify({ 
+            quote_id: quoteId, 
+            draft_data: draft,
+            grand_total: grandTotal // Pass current total for Tracking list visibility
+          })
         });
       } catch (e) {
         console.warn('Autosave failed:', e);

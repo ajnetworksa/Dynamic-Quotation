@@ -830,24 +830,47 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
 
 // ── Autosave ──────────────────────────────────────────────────────────────────
 app.post('/api/quotes/autosave', requireAuth, (req, res) => {
-  const { quote_id, draft_data } = req.body;
-  if (!quote_id) return res.status(400).json({ error: 'quote_id is required' });
-  
-  try {
-    const actor = (req as any).user?.username || 'system';
-    const timestamp = new Date().toISOString();
+    const { quote_id, draft_data, grand_total } = req.body;
+    if (!quote_id) return res.status(400).json({ error: 'quote_id is required' });
     
-    // Check if the quote exists
-    const existing = db.prepare('SELECT id FROM quotes WHERE quote_id = ?').get(quote_id);
-    
-    if (existing) {
-      db.prepare('UPDATE quotes SET draft_data = ? WHERE quote_id = ?').run(JSON.stringify(draft_data), quote_id);
-    } else {
-      // Create a shell quote row just for the draft
-      db.prepare(`
-        INSERT INTO quotes (quote_id, date, status, type, draft_data) 
-        VALUES (?, ?, 'Draft', 'Quotation', ?)
-      `).run(quote_id, new Date().toISOString().split('T')[0], JSON.stringify(draft_data));
+    try {
+      const actor = (req as any).user?.username || 'system';
+      const timestamp = new Date().toISOString();
+      
+      // Check if the quote exists
+      const existing = db.prepare('SELECT id FROM quotes WHERE quote_id = ?').get(quote_id);
+      
+      if (existing) {
+        db.prepare(`
+          UPDATE quotes 
+          SET draft_data = ?, 
+              subject = COALESCE(?, subject),
+              subject_ar = COALESCE(?, subject_ar),
+              customer_id = COALESCE(?, customer_id),
+              grand_total = COALESCE(?, grand_total)
+          WHERE quote_id = ?
+        `).run(
+          JSON.stringify(draft_data), 
+          draft_data.subject || null, 
+          draft_data.subjectAr || null,
+          draft_data.selectedCustomerId || null,
+          grand_total || null,
+          quote_id
+        );
+      } else {
+        // Create a shell quote row just for the draft
+        db.prepare(`
+          INSERT INTO quotes (quote_id, date, status, type, draft_data, subject, subject_ar, customer_id, grand_total) 
+          VALUES (?, ?, 'Draft', 'Quotation', ?, ?, ?, ?, ?)
+        `).run(
+          quote_id, 
+          new Date().toISOString().split('T')[0], 
+          JSON.stringify(draft_data),
+          draft_data.subject || null,
+          draft_data.subjectAr || null,
+          draft_data.selectedCustomerId || null,
+          grand_total || null
+        );
       
       db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
         quote_id, 'Draft Created (Autosave)', actor, timestamp
