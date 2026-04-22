@@ -135,8 +135,14 @@ function MainLayout({ user, handleLogout }: { user: any, handleLogout: () => voi
       </header>
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-        {/* Keep QuoteForm mounted to preserve state when switching tabs */}
-        <div style={{ display: location.pathname === '/quote' ? 'block' : 'none' }}>
+        {/* Keep QuoteForm mounted to preserve state when switching tabs.
+            When hidden: height:0 + overflow:hidden collapses the white card so
+            it cannot bleed through onto the Dashboard or other pages. */}
+        <div style={
+          location.pathname === '/quote'
+            ? { display: 'block' }
+            : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }
+        }>
           <QuoteForm />
         </div>
         <Routes>
