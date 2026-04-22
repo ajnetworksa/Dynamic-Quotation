@@ -2640,7 +2640,7 @@ export default function QuoteForm() {
               <p className="text-gray-600 mb-6">A quote with ID <span className="font-bold">{quoteId}</span> already exists. How would you like to proceed?</p>
               <div className="flex flex-col gap-3">
                 <button
-                  onClick={performSave}
+                  onClick={() => performSave(true)}
                   className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
                 >
                   Overwrite Existing Quote ({quoteId})
