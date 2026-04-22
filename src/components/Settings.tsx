@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X } from 'lucide-react';
-import * as XLSX from 'xlsx-js-style';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 export default function Settings() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -51,7 +52,6 @@ export default function Settings() {
   // Developer mode
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
   const [devModeStatus, setDevModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
-
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => {
@@ -123,7 +123,6 @@ export default function Settings() {
         }
       })
       .catch(console.error);
-
     if (user.role === 'admin') {
       fetchLogs();
     }
@@ -191,21 +190,24 @@ export default function Settings() {
       const res = await fetch('/api/db/export');
       const data = await res.json();
 
-      const wb = XLSX.utils.book_new();
+      const workbook = new ExcelJS.Workbook();
 
-      const wsCustomers = XLSX.utils.json_to_sheet(data.customers || []);
-      XLSX.utils.book_append_sheet(wb, wsCustomers, 'Customers');
+      const addSheet = (name: string, rows: any[]) => {
+        const ws = workbook.addWorksheet(name);
+        if (rows && rows.length > 0) {
+          ws.columns = Object.keys(rows[0]).map(key => ({ header: key, key }));
+          rows.forEach(row => ws.addRow(row));
+        }
+      };
 
-      const wsProducts = XLSX.utils.json_to_sheet(data.products || []);
-      XLSX.utils.book_append_sheet(wb, wsProducts, 'Products');
+      addSheet('Customers', data.customers || []);
+      addSheet('Products', data.products || []);
+      addSheet('Quotes', data.quotes || []);
+      addSheet('QuoteItems', data.quote_items || []);
 
-      const wsQuotes = XLSX.utils.json_to_sheet(data.quotes || []);
-      XLSX.utils.book_append_sheet(wb, wsQuotes, 'Quotes');
-
-      const wsQuoteItems = XLSX.utils.json_to_sheet(data.quote_items || []);
-      XLSX.utils.book_append_sheet(wb, wsQuoteItems, 'QuoteItems');
-
-      XLSX.writeFile(wb, `AJ_Network_DB_Backup_${new Date().toISOString().split('T')[0]}.xlsx`);
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, `AJ_Network_DB_Backup_${new Date().toISOString().split('T')[0]}.xlsx`);
 
       setExportStatus('success');
       setTimeout(() => setExportStatus('idle'), 3000);
@@ -231,21 +233,44 @@ export default function Settings() {
       try {
         const arrayBuffer = event.target?.result as ArrayBuffer;
         const data = new Uint8Array(arrayBuffer);
-        const wb = XLSX.read(data, { type: 'array' });
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(arrayBuffer);
 
         const payload: any = {};
-        if (wb.SheetNames.includes('Customers')) {
-          payload.customers = XLSX.utils.sheet_to_json(wb.Sheets['Customers']);
-        }
-        if (wb.SheetNames.includes('Products')) {
-          payload.products = XLSX.utils.sheet_to_json(wb.Sheets['Products']);
-        }
-        if (wb.SheetNames.includes('Quotes')) {
-          payload.quotes = XLSX.utils.sheet_to_json(wb.Sheets['Quotes']);
-        }
-        if (wb.SheetNames.includes('QuoteItems')) {
-          payload.quote_items = XLSX.utils.sheet_to_json(wb.Sheets['QuoteItems']);
-        }
+        
+        const sheetToJson = (sheet: ExcelJS.Worksheet) => {
+          const rows: any[] = [];
+          const headers: string[] = [];
+          sheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) {
+              row.eachCell((cell, colNumber) => {
+                headers[colNumber] = cell.value?.toString() || '';
+              });
+            } else {
+              const rowData: any = {};
+              row.eachCell((cell, colNumber) => {
+                const header = headers[colNumber];
+                if (header) {
+                  rowData[header] = cell.value;
+                }
+              });
+              rows.push(rowData);
+            }
+          });
+          return rows;
+        };
+
+        const customersSheet = workbook.getWorksheet('Customers');
+        if (customersSheet) payload.customers = sheetToJson(customersSheet);
+
+        const productsSheet = workbook.getWorksheet('Products');
+        if (productsSheet) payload.products = sheetToJson(productsSheet);
+
+        const quotesSheet = workbook.getWorksheet('Quotes');
+        if (quotesSheet) payload.quotes = sheetToJson(quotesSheet);
+
+        const quoteItemsSheet = workbook.getWorksheet('QuoteItems');
+        if (quoteItemsSheet) payload.quote_items = sheetToJson(quoteItemsSheet);
 
         const res = await fetch('/api/db/import', {
           method: 'POST',
@@ -441,7 +466,6 @@ export default function Settings() {
     }
     setTimeout(() => setDevModeStatus('idle'), 2000);
   };
-
   const handleDownloadSystemDB = async () => {
     try {
       const res = await fetch('/api/admin/backup');
@@ -1141,7 +1165,6 @@ export default function Settings() {
           </div>
         </div>
       </div>
-
     </div>
   );
 }

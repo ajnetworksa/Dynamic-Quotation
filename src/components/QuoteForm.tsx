@@ -22,7 +22,8 @@ import { useSearchParams, useLocation } from 'react-router-dom';
 import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import * as XLSX from 'xlsx-js-style';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 interface Customer {
   id: number;
@@ -116,7 +117,6 @@ export default function QuoteForm() {
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
-
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
@@ -329,7 +329,6 @@ export default function QuoteForm() {
     if (location.pathname === '/quote') {
       fetchCustomers();
       fetchProducts();
-      fetchMuFilters();
     }
   }, [location.pathname]);
 
@@ -340,7 +339,6 @@ export default function QuoteForm() {
     const handleFocus = () => {
       fetchCustomersRef.current();
       fetchProductsRef.current();
-      fetchMuFiltersRef.current();
     };
 
     window.addEventListener('focus', handleFocus);
@@ -368,37 +366,9 @@ export default function QuoteForm() {
 
   // Keep a ref to always-latest fetch functions so focus/interval never get stale closures
   const fetchCustomersRef = useRef(fetchCustomers);
-  const fetchProductsRef = useRef(fetchProducts);
+  const fetchProductsRef  = useRef(fetchProducts);
   useEffect(() => { fetchCustomersRef.current = fetchCustomers; });
-  useEffect(() => { fetchProductsRef.current = fetchProducts; });
-
-  // Standalone muFilters fetcher — called on mount, route-change and window focus
-  // so changes saved in Settings are always reflected without a page reload.
-  const fetchMuFilters = async () => {
-    try {
-      const res = await fetch(`/api/settings/muFilters?_t=${Date.now()}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.value) {
-          const parsed = JSON.parse(data.value);
-          setMuFilters({ zeroMarkup: parsed.zeroMarkup || [], excluded: parsed.excluded || [] });
-        } else {
-          // No saved filters yet — keep defaults
-        }
-      }
-    } catch { /* silent — non-critical */ }
-  };
-  const fetchMuFiltersRef = useRef(fetchMuFilters);
-  useEffect(() => { fetchMuFiltersRef.current = fetchMuFilters; });
-
-  // Developer mode toggle — also listen for changes from Settings page via storage event
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === 'developerMode') setDeveloperMode(e.newValue === 'true');
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
+  useEffect(() => { fetchProductsRef.current  = fetchProducts; });
 
   const fetchLogo = async () => {
     try {
@@ -453,7 +423,6 @@ export default function QuoteForm() {
         const dataRowMode = await resRowMode.json();
         if (dataRowMode.value) setRowReorderMode(dataRowMode.value as 'click' | 'drag');
       }
-
     } catch (e) {
       console.error('Failed to fetch settings', e);
     }
@@ -903,7 +872,7 @@ export default function QuoteForm() {
         },
         body: formData
       });
-
+      
       if (res.ok) {
         const data = await res.json();
         if (data.items && data.items.length > 0) {
@@ -916,7 +885,7 @@ export default function QuoteForm() {
             unit_price: 0,
             net_price: 0
           }));
-
+          
           setItems(prev => {
             const temp = prev.filter(p => p.description.trim() !== '');
             return [...temp, ...mappedItems];
@@ -994,31 +963,7 @@ export default function QuoteForm() {
   };
 
   const subtotal = items.reduce((sum, item) => sum + (item.net_price || 0), 0);
-
-  // Helper: returns which MU formula rule applies to this item.
-  // Used in both baseTotal calculation and (when developerMode is ON) the sidebar RULE column.
-  const getMuRule = (item: QuoteItem) => {
-    const desc = item.description || '';
-    const matches = (kws: string[]) => kws.some(kw => kw && new RegExp(kw, 'i').test(desc));
-    if (matches(muFilters.excluded)) return { code: 'EXCL', label: 'Excluded', color: 'bg-red-100 text-red-700' };
-    if (matches(muFilters.zeroMarkup)) return { code: 'ZM', label: 'Zero Markup', color: 'bg-amber-100 text-amber-700' };
-    if (item.manual_price !== undefined && item.manual_price !== null && item.manual_price >= 0)
-      return { code: 'MAN', label: 'Manual Base', color: 'bg-blue-100 text-blue-700' };
-    if (item.original_price !== undefined && item.original_price !== null)
-      return { code: 'DB', label: 'DB Price', color: 'bg-green-100 text-green-700' };
-    return { code: '--', label: 'No base price', color: 'bg-gray-100 text-gray-500' };
-  };
-
-  const baseTotal = items.reduce((sum, item) => {
-    const rule = getMuRule(item);
-    if (rule.code === 'EXCL') return sum;
-    if (rule.code === 'ZM') return sum + (item.net_price || 0);
-    // MAN: manual price only changes the customer-facing unit price.
-    // The base cost anchor stays at original_price (the DB cost).
-    // If the item was typed manually (no original_price), base is 0.
-    if (rule.code === 'MAN') return sum + ((item.original_price || 0) * item.qty);
-    return sum + ((item.original_price || 0) * item.qty); // DB or --
-  }, 0);
+  const baseTotal = items.reduce((sum, item) => sum + ((item.original_price || 0) * item.qty), 0);
   const markupProfit = subtotal - baseTotal;
   const discountedSubtotal = Math.max(0, subtotal - discount);
   const tax = discountedSubtotal * (vatRate / 100);
@@ -1533,9 +1478,7 @@ export default function QuoteForm() {
     }
   };
 
-  const handleExportExcel = () => {
-    const wb = XLSX.utils.book_new();
-
+  const handleExportExcel = async () => {
     // Create quote info sheet
     const quoteInfo = [
       [type.toUpperCase()],
@@ -1582,66 +1525,55 @@ export default function QuoteForm() {
       ['FOOTER', footer, footerAr]
     ];
 
-    const ws = XLSX.utils.aoa_to_sheet([...quoteInfo, ...itemsData]);
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet('Quote');
 
-    // Improve Excel formatting with column widths
-    ws['!cols'] = [
-      { wch: 15 }, // A: ITEM / INFO Labels
-      { wch: 50 }, // B: DESCRIPTION / INFO Values
-      { wch: 50 }, // C: DESCRIPTION (ARABIC)
-      { wch: 10 }, // D: QTY
-      { wch: 10 }, // E: UNIT
-      { wch: 15 }, // F: UNIT PRICE
-      { wch: 15 }  // G: NET PRICE
+    ws.columns = [
+      { key: 'A', width: 15 },
+      { key: 'B', width: 50 },
+      { key: 'C', width: 50 },
+      { key: 'D', width: 10 },
+      { key: 'E', width: 10 },
+      { key: 'F', width: 15 },
+      { key: 'G', width: 15 },
     ];
 
-    // Apply basic borders and styling to all cells
-    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
-    for (let R = range.s.r; R <= range.e.r; ++R) {
-      for (let C = range.s.c; C <= range.e.c; ++C) {
-        const cellRef = XLSX.utils.encode_cell({ c: C, r: R });
-        if (!ws[cellRef]) continue;
-
-        let bold = false;
-        if (R === 0 || ws[cellRef].v === 'CUSTOMER INFO' || ws[cellRef].v === 'TERMS & CONDITIONS' || ws[cellRef].v === 'ITEM' || ws[cellRef].v === 'DESCRIPTION') {
-          bold = true;
-        }
-
-        ws[cellRef].s = {
-          border: {
-            top: { style: 'thin', color: { auto: 1 } },
-            bottom: { style: 'thin', color: { auto: 1 } },
-            left: { style: 'thin', color: { auto: 1 } },
-            right: { style: 'thin', color: { auto: 1 } }
-          },
-          font: { name: 'Arial', sz: 10, bold },
-          alignment: { vertical: 'center', wrapText: true }
+    const allData = [...quoteInfo, ...itemsData];
+    allData.forEach(rowData => {
+      const row = ws.addRow(rowData);
+      row.eachCell(cell => {
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
         };
+        cell.alignment = { vertical: 'middle', wrapText: true };
+        cell.font = { name: 'Arial', size: 10 };
+      });
+    });
+
+    // Apply bold to headers and specific cells
+    ws.eachRow((row, rowNumber) => {
+      const firstCellVal = row.getCell(1).value?.toString();
+      if (rowNumber === 1 || firstCellVal === 'CUSTOMER INFO' || firstCellVal === 'TERMS & CONDITIONS' || firstCellVal === 'ITEM' || firstCellVal === 'DESCRIPTION') {
+        row.eachCell(cell => {
+          if (cell.value) {
+             cell.font = { name: 'Arial', size: 10, bold: true };
+          }
+        });
       }
-    }
+    });
 
-    XLSX.utils.book_append_sheet(wb, ws, 'Quote');
-
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([wbout], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-
-    const link = document.createElement('a');
-    link.href = url;
-
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    
     // ── EXCEL FILENAME ──────────────────────────────────────────────────────────
     // Same naming convention as the PDF export above.
-    // Format: CustomerName-QuoteID.xlsx
-    // To customise, follow the same pattern described in the PDF filename block.
     const excelCustomerName = (selectedCustomer?.name || 'Unknown')
       .replace(/[^a-zA-Z0-9_\-.\s]/g, '') // strip filename-unsafe characters
       .trim();
-    link.download = `${excelCustomerName}-${quoteId}.xlsx`;
-
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 100);
+    saveAs(blob, `${excelCustomerName}-${quoteId}.xlsx`);
   };
 
   return (
@@ -1981,12 +1913,9 @@ export default function QuoteForm() {
                         style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                         <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
                           {index + 1}
-                          {/* Only show warning badge for real DB items (those with original_price set) */}
-                          {item.original_price !== undefined && item.original_price !== null && (
-                            (item.unit_price === 0 || item.unit_price < item.original_price)
-                          ) && (
-                              <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
-                            )}
+                          {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
+                            <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
+                          )}
                         </div>
                         <div className="p-0 border-r border-gray-300 h-full flex relative group">
                           <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
@@ -2008,14 +1937,14 @@ export default function QuoteForm() {
                                 {(() => {
                                   const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
                                   const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-
+                                  
                                   if (searchTerms.length === 0) return [];
 
                                   return products
                                     .filter(p => {
                                       const desc = p.description.toLowerCase();
                                       if (desc === item.description.toLowerCase()) return false;
-
+                                      
                                       const normDesc = normalize(desc);
                                       return searchTerms.every(term => {
                                         const nTerm = normalize(term);
@@ -2023,22 +1952,22 @@ export default function QuoteForm() {
                                       });
                                     })
                                     .map(p => (
-                                      <div
-                                        key={p.id}
-                                        className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
-                                        onClick={() => {
-                                          handleProductSelect(index, p.id.toString());
-                                          setFocusedDescriptionIndex(null);
-                                          handleProductAutoTranslate(index, p.description, '');
-                                        }}
-                                      >
-                                        <div className="font-medium">{p.description}</div>
-                                        {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                      </div>
+                                    <div
+                                      key={p.id}
+                                      className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                      onClick={() => {
+                                        handleProductSelect(index, p.id.toString());
+                                        setFocusedDescriptionIndex(null);
+                                        handleProductAutoTranslate(index, p.description, '');
+                                      }}
+                                    >
+                                      <div className="font-medium">{p.description}</div>
+                                      {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                    </div>
                                     ))
-                                })()}
-                              </div>
-                            )}
+                                  })()}
+                                </div>
+                              )}
                             <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
                               <div className="relative flex items-center">
                                 <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
@@ -2515,47 +2444,34 @@ export default function QuoteForm() {
               </div>
 
               <div className="border border-gray-800 bg-white shadow-xl rounded-sm">
-                <div className={`grid ${developerMode ? 'grid-cols-4' : 'grid-cols-3'} font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50`} style={{ height: headerHeight }}>
+                <div className="grid grid-cols-3 font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50" style={{ height: headerHeight }}>
                   <div className="border-r border-gray-800 flex items-center justify-center">Manual</div>
                   <div className="border-r border-gray-800 flex items-center justify-center">BASE</div>
-                  <div className={`flex items-center justify-center ${developerMode ? 'border-r border-gray-800' : ''}`}>TOTAL</div>
-                  {developerMode && <div className="flex items-center justify-center text-[11px] text-purple-700">RULE</div>}
+                  <div className="flex items-center justify-center">TOTAL</div>
                 </div>
 
                 <div className="flex flex-col">
-                  {items.map((item, index) => {
-                    const rule = getMuRule(item);
-                    return (
-                      <div key={`side-${item.id}`} className={`grid ${developerMode ? 'grid-cols-4' : 'grid-cols-3'} border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group`} style={{ height: rowHeights[index] || 40 }}>
-                        <div className="p-1 flex items-center border-r border-gray-200">
-                          <input
-                            type="number"
-                            className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
-                            value={item.manual_price !== undefined ? item.manual_price : ''}
-                            onChange={e => {
-                              if (e.target.value === '') updateItem(index, 'manual_price', undefined);
-                              else updateItem(index, 'manual_price', parseFloat(e.target.value));
-                            }}
-                          />
-                        </div>
-                        <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
-                          {rule.code === 'ZM'
-                            ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                            : (item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00')}
-                        </div>
-                        <div className={`p-1 flex items-center justify-center text-[13px] font-mono ${developerMode ? 'border-r border-gray-200' : ''}`}>
-                          {rule.code === 'ZM'
-                            ? item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                            : (item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00')}
-                        </div>
-                        {developerMode && (
-                          <div className="p-1 flex items-center justify-center">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${rule.color}`} title={rule.label}>{rule.code}</span>
-                          </div>
-                        )}
+                  {items.map((item, index) => (
+                    <div key={`side-${item.id}`} className="grid grid-cols-3 border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group" style={{ height: rowHeights[index] || 40 }}>
+                      <div className="p-1 flex items-center border-r border-gray-200">
+                        <input
+                          type="number"
+                          className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
+                          value={item.manual_price !== undefined ? item.manual_price : ''}
+                          onChange={e => {
+                            if (e.target.value === '') updateItem(index, 'manual_price', undefined);
+                            else updateItem(index, 'manual_price', parseFloat(e.target.value));
+                          }}
+                        />
                       </div>
-                    );
-                  })}
+                      <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
+                        {item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                      </div>
+                      <div className="p-1 flex items-center justify-center text-[13px] font-mono">
+                        {item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
