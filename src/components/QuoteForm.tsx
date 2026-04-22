@@ -962,9 +962,40 @@ export default function QuoteForm() {
     });
   };
 
+  // ── ADVANCED MU CALCULATION ───────────────────────────────────────────────
+  const getItemRule = (item: QuoteItem) => {
+    const desc = (item.description || '').toLowerCase();
+    if (muFilters.excluded.some(kw => desc.includes(kw.toLowerCase()))) return 'EXCL';
+    if (muFilters.zeroMarkup.some(kw => desc.includes(kw.toLowerCase()))) return 'ZM';
+    if (item.manual_price !== undefined && item.manual_price !== null) return 'MAN';
+    if (item.original_price !== undefined && item.original_price !== null) return 'DB';
+    return '--';
+  };
+
   const subtotal = items.reduce((sum, item) => sum + (item.net_price || 0), 0);
-  const baseTotal = items.reduce((sum, item) => sum + ((item.original_price || 0) * item.qty), 0);
-  const markupProfit = subtotal - baseTotal;
+
+  let baseTotal = 0;
+  let markupProfit = 0;
+
+  items.forEach(item => {
+    const rule = getItemRule(item);
+    const saleTotal = item.net_price || 0;
+
+    if (rule === 'EXCL') {
+      // Excluded: contributes nothing to base cost and nothing to profit
+    } else if (rule === 'ZM') {
+      // Zero markup: base cost equals sale price, so 0 profit
+      baseTotal += saleTotal;
+    } else {
+      let itemBaseUnit = 0;
+      if (rule === 'MAN') itemBaseUnit = item.manual_price!;
+      else if (rule === 'DB') itemBaseUnit = item.original_price!;
+      
+      const itemBaseTotal = itemBaseUnit * item.qty;
+      baseTotal += itemBaseTotal;
+      markupProfit += (saleTotal - itemBaseTotal);
+    }
+  });
   const discountedSubtotal = Math.max(0, subtotal - discount);
   const tax = discountedSubtotal * (vatRate / 100);
   const grandTotal = discountedSubtotal + tax;
@@ -2444,34 +2475,64 @@ export default function QuoteForm() {
               </div>
 
               <div className="border border-gray-800 bg-white shadow-xl rounded-sm">
-                <div className="grid grid-cols-3 font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50" style={{ height: headerHeight }}>
+                <div className={`grid ${developerMode ? 'grid-cols-4' : 'grid-cols-3'} font-bold text-sm text-center border-b-2 border-gray-800 bg-gray-50`} style={{ height: headerHeight }}>
+                  {developerMode && <div className="border-r border-gray-800 flex items-center justify-center text-purple-700">RULE</div>}
                   <div className="border-r border-gray-800 flex items-center justify-center">Manual</div>
                   <div className="border-r border-gray-800 flex items-center justify-center">BASE</div>
                   <div className="flex items-center justify-center">TOTAL</div>
                 </div>
 
                 <div className="flex flex-col">
-                  {items.map((item, index) => (
-                    <div key={`side-${item.id}`} className="grid grid-cols-3 border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group" style={{ height: rowHeights[index] || 40 }}>
-                      <div className="p-1 flex items-center border-r border-gray-200">
-                        <input
-                          type="number"
-                          className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''}`}
-                          value={item.manual_price !== undefined ? item.manual_price : ''}
-                          onChange={e => {
-                            if (e.target.value === '') updateItem(index, 'manual_price', undefined);
-                            else updateItem(index, 'manual_price', parseFloat(e.target.value));
-                          }}
-                        />
+                  {items.map((item, index) => {
+                    const rule = getItemRule(item);
+                    let displayBase = 0;
+                    let displayTotal = 0;
+                    
+                    if (rule === 'EXCL') {
+                      displayBase = 0;
+                      displayTotal = 0;
+                    } else if (rule === 'ZM') {
+                      displayBase = item.unit_price || 0;
+                      displayTotal = item.net_price || 0;
+                    } else {
+                      if (rule === 'MAN') displayBase = item.manual_price!;
+                      else if (rule === 'DB') displayBase = item.original_price!;
+                      displayTotal = displayBase * item.qty;
+                    }
+
+                    return (
+                      <div key={`side-${item.id}`} className={`grid ${developerMode ? 'grid-cols-4' : 'grid-cols-3'} border-b border-gray-200 last:border-0 hover:bg-gray-50 transition-colors group`} style={{ height: rowHeights[index] || 40 }}>
+                        {developerMode && (
+                          <div className="p-1 flex items-center justify-center border-r border-gray-200 font-mono text-[10px] font-bold">
+                            {rule === 'EXCL' && <span className="text-red-600 bg-red-100 px-1 py-0.5 rounded">EXCL</span>}
+                            {rule === 'ZM' && <span className="text-amber-600 bg-amber-100 px-1 py-0.5 rounded">ZM</span>}
+                            {rule === 'MAN' && <span className="text-blue-600 bg-blue-100 px-1 py-0.5 rounded">MAN</span>}
+                            {rule === 'DB' && <span className="text-green-600 bg-green-100 px-1 py-0.5 rounded">DB</span>}
+                            {rule === '--' && <span className="text-gray-400">--</span>}
+                          </div>
+                        )}
+                        <div className="p-1 flex items-center border-r border-gray-200 relative">
+                          {/* When the item is Excluded or Zero Markup, manually overriding makes no sense. We disable the input. */}
+                          <input
+                            type="number"
+                            disabled={rule === 'EXCL' || rule === 'ZM'}
+                            className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''} disabled:opacity-30 disabled:cursor-not-allowed`}
+                            value={item.manual_price !== undefined ? item.manual_price : ''}
+                            onChange={e => {
+                              if (e.target.value === '') updateItem(index, 'manual_price', undefined);
+                              else updateItem(index, 'manual_price', parseFloat(e.target.value));
+                            }}
+                          />
+                        </div>
+                        <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
+                          {rule === 'EXCL' ? '-' : displayBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                        <div className="p-1 flex items-center justify-center text-[13px] font-mono">
+                          {rule === 'EXCL' ? '-' : displayTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
                       </div>
-                      <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
-                        {item.original_price !== undefined && item.original_price !== null ? item.original_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                      </div>
-                      <div className="p-1 flex items-center justify-center text-[13px] font-mono">
-                        {item.original_price ? (item.original_price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
