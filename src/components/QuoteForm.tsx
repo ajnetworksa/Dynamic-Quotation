@@ -1153,19 +1153,30 @@ export default function QuoteForm() {
 
   // ── DRAFT AUTO-SAVE: write every 30 seconds to the DB ─────────────────────
   useEffect(() => {
-    const save = async () => {
-      // Only autosave if the tab is active
-      if (document.visibilityState !== 'visible') return;
+    // Only autosave to LocalStorage if we have meaningful work to protect, 
+    // or if we are already in the middle of a session.
+    // This prevents a NEW blank form from overwriting an OLD draft from a previous session.
+    const isMeaningful = subject.trim() !== '' || 
+                         selectedCustomerId !== '' || 
+                         items.some(i => i.description.trim() !== '');
 
-      // Don't save if the form is effectively blank (no subject, no customer, and no item descriptions)
-      const isMeaningful = subject.trim() !== '' || 
-                           selectedCustomerId !== '' || 
-                           items.some(i => i.description.trim() !== '');
-      
-      if (!isMeaningful) return;
+    if (isMeaningful) {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup,
+        selectedCustomerId, selectedCustomer, customerSearch,
+        note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
+        manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
+        bankDetails, bankDetailsAr, footer, footerAr, customFields,
+        savedAt: new Date().toISOString(),
+      }));
+    }
+
+    const save = async () => {
+      // Only autosave to DB if the tab is active and data is meaningful
+      if (document.visibilityState !== 'visible' || !isMeaningful) return;
 
       const draft = {
-        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate,
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup,
         selectedCustomerId, selectedCustomer, customerSearch,
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1174,19 +1185,22 @@ export default function QuoteForm() {
       };
 
       try {
+        if (!quoteId) return; // Cannot save to DB without an ID
+
         await fetch('/api/quotes/autosave', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             quote_id: quoteId, 
             draft_data: draft,
-            grand_total: grandTotal // Pass current total for Tracking list visibility
+            grand_total: grandTotal 
           })
         });
       } catch (e) {
         console.warn('Autosave failed:', e);
       }
     };
+
     const timer = setInterval(save, 30000);
     return () => clearInterval(timer);
   }, [quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate,
@@ -1211,6 +1225,7 @@ export default function QuoteForm() {
       if (d.items?.length) setItems(d.items);
       if (d.discount) setDiscount(d.discount);
       if (d.vatRate !== undefined) setVatRate(d.vatRate);
+      if (d.markup !== undefined) setMarkup(d.markup);
       if (d.note) setNote(d.note);
       if (d.noteAr) setNoteAr(d.noteAr);
       if (d.noteHeader) setNoteHeader(d.noteHeader);
