@@ -29,9 +29,14 @@ export default function CustomerDB() {
   }, []);
 
   const fetchCustomers = async () => {
-    const res = await fetch('/api/customers');
-    const data = await res.json();
-    setCustomers(data);
+    try {
+      const res = await fetch('/api/customers');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) setCustomers(data);
+    } catch (e) {
+      console.error('Failed to fetch customers', e);
+    }
   };
 
   const fetchStats = async () => {

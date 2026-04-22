@@ -73,9 +73,14 @@ export default function Tracking() {
   }, [searchParams]);
 
   const fetchQuotes = async () => {
-    const res = await fetch('/api/quotes');
-    const data = await res.json();
-    setQuotes(data);
+    try {
+      const res = await fetch('/api/quotes');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) setQuotes(data);
+    } catch (e) {
+      console.error('Failed to fetch quotes', e);
+    }
   };
 
   const handleRecall = (quote_id: string) => navigate(`/quote?recall=${quote_id}`);
@@ -113,9 +118,12 @@ export default function Tracking() {
   const fetchTimeline = async (id: string) => {
     try {
       const res = await fetch(`/api/quotes/${id}/timeline`);
+      if (!res.ok) return;
       const data = await res.json();
-      setTimelineData(data);
-      setTimelineQuoteId(id);
+      if (Array.isArray(data)) {
+        setTimelineData(data);
+        setTimelineQuoteId(id);
+      }
     } catch (e) { }
   };
 
