@@ -13,7 +13,14 @@ export default defineConfig(({ mode }) => {
       // Polyfill Node.js built-ins (stream, buffer, process, etc.) for
       // browser-incompatible packages like xlsx-js-style. Without this,
       // the app loads and then shows a blank white page.
-      nodePolyfills(),
+      nodePolyfills({
+        include: ['buffer', 'process', 'util', 'stream'],
+        globals: {
+          Buffer: true,
+          global: true,
+          process: true,
+        },
+      }),
     ],
     resolve: {
       alias: {
