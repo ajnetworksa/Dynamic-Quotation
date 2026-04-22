@@ -7,3 +7,8 @@ coverage/
 .env*
 !.env.example
 quotes.db
+*.db-wal
+*.db-shm
+*.db.backup*
+*.db.corrupt*
+quotes_recovered*
