@@ -304,9 +304,15 @@ export default function QuoteForm() {
   const [showDuration, setShowDuration] = useState(true);
   const [showBankDetails, setShowBankDetails] = useState(true);
   const [showCustomField, setShowCustomField] = useState(false);
+  const lastFetchRef = useRef<number>(0);
+  const FETCH_THROTTLE = 10000; // 10 seconds between background polls
+
 
   useEffect(() => {
     const init = async () => {
+      // If we are not visible and not on the quote page, don't trigger the heavy init sequence
+      if (document.visibilityState !== 'visible' && location.pathname !== '/quote') return;
+      
       const dbCustomers = await fetchCustomers();
       const dbProducts = await fetchProducts();
       fetchLogo();
@@ -322,11 +328,11 @@ export default function QuoteForm() {
       }
     };
     init();
-  }, [recallQuoteId]);
+  }, [recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refetch list of customers and products in the background when returning to the tab
   useEffect(() => {
-    if (location.pathname === '/quote') {
+    if (location.pathname === '/quote' && document.visibilityState === 'visible') {
       fetchCustomers();
       fetchProducts();
     }
@@ -334,41 +340,70 @@ export default function QuoteForm() {
 
   // Refetch lists when the browser tab gains focus (e.g. from another tab or window)
   // or via a regular background sync every 15 seconds so data is always fresh.
-  // Using refs so the callbacks always call the latest version (no stale closures).
   useEffect(() => {
     const handleFocus = () => {
-      fetchCustomersRef.current();
-      fetchProductsRef.current();
+      if (document.visibilityState === 'visible') {
+        fetchCustomersRef.current();
+        fetchProductsRef.current();
+      }
     };
 
     window.addEventListener('focus', handleFocus);
-    const interval = setInterval(handleFocus, 15000);
+    window.addEventListener('visibilitychange', handleFocus);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible' || location.pathname === '/quote') {
+        handleFocus();
+      }
+    }, 30000); // Increased interval to 30s to reduce load
 
     return () => {
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('visibilitychange', handleFocus);
       clearInterval(interval);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchCustomers = async () => {
-    const res = await fetch(`/api/customers?_t=${Date.now()}`);
-    const data = await res.json();
-    setCustomers(data);
-    return data;
+    // Don't fetch if tab is hidden and we fetched recently
+    if (document.visibilityState !== 'visible' && Date.now() - lastFetchRef.current < FETCH_THROTTLE) {
+      return customers;
+    }
+    
+    try {
+      const res = await fetch(`/api/customers?_t=${Date.now()}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setCustomers(data);
+        lastFetchRef.current = Date.now();
+      }
+      return Array.isArray(data) ? data : [];
+    } catch { return []; }
   };
 
   const fetchProducts = async () => {
-    const res = await fetch(`/api/products?_t=${Date.now()}`);
-    const data = await res.json();
-    setProducts(data);
-    return data;
+    // Don't fetch if tab is hidden and we fetched recently
+    if (document.visibilityState !== 'visible' && Date.now() - lastFetchRef.current < FETCH_THROTTLE) {
+      return products;
+    }
+
+    try {
+      const res = await fetch(`/api/products?_t=${Date.now()}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setProducts(data);
+        lastFetchRef.current = Date.now();
+      }
+      return Array.isArray(data) ? data : [];
+    } catch { return []; }
   };
 
   // Keep a ref to always-latest fetch functions so focus/interval never get stale closures
   const fetchCustomersRef = useRef(fetchCustomers);
-  const fetchProductsRef  = useRef(fetchProducts);
+  const fetchProductsRef = useRef(fetchProducts);
   useEffect(() => { fetchCustomersRef.current = fetchCustomers; });
-  useEffect(() => { fetchProductsRef.current  = fetchProducts; });
+  useEffect(() => { fetchProductsRef.current = fetchProducts; });
 
   const fetchLogo = async () => {
     try {
@@ -872,7 +907,7 @@ export default function QuoteForm() {
         },
         body: formData
       });
-      
+
       if (res.ok) {
         const data = await res.json();
         if (data.items && data.items.length > 0) {
@@ -885,7 +920,7 @@ export default function QuoteForm() {
             unit_price: 0,
             net_price: 0
           }));
-          
+
           setItems(prev => {
             const temp = prev.filter(p => p.description.trim() !== '');
             return [...temp, ...mappedItems];
@@ -967,8 +1002,20 @@ export default function QuoteForm() {
     const desc = (item.description || '').toLowerCase();
     if (muFilters.excluded.some(kw => desc.includes(kw.toLowerCase()))) return 'EXCL';
     if (muFilters.zeroMarkup.some(kw => desc.includes(kw.toLowerCase()))) return 'ZM';
-    if (item.manual_price !== undefined && item.manual_price !== null) return 'MAN';
-    if (item.original_price !== undefined && item.original_price !== null) return 'DB';
+
+    const hasManual = item.manual_price !== undefined && item.manual_price !== null;
+    const hasDB = item.original_price !== undefined && item.original_price !== null;
+    // User requested: only overwrite base price if it contains 'materials'
+    const isSpecial = desc.includes('materials');
+
+    if (hasManual) {
+      // Use manual price as the BASE calculation if it's special OR if no DB price exists to fall back on
+      if (isSpecial || !hasDB) {
+        return 'MAN';
+      }
+    }
+
+    if (hasDB) return 'DB';
     return '--';
   };
 
@@ -990,7 +1037,7 @@ export default function QuoteForm() {
       let itemBaseUnit = 0;
       if (rule === 'MAN') itemBaseUnit = item.manual_price!;
       else if (rule === 'DB') itemBaseUnit = item.original_price!;
-      
+
       const itemBaseTotal = itemBaseUnit * item.qty;
       baseTotal += itemBaseTotal;
       markupProfit += (saleTotal - itemBaseTotal);
@@ -1116,7 +1163,7 @@ export default function QuoteForm() {
         bankDetails, bankDetailsAr, footer, footerAr, customFields,
         savedAt: new Date().toISOString(),
       };
-      
+
       try {
         await fetch('/api/quotes/autosave', {
           method: 'POST',
@@ -1590,7 +1637,7 @@ export default function QuoteForm() {
       if (rowNumber === 1 || firstCellVal === 'CUSTOMER INFO' || firstCellVal === 'TERMS & CONDITIONS' || firstCellVal === 'ITEM' || firstCellVal === 'DESCRIPTION') {
         row.eachCell(cell => {
           if (cell.value) {
-             cell.font = { name: 'Arial', size: 10, bold: true };
+            cell.font = { name: 'Arial', size: 10, bold: true };
           }
         });
       }
@@ -1598,7 +1645,7 @@ export default function QuoteForm() {
 
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    
+
     // ── EXCEL FILENAME ──────────────────────────────────────────────────────────
     // Same naming convention as the PDF export above.
     const excelCustomerName = (selectedCustomer?.name || 'Unknown')
@@ -1968,14 +2015,14 @@ export default function QuoteForm() {
                                 {(() => {
                                   const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
                                   const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-                                  
+
                                   if (searchTerms.length === 0) return [];
 
                                   return products
                                     .filter(p => {
                                       const desc = p.description.toLowerCase();
                                       if (desc === item.description.toLowerCase()) return false;
-                                      
+
                                       const normDesc = normalize(desc);
                                       return searchTerms.every(term => {
                                         const nTerm = normalize(term);
@@ -1983,22 +2030,22 @@ export default function QuoteForm() {
                                       });
                                     })
                                     .map(p => (
-                                    <div
-                                      key={p.id}
-                                      className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
-                                      onClick={() => {
-                                        handleProductSelect(index, p.id.toString());
-                                        setFocusedDescriptionIndex(null);
-                                        handleProductAutoTranslate(index, p.description, '');
-                                      }}
-                                    >
-                                      <div className="font-medium">{p.description}</div>
-                                      {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                    </div>
+                                      <div
+                                        key={p.id}
+                                        className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                        onClick={() => {
+                                          handleProductSelect(index, p.id.toString());
+                                          setFocusedDescriptionIndex(null);
+                                          handleProductAutoTranslate(index, p.description, '');
+                                        }}
+                                      >
+                                        <div className="font-medium">{p.description}</div>
+                                        {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                      </div>
                                     ))
-                                  })()}
-                                </div>
-                              )}
+                                })()}
+                              </div>
+                            )}
                             <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
                               <div className="relative flex items-center">
                                 <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
@@ -2487,7 +2534,7 @@ export default function QuoteForm() {
                     const rule = getItemRule(item);
                     let displayBase = 0;
                     let displayTotal = 0;
-                    
+
                     if (rule === 'EXCL') {
                       displayBase = 0;
                       displayTotal = 0;

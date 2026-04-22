@@ -54,6 +54,7 @@ console.error = (...args) => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 const app = express();
+app.set('trust proxy', 1); // Trust first proxy to allow express-rate-limit to get the real IP
 const PORT = Number(process.env.PORT) || 3000;
 
 // Setup OpenAI (OpenRouter) Client
@@ -108,7 +109,7 @@ const loginLimiter = rateLimit({
 // automated scraping/DoS without affecting real users.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 5000, // Further increased to avoid 429 during active multi-tab usage
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.path === '/api/login', // login has its own limiter
@@ -123,6 +124,8 @@ const BCRYPT_ROUNDS = 12;
 
 // Initialize SQLite Database
 const db = new Database('quotes.db');
+db.pragma('journal_mode = WAL'); // Enable Write-Ahead Logging for better concurrency with multiple tabs
+
 
 // Create tables if they don't exist
 db.exec(`
@@ -652,10 +655,15 @@ app.get('/api/customers', requireAuth, (req, res) => {
 });
 
 app.post('/api/customers', requireAuth, validate(CustomerSchema), (req, res) => {
-  const { name, address, contact, mobile, email } = req.body;
-  const stmt = db.prepare('INSERT INTO customers (name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?)');
-  const info = stmt.run(name, address ?? null, contact ?? null, mobile ?? null, email ?? null);
-  res.json({ id: info.lastInsertRowid });
+  try {
+    const { name, address, contact, mobile, email } = req.body;
+    const stmt = db.prepare('INSERT INTO customers (name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?)');
+    const info = stmt.run(name, address ?? null, contact ?? null, mobile ?? null, email ?? null);
+    res.json({ id: info.lastInsertRowid });
+  } catch (error: any) {
+    console.error('Add customer error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.put('/api/customers/:id', requireAuth, validate(CustomerSchema), (req, res) => {
@@ -685,10 +693,15 @@ app.post('/api/products', requireAuth, validate(ProductSchema), (req, res) => {
 });
 
 app.put('/api/products/:id', requireAuth, validate(ProductSchema), (req, res) => {
-  const { description, description_ar, unit, unit_price } = req.body;
-  const stmt = db.prepare('UPDATE products SET description = ?, description_ar = ?, unit = ?, unit_price = ? WHERE id = ?');
-  stmt.run(description, description_ar ?? null, unit ?? null, unit_price, req.params.id);
-  res.json({ success: true });
+  try {
+    const { description, description_ar, unit, unit_price } = req.body;
+    const stmt = db.prepare('UPDATE products SET description = ?, description_ar = ?, unit = ?, unit_price = ? WHERE id = ?');
+    stmt.run(description, description_ar ?? null, unit ?? null, unit_price, req.params.id);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Update product error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.delete('/api/products/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
@@ -722,13 +735,18 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
 });
 
 app.get('/api/quotes', requireAuth, (req, res) => {
-  const quotes = db.prepare(`
-    SELECT q.*, c.name as customer_name 
-    FROM quotes q 
-    LEFT JOIN customers c ON q.customer_id = c.id
-    ORDER BY q.id DESC
-  `).all();
-  res.json(quotes);
+  try {
+    const quotes = db.prepare(`
+      SELECT q.*, c.name as customer_name 
+      FROM quotes q 
+      LEFT JOIN customers c ON q.customer_id = c.id
+      ORDER BY q.id DESC
+    `).all();
+    res.json(quotes);
+  } catch (error: any) {
+    console.error('Fetch quotes error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ── Optimistic Concurrency Lock ───────────────────────────────────────────────

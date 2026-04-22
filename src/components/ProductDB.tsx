@@ -23,9 +23,14 @@ export default function ProductDB() {
   useEffect(() => { fetchProducts(); }, []);
 
   const fetchProducts = async () => {
-    const res = await fetch('/api/products');
-    const data = await res.json();
-    setProducts(data);
+    try {
+      const res = await fetch('/api/products');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) setProducts(data);
+    } catch (e) {
+      console.error('Failed to fetch products', e);
+    }
   };
 
   const handleAdd = async () => {

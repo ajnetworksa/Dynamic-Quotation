@@ -32,8 +32,11 @@ export default function Dashboard() {
     const fetchQuotes = async () => {
         try {
             const res = await fetch('/api/quotes');
+            if (!res.ok) return;
             const data = await res.json();
-            setQuotes(data);
+            if (Array.isArray(data)) {
+                setQuotes(data);
+            }
         } catch (err) {
             console.error('Failed to load dashboard data', err);
         }
