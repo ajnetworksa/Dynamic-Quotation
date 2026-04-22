@@ -12,3 +12,4 @@ quotes.db
 *.db.backup*
 *.db.corrupt*
 quotes_recovered*
+*.db-wal
