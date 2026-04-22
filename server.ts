@@ -25,7 +25,33 @@ import crypto from 'crypto';
 import 'dotenv/config';
 import multer from 'multer';
 import OpenAI from 'openai';
+import fs from 'fs';
 import { z, ZodSchema } from 'zod';
+
+// ── FILE LOGGING FOR BACKEND DEBUGGING ────────────────────────────────────────
+const LOG_FILE = path.join(__dirname, 'error.log');
+const appendToFileLog = (message: string) => {
+  const timestamp = new Date().toISOString();
+  const logEntry = `[${timestamp}] ${message}\n`;
+  fs.appendFile(LOG_FILE, logEntry, (err) => {
+    // If writing to file fails, we only have original stdout left
+    if (err) process.stdout.write(`Failed to write to log file: ${err}\n`);
+  });
+};
+
+const originalConsoleError = console.error;
+console.error = (...args) => {
+  originalConsoleError(...args);
+  try {
+    const message = args.map(arg => 
+      typeof arg === 'object' ? (arg instanceof Error ? arg.stack || arg.message : JSON.stringify(arg)) : String(arg)
+    ).join(' ');
+    appendToFileLog(`CONSOLE_ERROR | ${message}`);
+  } catch (e) {
+    // ignore formatting errors
+  }
+};
+// ──────────────────────────────────────────────────────────────────────────────
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -293,6 +319,8 @@ for (const u of allUsers) {
 const logSystemError = (source: string, type: string, message: string, details: string | null = null) => {
   try {
     db.prepare('INSERT INTO system_logs (level, source, type, message, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)').run('ERROR', source, type, message, details, new Date().toISOString());
+    // Write directly to file log as well
+    appendToFileLog(`DB_ERROR | ${source} | ${type} | ${message} | ${details || ''}`);
   } catch (e) {
     console.error('Failed to write to system logs:', e);
   }
