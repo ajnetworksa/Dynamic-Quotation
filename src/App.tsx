@@ -150,6 +150,7 @@ function MainLayout({ user, handleLogout }: { user: any, handleLogout: () => voi
           <Route path="/products" element={<ProductDB />} />
           <Route path="/customers" element={<CustomerDB />} />
           <Route path="/tracking" element={<Tracking />} />
+          <Route path="/quote" element={null} />
           {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
             <Route path="/users" element={<UsersDB />} />
           )}

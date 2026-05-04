@@ -25,6 +25,16 @@ import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 
+// Safe UUID/ID generator for non-HTTPS or older environments
+const generateId = () => {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch (e) {}
+  return Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+};
+
 interface Customer {
   id: number;
   name: string;
@@ -279,7 +289,7 @@ export default function QuoteForm() {
   const [templates, setTemplates] = useState<{ name: string; data: any }[]>([]);
 
   const addCustomField = () => {
-    setCustomFields([...customFields, { id: crypto.randomUUID(), header: 'CUSTOM FIELD:', value: '', valueAr: '' }]);
+    setCustomFields([...customFields, { id: generateId(), header: 'CUSTOM FIELD:', value: '', valueAr: '' }]);
     setShowCustomField(true);
   };
 
@@ -324,7 +334,7 @@ export default function QuoteForm() {
         const draft = localStorage.getItem(DRAFT_KEY);
         if (draft) setDraftBanner(true);
         generateQuoteId();
-        setItems([{ id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+        setItems([{ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
       }
     };
     init();
@@ -777,7 +787,7 @@ export default function QuoteForm() {
             parsedCustomFields = parsed;
           } else {
             parsedCustomFields = [{
-              id: crypto.randomUUID(),
+              id: generateId(),
               header: data.custom_field_header || 'CUSTOM FIELD:',
               value: data.custom_field || '',
               valueAr: data.custom_field_ar || ''
@@ -785,7 +795,7 @@ export default function QuoteForm() {
           }
         } catch (e) {
           parsedCustomFields = [{
-            id: crypto.randomUUID(),
+            id: generateId(),
             header: data.custom_field_header || 'CUSTOM FIELD:',
             value: data.custom_field || '',
             valueAr: data.custom_field_ar || ''
@@ -806,7 +816,7 @@ export default function QuoteForm() {
 
         return {
           ...item,
-          id: crypto.randomUUID(),
+          id: generateId(),
           original_price: original_price !== null ? original_price : undefined,
           manual_price: item.manual_price !== null ? item.manual_price : undefined
         };
@@ -864,7 +874,7 @@ export default function QuoteForm() {
     setBankDetailsAr('');
     setFooter('Thank you for your business!');
     setFooterAr('شكرا لتعاملكم معنا!');
-    setItems([{ id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+    setItems([{ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
   };
 
   const handleProductSelect = (index: number, productId: string) => {
@@ -912,7 +922,7 @@ export default function QuoteForm() {
         const data = await res.json();
         if (data.items && data.items.length > 0) {
           const mappedItems: QuoteItem[] = data.items.map((it: any) => ({
-            id: crypto.randomUUID(),
+            id: generateId(),
             description: it.description,
             description_ar: '', // Will let user auto-translate it later
             qty: it.qty || 1,
@@ -966,13 +976,13 @@ export default function QuoteForm() {
   };
 
   const addItem = () => {
-    setItems([...items, { id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+    setItems([...items, { id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
   };
 
   const removeItem = (index: number) => {
     if (!window.confirm('Are you sure you want to remove this item?')) return;
     const newItems = items.filter((_, i) => i !== index);
-    setItems(newItems.length ? newItems : [{ id: crypto.randomUUID(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+    setItems(newItems.length ? newItems : [{ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
   };
 
   const moveItemUp = (index: number) => {
