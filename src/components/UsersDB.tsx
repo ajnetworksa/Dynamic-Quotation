@@ -12,6 +12,7 @@ interface Permissions {
   canViewRevenue?: boolean;
   canViewAllQuotes?: boolean;
   canViewCreatedBy?: boolean;
+  canViewHistory?: boolean;
 }
 
 interface AppUser {
@@ -81,6 +82,12 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
     label: 'View Creator Info',
     icon: <UserCheck size={14} />,
     description: 'Can see the "Created By" column and filter quotes by creator in Tracking',
+  },
+  {
+    key: 'canViewHistory',
+    label: 'View Quote History',
+    icon: <Database size={14} />,
+    description: 'Can access the detailed timeline and history of changes for quotations',
   },
 ];
 

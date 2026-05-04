@@ -1143,6 +1143,13 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
   try {
     const quoteId = req.params.quote_id;
     const currentUser = (req as any).user;
+    
+    // First, check if they are even allowed to view history
+    const canViewHistory = currentUser.role === 'admin' || !!currentUser.permissions?.canViewHistory;
+    if (!canViewHistory) {
+      return res.status(403).json({ error: 'Access denied: You do not have permission to view quote history.' });
+    }
+
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
     const quote = db.prepare(`
