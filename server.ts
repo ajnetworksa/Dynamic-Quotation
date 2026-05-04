@@ -282,6 +282,7 @@ addColumnIfNotExists('system_logs', 'type', 'TEXT DEFAULT "Unknown"');
 addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
 addColumnIfNotExists('quotes', 'version', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'draft_data', 'TEXT');
+addColumnIfNotExists('activity_log', 'details', 'TEXT'); // stores JSON array of field changes
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -413,7 +414,9 @@ const hasPermission = (user: any, perm: string) => {
 };
 
 const requirePermission = (perm: string) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (!hasPermission((req as any).user, perm)) {
+  const user = (req as any).user;
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!hasPermission(user, perm)) {
     return res.status(403).json({ error: `Forbidden: Missing ${perm} permission` });
   }
   next();
@@ -427,9 +430,10 @@ const validate = (schema: ZodSchema) =>
   (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
+      const errors = result.error?.errors ?? [];
       return res.status(400).json({
         error: 'Validation failed',
-        details: (result.error as any).errors.map((e: any) => `${e.path.join('.')}: ${e.message}`)
+        details: errors.map((e: any) => `${e.path.join('.')}: ${e.message}`)
       });
     }
     req.body = result.data; // replace with coerced/stripped data
@@ -439,10 +443,10 @@ const validate = (schema: ZodSchema) =>
 // ── ZOD SCHEMAS ───────────────────────────────────────────────────────────────
 const CustomerSchema = z.object({
   name:    z.string().min(1).max(200),
-  address: z.string().max(500).optional(),
-  contact: z.string().max(200).optional(),
-  mobile:  z.string().max(50).optional(),
-  email:   z.string().email().optional().or(z.literal('')),
+  address: z.string().max(500).nullable().optional(),
+  contact: z.string().max(200).nullable().optional(),
+  mobile:  z.string().max(50).nullable().optional(),
+  email:   z.string().email().nullable().optional().or(z.literal('')),
 });
 
 const ProductSchema = z.object({
@@ -455,7 +459,7 @@ const ProductSchema = z.object({
 const UserCreateSchema = z.object({
   username:    z.string().min(1).max(128),
   password:    z.string().min(4).max(128),
-  role:        z.enum(['admin', 'user']).default('user'),
+  role:        z.enum(['admin', 'user', 'editor']).default('user'),
   permissions: z.record(z.string(), z.boolean()).optional().default({}),
 });
 
@@ -736,12 +740,29 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
 
 app.get('/api/quotes', requireAuth, (req, res) => {
   try {
-    const quotes = db.prepare(`
-      SELECT q.*, c.name as customer_name 
-      FROM quotes q 
-      LEFT JOIN customers c ON q.customer_id = c.id
-      ORDER BY q.id DESC
-    `).all();
+    const currentUser = (req as any).user;
+    // Admins always see all quotes.
+    // Non-admins see all quotes only if they have the 'canViewAllQuotes' permission.
+    // Otherwise they are restricted to only the quotes they created.
+    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+
+    const quotes = canSeeAll
+      ? db.prepare(`
+          SELECT q.*, c.name as customer_name, u.username as author_username
+          FROM quotes q 
+          LEFT JOIN customers c ON q.customer_id = c.id
+          LEFT JOIN users u ON q.author_id = u.id
+          ORDER BY q.id DESC
+        `).all()
+      : db.prepare(`
+          SELECT q.*, c.name as customer_name, u.username as author_username
+          FROM quotes q 
+          LEFT JOIN customers c ON q.customer_id = c.id
+          LEFT JOIN users u ON q.author_id = u.id
+          WHERE q.author_id = ?
+          ORDER BY q.id DESC
+        `).all(currentUser.id);
+
     res.json(quotes);
   } catch (error: any) {
     console.error('Fetch quotes error:', error);
@@ -752,32 +773,51 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 // ── Optimistic Concurrency Lock ───────────────────────────────────────────────
 app.get('/api/quotes/:quote_id/lock', requireAuth, (req, res) => {
   try {
-    const row = db.prepare('SELECT version FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number } | undefined;
-    res.json({ version: row ? row.version : 1 });
+    const currentUser = (req as any).user;
+    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+    const row = db.prepare('SELECT version, author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number; author_id: number } | undefined;
+    if (!row) return res.status(404).json({ error: 'Quote not found' });
+    if (!canSeeAll && row.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
+    res.json({ version: row.version ?? 1 });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch lock' });
   }
 });
 
 app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
-  const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ?').get(req.params.quote_id);
-  if (quote) {
-    const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id);
-    res.json({ ...quote, items });
-  } else {
-    res.status(404).json({ error: 'Quote not found' });
+  const currentUser = (req as any).user;
+  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+
+  const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+  if (!quote) return res.status(404).json({ error: 'Quote not found' });
+
+  // Ownership check — block users who don't own this quote and lack elevated access
+  if (!canSeeAll && quote.author_id !== currentUser.id) {
+    return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
   }
+
+  const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id);
+  res.json({ ...quote, items });
 });
 
 app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
   const quoteId = req.params.quote_id;
+  const currentUser = (req as any).user;
+  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+
   // Get base ID: 'AJ-12345-R2' -> 'AJ-12345'
   const baseIdMatch = quoteId.match(/^(AJ-\d+)/);
   if (!baseIdMatch) return res.status(400).json({ error: 'Invalid Quote ID format' });
-  
   const baseId = baseIdMatch[1];
-  
-  // Fetch all quotes starting with this base ID 
+
+  // Ownership check — verify access using the base (original) quote
+  if (!canSeeAll) {
+    const base = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(baseId) as { author_id: number } | undefined;
+    if (!base) return res.status(404).json({ error: 'Quote not found' });
+    if (base.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
+  }
+
+  // Fetch all quotes starting with this base ID
   const history = db.prepare(`
     SELECT q.*, c.name as customer_name 
     FROM quotes q 
@@ -797,6 +837,15 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
 app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
   const { to, subject, body, pdfHtml } = req.body;
   const quote_id = req.params.quote_id;
+
+  // Ownership check
+  const currentUser = (req as any).user;
+  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+  const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+  if (!quote) return res.status(404).json({ error: 'Quote not found' });
+  if (!canSeeAll && quote.author_id !== currentUser.id) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
 
   try {
     const configRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('smtpConfig') as { value: string };
@@ -838,8 +887,16 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
       const timestamp = new Date().toISOString();
       
       // Check if the quote exists
-      const existing = db.prepare('SELECT id FROM quotes WHERE quote_id = ?').get(quote_id);
+      const existing = db.prepare('SELECT id, author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
       
+      // Ownership check — block autosave to someone else's quote
+      if (existing) {
+        const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+        if (!canSeeAll && existing.author_id !== currentUser.id) {
+          return res.status(403).json({ error: 'Access denied' });
+        }
+      }
+
       if (existing) {
         db.prepare(`
           UPDATE quotes 
@@ -858,10 +915,10 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
           quote_id
         );
       } else {
-        // Create a shell quote row just for the draft
+        // Create a shell quote row just for the draft — record author_id so ownership is tracked
         db.prepare(`
-          INSERT INTO quotes (quote_id, date, status, type, draft_data, subject, subject_ar, customer_id, grand_total) 
-          VALUES (?, ?, 'Draft', 'Quotation', ?, ?, ?, ?, ?)
+          INSERT INTO quotes (quote_id, date, status, type, draft_data, subject, subject_ar, customer_id, grand_total, author_id) 
+          VALUES (?, ?, 'Draft', 'Quotation', ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, 
           new Date().toISOString().split('T')[0], 
@@ -869,7 +926,8 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
           draft_data.subject || null,
           draft_data.subjectAr || null,
           draft_data.selectedCustomerId || null,
-          grand_total || null
+          grand_total || null,
+          (req as any).user?.id || null
         );
       
       db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
@@ -893,11 +951,107 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     version, force
   } = req.body;
   const updated_at = new Date().toISOString();
-  const actor = (req as any).user?.username || 'system';
+  const currentUser = (req as any).user;
+  const actor = currentUser?.username || 'system';
 
   try {
-    const existing = db.prepare('SELECT id, version, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    // Fetch full old state (including customer name) for diff comparison
+    const existing = db.prepare(`
+      SELECT q.id, q.version, q.status, q.type, q.subject, q.grand_total,
+             q.discount, q.date, q.expiry_date, q.note, q.payment, q.warranty,
+             q.customer_id, q.author_id, c.name as customer_name
+      FROM quotes q
+      LEFT JOIN customers c ON q.customer_id = c.id
+      WHERE q.quote_id = ?
+    `).get(quote_id) as any;
+
+    // Ownership check — block editing someone else's quote
+    if (existing) {
+      const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+      if (!canSeeAll && existing.author_id !== currentUser.id) {
+        return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
+      }
+    }
+
     let finalVersion = 1;
+
+    // Build a human-readable diff before the transaction mutates the DB
+    let logDetails: string | null = null;
+    if (existing) {
+      // Resolve the new customer name for comparison
+      const newCustomerName = customer_id
+        ? ((db.prepare('SELECT name FROM customers WHERE id = ?').get(customer_id) as any)?.name ?? null)
+        : null;
+
+      const fmt    = (v: any) => (v === null || v === undefined || v === '') ? '—' : String(v);
+      const fmtNum = (v: any) => (v === null || v === undefined) ? '—' : Number(v).toLocaleString();
+
+      // ── Header field diff ──────────────────────────────────────────────────
+      const checks: { label: string; oldVal: string; newVal: string }[] = [
+        { label: 'Customer',    oldVal: fmt(existing.customer_name),  newVal: fmt(newCustomerName) },
+        { label: 'Subject',     oldVal: fmt(existing.subject),        newVal: fmt(subject) },
+        { label: 'Status',      oldVal: fmt(existing.status),         newVal: fmt(status || 'Draft') },
+        { label: 'Type',        oldVal: fmt(existing.type),           newVal: fmt(type || 'Quotation') },
+        { label: 'Date',        oldVal: fmt(existing.date),           newVal: fmt(date) },
+        { label: 'Expiry Date', oldVal: fmt(existing.expiry_date),    newVal: fmt(expiry_date) },
+        { label: 'Grand Total', oldVal: fmtNum(existing.grand_total), newVal: fmtNum(grand_total) },
+        { label: 'Discount',    oldVal: fmtNum(existing.discount),    newVal: fmtNum(discount ?? 0) },
+        { label: 'Note',        oldVal: fmt(existing.note),           newVal: fmt(note) },
+        { label: 'Payment',     oldVal: fmt(existing.payment),        newVal: fmt(payment) },
+        { label: 'Warranty',    oldVal: fmt(existing.warranty),       newVal: fmt(warranty) },
+      ];
+
+      const changes = checks
+        .filter(c => c.oldVal !== c.newVal)
+        .map(c => ({ field: c.label, from: c.oldVal, to: c.newVal }));
+
+      // ── Line-item diff ─────────────────────────────────────────────────────
+      // Fetch old items BEFORE the transaction deletes them
+      const oldItems = db.prepare(
+        'SELECT description, qty, unit_price FROM quote_items WHERE quote_id = ?'
+      ).all(quote_id) as { description: string; qty: number; unit_price: number }[];
+
+      const normDesc = (s: string) => (s || '').trim().toLowerCase();
+      const fmtItem  = (desc: string, qty: number, price: number) =>
+        `${desc} × ${Number(qty)} @ SAR ${Number(price).toLocaleString()}`;
+
+      // Map keyed by normalised description
+      const oldMap = new Map(oldItems.map(i => [normDesc(i.description), i]));
+      const newMap = new Map(
+        (items as any[]).map(i => [normDesc(i.description), i])
+      );
+
+      // Items removed
+      for (const [key, o] of oldMap.entries()) {
+        if (!newMap.has(key)) {
+          changes.push({ field: 'Item Removed', from: fmtItem(o.description, o.qty, o.unit_price), to: '—' });
+        }
+      }
+
+      // Items added
+      for (const [key, n] of newMap.entries()) {
+        if (!oldMap.has(key)) {
+          changes.push({ field: 'Item Added', from: '—', to: fmtItem(n.description, n.qty, n.unit_price) });
+        }
+      }
+
+      // Items that exist in both but changed qty or price
+      for (const [key, o] of oldMap.entries()) {
+        const n = newMap.get(key);
+        if (!n) continue;
+        const qtyChanged   = Number(o.qty)        !== Number(n.qty);
+        const priceChanged = Number(o.unit_price)  !== Number(n.unit_price);
+        if (qtyChanged || priceChanged) {
+          changes.push({
+            field: `Item Changed: ${o.description}`,
+            from: `Qty ${o.qty} @ SAR ${Number(o.unit_price).toLocaleString()}`,
+            to:   `Qty ${n.qty} @ SAR ${Number(n.unit_price).toLocaleString()}`,
+          });
+        }
+      }
+
+      if (changes.length > 0) logDetails = JSON.stringify(changes);
+    }
 
     db.transaction(() => {
       if (existing) {
@@ -925,11 +1079,11 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           finalVersion, quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
-        
+
         const action = existing.status !== (status || 'Draft')
           ? `Status changed to ${status || 'Draft'}`
           : 'Updated';
-        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, action, actor, updated_at);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, action, actor, updated_at, logDetails);
       } else {
         db.prepare(`
           INSERT INTO quotes (
@@ -946,7 +1100,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, 1
         );
-        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
 
       const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -966,6 +1120,13 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
 
 app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
   try {
+    const currentUser = (req as any).user;
+    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+    if (!quote) return res.status(404).json({ error: 'Quote not found' });
+    if (!canSeeAll && quote.author_id !== currentUser.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     db.transaction(() => {
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(req.params.quote_id);
       db.prepare('DELETE FROM activity_log WHERE quote_id = ?').run(req.params.quote_id);
@@ -979,8 +1140,33 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
 
 // ── Quote Timeline ────────────────────────────────────────────────────────────
 app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM activity_log WHERE quote_id = ? ORDER BY timestamp ASC').all(req.params.quote_id);
-  res.json(rows);
+  try {
+    const quoteId = req.params.quote_id;
+    const currentUser = (req as any).user;
+    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+
+    const quote = db.prepare(`
+      SELECT q.quote_id, q.date, q.status, q.type, q.updated_at, q.author_id,
+             c.name as customer_name, u.username as author_username
+      FROM quotes q
+      LEFT JOIN customers c ON q.customer_id = c.id
+      LEFT JOIN users u ON q.author_id = u.id
+      WHERE q.quote_id = ?
+    `).get(quoteId) as any;
+
+    if (!quote) return res.status(404).json({ error: 'Quote not found' });
+    if (!canSeeAll && quote.author_id !== currentUser.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const logs = db.prepare(
+      'SELECT * FROM activity_log WHERE quote_id = ? ORDER BY timestamp ASC'
+    ).all(quoteId);
+
+    res.json({ quote, logs });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ── Bulk Status Update ────────────────────────────────────────────────────────
@@ -1120,8 +1306,18 @@ app.get('/api/admin/backup', requireAuth, requirePermission('canDatabaseMaintena
 });
 
 app.get('/api/settings/:key', requireAuth, (req, res) => {
+  const sensitiveKeys = ['smtpConfig', 'logExpirationDays'];
+  const key = req.params.key;
+
+  if (sensitiveKeys.includes(key)) {
+    const user = (req as any).user;
+    if (!hasPermission(user, 'canManageSettings')) {
+      return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
+    }
+  }
+
   try {
-    const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get(req.params.key) as { value: string } | undefined;
+    const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     res.json({ value: setting ? setting.value : null });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1238,19 +1434,26 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
   if (!question) return res.status(400).json({ error: 'No question provided' });
 
   try {
+    const currentUser = (req as any).user;
+    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+
     const schemaDefs = `
       Table Customers (id INTEGER, name TEXT, address TEXT, contact TEXT, mobile TEXT, email TEXT);
-      Table Quotes (id INTEGER, quote_id TEXT, date TEXT, customer_id INTEGER, subtotal REAL, tax REAL, grand_total REAL, status TEXT, markup REAL);
+      Table Quotes (id INTEGER, quote_id TEXT, date TEXT, customer_id INTEGER, subtotal REAL, tax REAL, grand_total REAL, status TEXT, markup REAL, author_id INTEGER);
       Table Quote_Items (id INTEGER, quote_id TEXT, product_id INTEGER, description TEXT, qty REAL, unit_price REAL, net_price REAL, original_price REAL, manual_price REAL);
     `;
 
+    const userInstructions = canSeeAll 
+      ? "You are an admin and can view all data."
+      : `IMPORTANT: You are user ID ${currentUser.id}. You MUST strictly include "WHERE author_id = ${currentUser.id}" in every query involving the Quotes table to ensure you only see your own data. If joining with Quote_Items, ensure you filter the parent Quote row by author_id.`;
+
     // Phase 1: Generate SQL formulation
     const sqlResponse = await openai.chat.completions.create({
-      model: "openrouter/free", // Automatically routes to best available free model
+      model: "openrouter/free", 
       messages: [
         {
           role: "system",
-          content: "You are an SQLite expert. Based on the following schema, generate ONLY a valid readonly SELECT query to answer the user's question. DO NOT include formatting like ```sql...```, just the query text. If you cannot answer it, return 'INVALID'.\n\n" + schemaDefs
+          content: `You are an SQLite expert. Based on the following schema, generate ONLY a valid readonly SELECT query to answer the user's question. DO NOT include formatting like \`\`\`sql...\`\`\`, just the query text. If you cannot answer it, return 'INVALID'.\n\n${schemaDefs}\n\n${userInstructions}`
         },
         { role: "user", content: question }
       ],

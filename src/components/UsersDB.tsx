@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Shield, User, Bot, FileSearch, Settings as SettingsIcon, Database, Users } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Shield, User, Bot, FileSearch, Settings as SettingsIcon, Database, Users, Eye, UserCheck } from 'lucide-react';
 
 interface Permissions {
   canUseRFQ?: boolean;
@@ -10,6 +10,8 @@ interface Permissions {
   canDatabaseMaintenance?: boolean;
   canOverridePrice?: boolean;
   canViewRevenue?: boolean;
+  canViewAllQuotes?: boolean;
+  canViewCreatedBy?: boolean;
 }
 
 interface AppUser {
@@ -67,6 +69,18 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
     label: 'AI Data Assistant',
     icon: <Bot size={14} />,
     description: 'Can access the AI chatbot to query the database',
+  },
+  {
+    key: 'canViewAllQuotes',
+    label: 'View All Quotes',
+    icon: <Eye size={14} />,
+    description: 'Can see all quotations in the system, not just their own',
+  },
+  {
+    key: 'canViewCreatedBy',
+    label: 'View Creator Info',
+    icon: <UserCheck size={14} />,
+    description: 'Can see the "Created By" column and filter quotes by creator in Tracking',
   },
 ];
 
