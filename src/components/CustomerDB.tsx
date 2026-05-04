@@ -51,25 +51,43 @@ export default function CustomerDB() {
 
   const handleAdd = async () => {
     if (!editForm.name) return;
-    await fetch('/api/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editForm),
-    });
-    setIsAdding(false);
-    setEditForm({});
-    fetchCustomers();
+    try {
+      const res = await fetch('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editForm),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert('Failed to add customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
+        return;
+      }
+      setIsAdding(false);
+      setEditForm({});
+      fetchCustomers();
+    } catch (e) {
+      alert('Network error occurred while adding.');
+    }
   };
 
   const handleUpdate = async (id: number) => {
-    await fetch(`/api/customers/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editForm),
-    });
-    setIsEditing(null);
-    setEditForm({});
-    fetchCustomers();
+    try {
+      const res = await fetch(`/api/customers/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editForm),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert('Failed to update customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
+        return;
+      }
+      setIsEditing(null);
+      setEditForm({});
+      fetchCustomers();
+    } catch (e) {
+      alert('Network error occurred while updating.');
+    }
   };
 
   const handleDelete = async (id: number) => {

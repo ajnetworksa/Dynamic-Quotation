@@ -9,14 +9,16 @@ A professional, dual-language (English/Arabic) quotation and invoice management 
 ## ✨ Key Features
 
 - **Dual-Language Support**: Complete English and Arabic localization for documents.
-- **AI Data Assistant**: Query your database using natural language (powered by Gemini/OpenRouter).
+- **AI Data Assistant**: Query your database using natural language (fully secured with ownership filtering).
+- **Comprehensive Audit History**: Field-level diffing for all quote updates (tracks Subject, Total, Status, etc.).
+- **Line-Item Change Tracking**: Detailed logging of every item added, removed, or modified in a quote revision.
 - **Automated Translation**: Instant translation of product descriptions into Arabic.
 - **Smart Search**: Multi-word fuzzy search for products (handles out-of-order keywords).
 - **Pricing Analysis Sidebar**: Real-time margin tracking and cost analysis while building quotes.
-- **Revision Tracking**: Create and compare multiple versions of the same quote.
-- **Export Options**: Professional PDF and Excel exports with localized formatting.
-- **User Roles**: Advanced permissions (Admin vs. Standard User).
-- **Security**: Password hashing (Bcrypt), secure sessions, and rate limiting.
+- **Advanced Permissions**: Granular toggles for "Creator Info" visibility and "View All" data access.
+- **Strict Data Security**: All endpoints enforce strict ownership—users can only access or modify their own quotations.
+- **Export Options**: Professional PDF and CSV exports with localized formatting.
+- **Security**: Password hashing (Bcrypt), secure sessions, and role-based access control.
 
 ---
 
@@ -113,6 +115,9 @@ Containerization ensures identical behavior across all environments.
 
 ### Module 2 — Defaults (Terms & Conditions)
 - Edit `src/components/QuoteForm.tsx` (around line 90) to change default VAT, payment terms, and bank details.
+
+### Module 3 — Permissions
+- **Visibility Control**: Use the **Users Database** (Admin only) to toggle whether users can see the "Created By" column or view all quotations in the system.
 
 ---
 
