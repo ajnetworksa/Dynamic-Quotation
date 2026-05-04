@@ -455,13 +455,15 @@ export default function Tracking() {
                   )}
                   <td className="p-4 text-right cursor-default" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => fetchTimeline(quote.quote_id)}
-                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="View Timeline"
-                      >
-                        <Clock size={18} />
-                      </button>
+                      {(user?.role === 'admin' || user?.permissions?.canViewHistory) && (
+                        <button
+                          onClick={() => fetchTimeline(quote.quote_id)}
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="View Timeline"
+                        >
+                          <Clock size={18} />
+                        </button>
+                      )}
                       <button
                         onClick={() => {
                           setFollowupQuoteId(quote.quote_id);
