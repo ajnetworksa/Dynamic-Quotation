@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import QuoteDiffViewer from './QuoteDiffViewer';
@@ -17,6 +17,7 @@ interface Quote {
   followup_date?: string;
   followup_note?: string;
   author_username?: string;
+  author_name?: string;
 }
 
 const STATUS_BADGE: Record<string, string> = {
@@ -65,6 +66,49 @@ export default function Tracking() {
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+
+  // ── Drag-to-scroll on the table container ─────────────────────────────
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const dragScroll = useRef({ active: false, startX: 0, scrollLeft: 0, hasDragged: false });
+
+  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Only trigger on primary button (left click), not on interactive elements
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('a,button,input,select,textarea,label')) return;
+    const el = tableScrollRef.current;
+    if (!el) return;
+    dragScroll.current = { active: true, startX: e.clientX, scrollLeft: el.scrollLeft, hasDragged: false };
+    el.style.cursor = 'grabbing';
+    el.style.userSelect = 'none';
+  };
+
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragScroll.current.active) return;
+    const el = tableScrollRef.current;
+    if (!el) return;
+    const dx = e.clientX - dragScroll.current.startX;
+    if (Math.abs(dx) > 5) dragScroll.current.hasDragged = true;
+    el.scrollLeft = dragScroll.current.scrollLeft - dx;
+  };
+
+  const onDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragScroll.current.active) return;
+    dragScroll.current.active = false;
+    const el = tableScrollRef.current;
+    if (!el) return;
+    el.style.cursor = 'grab';
+    el.style.userSelect = '';
+  };
+
+  const onClickCapture = (e: React.MouseEvent) => {
+    if (dragScroll.current.hasDragged) {
+      e.stopPropagation();
+      e.preventDefault();
+      dragScroll.current.hasDragged = false;
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const canSeeAll = user.role === 'admin' || !!user.permissions?.canViewAllQuotes;
   const showCreatedBy = user.role === 'admin' || !!user.permissions?.canViewCreatedBy;
@@ -346,7 +390,16 @@ export default function Tracking() {
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div
+        ref={tableScrollRef}
+        className="overflow-x-auto"
+        style={{ cursor: 'grab' }}
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onPointerLeave={onDragEnd}
+        onClickCapture={onClickCapture}
+      >
         <table className="w-full text-left border-collapse min-w-max">
           <thead>
             <tr className="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider">
@@ -425,18 +478,18 @@ export default function Tracking() {
                       </div>
                     )}
                   </td>
-                  <td className="p-4 font-medium text-gray-900">{quote.customer_name}</td>
-                  <td className="p-4 text-gray-600 truncate max-w-[200px]" title={quote.subject}>{quote.subject}</td>
+                  <td className="p-4 font-medium text-gray-900 cursor-text">{quote.customer_name}</td>
+                  <td className="p-4 text-gray-600 truncate max-w-[200px] cursor-text" title={quote.subject}>{quote.subject}</td>
                   <td className="p-4 font-mono font-medium text-gray-900">{quote.grand_total?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td className="p-4 text-gray-500 text-sm">
                     {quote.updated_at ? new Date(quote.updated_at).toLocaleString() : '-'}
                   </td>
                   {showCreatedBy && (
                     <td className="p-4">
-                      {quote.author_username ? (
+                      {quote.author_username || quote.author_name ? (
                         <button
                           onClick={e => { e.stopPropagation(); setCreatorFilter(creatorFilter === quote.author_username ? '' : (quote.author_username || '')); }}
-                          title={`Filter by ${quote.author_username}`}
+                          title={`Filter by ${quote.author_username || quote.author_name}`}
                           className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold border transition-colors ${
                             creatorFilter === quote.author_username
                               ? 'bg-indigo-600 text-white border-indigo-600'
@@ -444,9 +497,9 @@ export default function Tracking() {
                           }`}
                         >
                           <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 flex items-center justify-center font-bold text-[10px] shrink-0">
-                            {quote.author_username.charAt(0).toUpperCase()}
+                            {(quote.author_name || quote.author_username || '?').charAt(0).toUpperCase()}
                           </span>
-                          {quote.author_username}
+                          {quote.author_name || quote.author_username}
                         </button>
                       ) : (
                         <span className="text-xs text-gray-400">—</span>

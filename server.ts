@@ -27,6 +27,7 @@ import multer from 'multer';
 import OpenAI from 'openai';
 import fs from 'fs';
 import { z, ZodSchema } from 'zod';
+// import { GoogleGenerativeAI } from "@google/generative-ai"; // Switched to OpenRouter for better stability
 
 // ── FILE LOGGING FOR BACKEND DEBUGGING ────────────────────────────────────────
 const LOG_FILE = path.join(process.cwd(), 'error.log');
@@ -55,6 +56,10 @@ console.error = (...args) => {
 
 const app = express();
 app.set('trust proxy', 1); // Trust first proxy to allow express-rate-limit to get the real IP
+
+// Ignore favicon requests
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 const PORT = Number(process.env.PORT) || 3000;
 
 // Setup OpenAI (OpenRouter) Client
@@ -230,6 +235,14 @@ db.exec(`
     details TEXT,
     timestamp TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS permission_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT,
+    permissions TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  );
 `);
 
 const addColumnIfNotExists = (table: string, column: string, type: string) => {
@@ -280,6 +293,7 @@ addColumnIfNotExists('quote_items', 'original_price', 'REAL');
 addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
 addColumnIfNotExists('system_logs', 'type', 'TEXT DEFAULT "Unknown"');
 addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
+addColumnIfNotExists('users', 'name', 'TEXT');
 addColumnIfNotExists('quotes', 'version', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'draft_data', 'TEXT');
 addColumnIfNotExists('activity_log', 'details', 'TEXT'); // stores JSON array of field changes
@@ -391,7 +405,7 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
     return res.status(401).json({ error: 'Session expired. Please log in again.' });
   }
 
-  const user = db.prepare('SELECT id, username, role, permissions FROM users WHERE id = ?').get(session.user_id);
+  const user = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(session.user_id);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
   // Parse permissions JSON safely
@@ -458,6 +472,7 @@ const ProductSchema = z.object({
 
 const UserCreateSchema = z.object({
   username:    z.string().min(1).max(128),
+  name:        z.string().max(128).optional(),
   password:    z.string().min(4).max(128),
   role:        z.enum(['admin', 'user', 'editor']).default('user'),
   permissions: z.record(z.string(), z.boolean()).optional().default({}),
@@ -465,6 +480,17 @@ const UserCreateSchema = z.object({
 
 const UserUpdateSchema = UserCreateSchema.extend({
   password: z.string().min(4).max(128).optional(), // optional on update
+});
+
+const ChangePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword:     z.string().min(4).max(128),
+});
+
+const PermissionGroupSchema = z.object({
+  name:        z.string().min(1).max(100),
+  description: z.string().max(500).optional().default(''),
+  permissions: z.record(z.string(), z.boolean()).optional().default({}),
 });
 
 const QuoteItemSchema = z.object({
@@ -573,7 +599,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, user.id, expiresAt);
     const permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
-    res.json({ token, user: { id: user.id, username: user.username, role: user.role, permissions } });
+    res.json({ token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions } });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -591,9 +617,45 @@ app.get('/api/me', requireAuth, (req, res) => {
   res.json((req as any).user);
 });
 
+// Update current user's profile (name)
+app.post('/api/me/profile', requireAuth, async (req, res) => {
+  const { name } = req.body;
+  const user = (req as any).user;
+  try {
+    db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name || null, user.id);
+    // Return updated user info
+    res.json({ message: 'Profile updated successfully', name: name || null });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Self-service: Change own password ─────────────────────────────────────────
+// Any authenticated user can change their OWN password by proving they know
+// the current one. No admin privilege required.
+app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema), async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const currentUser = (req as any).user;
+
+  try {
+    const row = db.prepare('SELECT password FROM users WHERE id = ?').get(currentUser.id) as { password: string } | undefined;
+    if (!row) return res.status(404).json({ error: 'User not found' });
+
+    const match = await bcrypt.compare(currentPassword, row.password);
+    if (!match) return res.status(400).json({ error: 'Current password is incorrect.' });
+
+    const hashed = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashed, currentUser.id);
+    res.json({ message: 'Password changed successfully' });
+  } catch (err: any) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Failed to change password.' });
+  }
+});
+
 // ── Users Management ─────────────────────────────────────────────────────────
 app.get('/api/users', requireAuth, requirePermission('canManageUsers'), (req, res) => {
-  const users = db.prepare('SELECT id, username, role, permissions FROM users').all() as any[];
+  const users = db.prepare('SELECT id, username, name, role, permissions FROM users').all() as any[];
   // Parse permissions for each user
   const parsed = users.map(u => ({
     ...u,
@@ -603,12 +665,12 @@ app.get('/api/users', requireAuth, requirePermission('canManageUsers'), (req, re
 });
 
 app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validate(UserCreateSchema), async (req, res) => {
-  const { username, password, role, permissions } = req.body;
+  const { username, name, password, role, permissions } = req.body;
 
   try {
     const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
-    const info = db.prepare('INSERT INTO users (username, password, role, permissions) VALUES (?, ?, ?, ?)').run(username.trim(), hashed, role, permStr);
+    const info = db.prepare('INSERT INTO users (username, name, password, role, permissions) VALUES (?, ?, ?, ?, ?)').run(username.trim(), name || null, hashed, role, permStr);
     res.json({ id: info.lastInsertRowid });
   } catch (error: any) {
     res.status(400).json({ error: 'Username might already exist' });
@@ -616,7 +678,7 @@ app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validat
 });
 
 app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), validate(UserUpdateSchema), async (req, res) => {
-  const { username, password, role, permissions } = req.body;
+  const { username, name, password, role, permissions } = req.body;
 
   const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
 
@@ -626,9 +688,9 @@ app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), vali
         return res.status(400).json({ error: 'Invalid password.' });
       }
       const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
-      db.prepare('UPDATE users SET username = ?, password = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), hashed, role, permStr, req.params.id);
+      db.prepare('UPDATE users SET username = ?, name = ?, password = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), name || null, hashed, role, permStr, req.params.id);
     } else {
-      db.prepare('UPDATE users SET username = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), role, permStr, req.params.id);
+      db.prepare('UPDATE users SET username = ?, name = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), name || null, role, permStr, req.params.id);
     }
     res.json({ success: true });
   } catch (error: any) {
@@ -649,6 +711,46 @@ app.delete('/api/users/:id', requireAuth, requirePermission('canManageUsers'), (
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
     db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   })();
+  res.json({ success: true });
+});
+
+// ── Permission Groups ─────────────────────────────────────────────────────────
+// Admins create named permission presets (e.g. "Sales Team") that bundle a set
+// of permissions together. When assigning a user, the admin picks a group and
+// all its permissions are applied in one click (they can still tweak after).
+app.get('/api/permission-groups', requireAuth, requirePermission('canManageUsers'), (req, res) => {
+  const groups = db.prepare('SELECT * FROM permission_groups ORDER BY name ASC').all() as any[];
+  const parsed = groups.map(g => ({
+    ...g,
+    permissions: (() => { try { return JSON.parse(g.permissions || '{}'); } catch { return {}; } })()
+  }));
+  res.json(parsed);
+});
+
+app.post('/api/permission-groups', requireAuth, requirePermission('canManageUsers'), validate(PermissionGroupSchema), (req, res) => {
+  const { name, description, permissions } = req.body;
+  try {
+    const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
+    const info = db.prepare('INSERT INTO permission_groups (name, description, permissions, created_at) VALUES (?, ?, ?, ?)').run(name.trim(), description ?? '', permStr, new Date().toISOString());
+    res.json({ id: info.lastInsertRowid });
+  } catch (error: any) {
+    res.status(400).json({ error: 'Group name might already exist' });
+  }
+});
+
+app.put('/api/permission-groups/:id', requireAuth, requirePermission('canManageUsers'), validate(PermissionGroupSchema), (req, res) => {
+  const { name, description, permissions } = req.body;
+  try {
+    const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
+    db.prepare('UPDATE permission_groups SET name = ?, description = ?, permissions = ? WHERE id = ?').run(name.trim(), description ?? '', permStr, req.params.id);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(400).json({ error: 'Update failed' });
+  }
+});
+
+app.delete('/api/permission-groups/:id', requireAuth, requirePermission('canManageUsers'), (req, res) => {
+  db.prepare('DELETE FROM permission_groups WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
@@ -748,14 +850,14 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 
     const quotes = canSeeAll
       ? db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username
+          SELECT q.*, c.name as customer_name, u.username as author_username, u.name as author_name
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
           ORDER BY q.id DESC
         `).all()
       : db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username
+          SELECT q.*, c.name as customer_name, u.username as author_username, u.name as author_name
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
@@ -788,7 +890,13 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
   const currentUser = (req as any).user;
   const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
-  const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+  const quote = db.prepare(`
+    SELECT q.*, c.name as customer_name, u.username as author_username, u.name as author_name
+    FROM quotes q
+    LEFT JOIN customers c ON q.customer_id = c.id
+    LEFT JOIN users u ON q.author_id = u.id
+    WHERE q.quote_id = ?
+  `).get(req.params.quote_id) as any;
   if (!quote) return res.status(404).json({ error: 'Quote not found' });
 
   // Ownership check — block users who don't own this quote and lack elevated access
@@ -883,7 +991,8 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
     if (!quote_id) return res.status(400).json({ error: 'quote_id is required' });
     
     try {
-      const actor = (req as any).user?.username || 'system';
+      const currentUser = (req as any).user;
+      const actor = currentUser?.username || 'system';
       const timestamp = new Date().toISOString();
       
       // Check if the quote exists
@@ -1342,29 +1451,64 @@ app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), v
 });
 
 // ── Translation API ───────────────────────────────────────────────────────────
-// Proxies to Google Translate. requireAuth ensures only logged-in users can use it.
+// Proxies to Google Translate with chunking + retry for reliability.
 app.post('/api/translate', requireAuth, async (req, res) => {
   const { text } = req.body;
   if (!text) return res.json({ translation: '' });
 
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(text)}`;
-    const response = await fetch(url);
-    const data = await response.json();
-
-    let translation = '';
-    if (data && data[0]) {
-      data[0].forEach((segment: any) => {
-        if (segment[0]) translation += segment[0];
-      });
+  // Split on sentence boundaries so each chunk stays under 400 chars
+  const splitIntoChunks = (str: string, maxLen = 400): string[] => {
+    if (str.length <= maxLen) return [str];
+    const chunks: string[] = [];
+    // Try to split on '. ', '\n', then fallback to hard split
+    const sentences = str.split(/(?<=[\.\!\?\n])\s+/);
+    let current = '';
+    for (const s of sentences) {
+      if ((current + s).length > maxLen && current) {
+        chunks.push(current.trim());
+        current = s;
+      } else {
+        current += (current ? ' ' : '') + s;
+      }
     }
+    if (current) chunks.push(current.trim());
+    return chunks;
+  };
 
-    res.json({ translation: translation.trim() });
+  const translateChunk = async (chunk: string, attempt = 0): Promise<string> => {
+    try {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(chunk)}`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const data = await response.json();
+      let result = '';
+      if (data && data[0]) {
+        data[0].forEach((segment: any) => { if (segment[0]) result += segment[0]; });
+      }
+      // Retry on empty result (up to 3 attempts)
+      if (!result.trim() && attempt < 2) {
+        await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
+        return translateChunk(chunk, attempt + 1);
+      }
+      return result.trim();
+    } catch (err: any) {
+      if (attempt < 2) {
+        await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+        return translateChunk(chunk, attempt + 1);
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const chunks = splitIntoChunks(text);
+    const translated = await Promise.all(chunks.map(c => translateChunk(c)));
+    res.json({ translation: translated.join(' ').trim() });
   } catch (error: any) {
     console.error('Translation error:', error);
     res.status(500).json({ error: 'Translation failed' });
   }
 });
+
 
 // ── AI & Automation API ───────────────────────────────────────────────────────
 // RFQ Parsing (Multimodal LLM extraction)
@@ -1431,6 +1575,112 @@ app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) 
   }
 });
 
+// ── AI Price Sync ─────────────────────────────────────────────────────────────
+app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUsePriceSync'), upload.single('file'), async (req, res) => {
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(400).json({ error: 'Please set GEMINI_API_KEY in your .env file to use AI features.' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  try {
+    const products = db.prepare('SELECT id, description, unit_price FROM products').all() as any[];
+    
+    const base64Data = req.file.buffer.toString('base64');
+    const mimeType = req.file.mimetype;
+    
+    const messages = [
+      {
+        role: "user",
+        // @ts-ignore
+        content: [
+          {
+            type: "text",
+            text: "You are a pricing expert. Extract product model numbers and their unit prices from this document. " +
+                   "Return a JSON array ONLY, where each object has: 'model' (string) and 'price' (number). " +
+                   "Clean the model names (remove serials if possible). Do not include formatting or text."
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${mimeType};base64,${base64Data}`
+            }
+          }
+        ]
+      }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: "google/gemini-flash-1.5", 
+      // @ts-ignore
+      messages: messages,
+      temperature: 0.1,
+    });
+    
+    let text = response.choices[0]?.message?.content || '[]';
+    text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    if (text.toLowerCase().startsWith('```json')) text = text.substring(7);
+    if (text.startsWith('```')) text = text.replace(/^```/, '');
+    if (text.endsWith('```')) text = text.replace(/```$/, '');
+    text = text.trim();
+
+    let extracted: { model: string; price: number }[] = [];
+    try {
+      extracted = JSON.parse(text);
+    } catch (e) {
+      // Fallback if AI output is not clean JSON
+      const jsonMatch = text.match(/\[.*\]/s);
+      if (jsonMatch) extracted = JSON.parse(jsonMatch[0]);
+      else throw new Error("AI output was not valid JSON");
+    }
+
+    // Fuzzy Match with local database
+    const matches = extracted.map(item => {
+      // Find best match in our products list
+      // Prioritize items that contain the model name or are contained within it
+      const match = products.find(p => {
+        const pDesc = p.description.toLowerCase();
+        const iModel = item.model.toLowerCase();
+        return pDesc.includes(iModel) || iModel.includes(pDesc);
+      });
+      
+      return {
+        id: match?.id,
+        description: match ? match.description : `[NO MATCH] ${item.model}`,
+        current_price: match ? match.unit_price : 0,
+        new_price: item.price,
+        match_type: match ? 'exact' : 'none'
+      };
+    });
+
+    res.json(matches);
+  } catch (err: any) {
+    console.error('Price Sync Error:', err);
+    res.status(500).json({ error: 'AI extraction failed. Ensure the file is readable.' });
+  }
+});
+
+app.post('/api/admin/price-sync/apply', requireAuth, requirePermission('canUsePriceSync'), (req, res) => {
+  const { updates } = req.body;
+  if (!Array.isArray(updates)) return res.status(400).json({ error: 'Invalid updates' });
+
+  try {
+    const stmt = db.prepare('UPDATE products SET unit_price = ? WHERE id = ?');
+    const updateMany = db.transaction((list) => {
+      for (const item of list) {
+        if (item.id) stmt.run(item.new_price, item.id);
+      }
+    });
+    updateMany(updates);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Apply Sync Error:', error);
+    res.status(500).json({ error: 'Failed to update database' });
+  }
+});
+
 // Database Assistant (Text-to-SQL)
 app.post('/api/ai/chat', requireAuth, async (req, res) => {
   if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
@@ -1478,10 +1728,24 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
     if (cleanedQuery.endsWith('```')) cleanedQuery = cleanedQuery.replace(/```$/, '');
     cleanedQuery = cleanedQuery.trim();
 
-    if (cleanedQuery === 'INVALID' || !cleanedQuery.toUpperCase().startsWith('SELECT')) {
-      logSystemError('AI Assistant', 'QueryValidationError', `Data Assistant generated invalid SQL`, `Original Output:\n${query}\n\nCleaned Query:\n${cleanedQuery}`);
-      return res.json({ answer: "I'm sorry, I couldn't understand how to fetch that information from the database securely." });
+    // --- Critical Security Guardrails ---
+    const forbiddenPatterns = [
+      /users/i, /settings/i, /activity_log/i, 
+      /sqlite_master/i, /sqlite_schema/i, /sqlite_temp/i,
+      /pragma/i, /insert\s/i, /update\s/i, /delete\s/i, /drop\s/i, /alter\s/i,
+      /;\s*select/i // prevent stacked queries
+    ];
+
+    if (
+      cleanedQuery === 'INVALID' || 
+      !cleanedQuery.toUpperCase().startsWith('SELECT') ||
+      forbiddenPatterns.some(p => p.test(cleanedQuery)) ||
+      (!canSeeAll && !cleanedQuery.includes(`author_id = ${currentUser.id}`))
+    ) {
+      logSystemError('AI Assistant', 'SecurityBlock', `Blocked unsafe or unauthorized query`, `Query: ${cleanedQuery}`);
+      return res.json({ answer: "I'm sorry, I cannot run that query due to data security and privacy policies." });
     }
+    // ------------------------------------
 
     // Execute query
     let rows;

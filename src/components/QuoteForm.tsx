@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
@@ -63,6 +63,7 @@ interface QuoteItem {
   unit_price: number;
   net_price: number;
   manual_price?: number;
+  costShift?: 'up' | 'down';
 }
 
 interface CustomField {
@@ -97,6 +98,7 @@ export default function QuoteForm() {
   const printRef = useRef<HTMLDivElement>(null);
   const formTopRef = useRef<HTMLDivElement>(null);
   const [formTopHeight, setFormTopHeight] = useState<number>(0);
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
   // logoSize is loaded from the Admin Settings page (Settings → Logo Size).
   // The number maps to a Tailwind spacing unit: 24 = h-24 = 6rem ≈ 96px tall.
   // You can change the default here, but it will be overridden by whatever is
@@ -121,7 +123,7 @@ export default function QuoteForm() {
   // auditing which MU formula applies to each row (like Excel's formula audit).
   // Persisted in localStorage so it survives page navigations.
   // Row reorder mode — loaded from Settings. 'click' = arrows, 'drag' = drag handles.
-  const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
+  const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('drag');
   // Drag-and-drop state: which row index is being dragged, and which is the current drop target.
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -142,9 +144,18 @@ export default function QuoteForm() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerFocused, setCustomerFocused] = useState(false);
   const [showOverwriteModal, setShowOverwriteModal] = useState(false);
+  const [priceAlert, setPriceAlert] = useState<{ type: 'increase' | 'decrease' | 'mixed'; count: number } | null>(null);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [focusedDescriptionIndex, setFocusedDescriptionIndex] = useState<number | null>(null);
+  const descriptionRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
+  // Measured position of the active description textarea — updated by useEffect so it's always fresh
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  // Standalone modal for adding a new product (outside textarea focus chain)
+  const [addProductModal, setAddProductModal] = useState<{ rowIndex: number; description: string; unit: string; price: string; isSaving?: boolean } | null>(null);
+  const [addCustomerModal, setAddCustomerModal] = useState<{ name: string; mobile: string; address: string; contact: string; email: string; isSaving?: boolean } | null>(null);
+  // Rows currently being translated (shows inline indicator)
+  const [translatingRows, setTranslatingRows] = useState<Set<number>>(new Set());
 
   const [subject, setSubject] = useState('');
   const [subjectAr, setSubjectAr] = useState('');
@@ -154,6 +165,14 @@ export default function QuoteForm() {
   const [type, setType] = useState('Quotation');
   const [version, setVersion] = useState(1);
   const [showConflictModal, setShowConflictModal] = useState(false);
+  const [authorName, setAuthorName] = useState('');
+  const [workflowVisibility, setWorkflowVisibility] = useState({
+    invoice: true,
+    template: true,
+    email: true,
+    print: true,
+    preparedBy: true
+  });
 
   // Global markup percentage added for automated pricing.
   // When products are added from the DB, their unit_price is calculated as:
@@ -334,7 +353,7 @@ export default function QuoteForm() {
         const draft = localStorage.getItem(DRAFT_KEY);
         if (draft) setDraftBanner(true);
         generateQuoteId();
-        setItems([{ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+        setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
       }
     };
     init();
@@ -414,6 +433,24 @@ export default function QuoteForm() {
   const fetchProductsRef = useRef(fetchProducts);
   useEffect(() => { fetchCustomersRef.current = fetchCustomers; });
   useEffect(() => { fetchProductsRef.current = fetchProducts; });
+
+  // Track textarea position for the fixed-position product dropdown
+  useEffect(() => {
+    const update = () => {
+      if (focusedDescriptionIndex === null) { setDropdownPos(null); return; }
+      const el = descriptionRefs.current[focusedDescriptionIndex];
+      if (!el) { setDropdownPos(null); return; }
+      const r = el.getBoundingClientRect();
+      setDropdownPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width * 2, 300) });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [focusedDescriptionIndex]);
 
   const fetchLogo = async () => {
     try {
@@ -549,42 +586,25 @@ export default function QuoteForm() {
     if (rowReorderMode !== 'drag') return;
     if ((e.target as HTMLElement).closest('.product-dropdown')) return;
     const tag = (e.target as HTMLElement).tagName;
-    if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(tag)) return;
+    if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'LABEL', 'TH'].includes(tag)) return;
     longPressStartRef.current = { x: e.clientX, y: e.clientY };
     const el = e.currentTarget as HTMLElement;
-    // Capture now so we keep receiving events; release if long-press is cancelled
+    
+    // Start drag instantly (matches Tracking method)
     el.setPointerCapture(e.pointerId);
-    longPressTimerRef.current = setTimeout(() => {
-      longPressTimerRef.current = null;
-      dragSrcRef.current = index;
-      setDragIndex(index);
-      navigator.vibrate?.(50);
-    }, 600);
+    dragSrcRef.current = index;
+    setDragIndex(index);
+    navigator.vibrate?.(50);
   };
 
   const onRowBodyPointerMove = (e: React.PointerEvent) => {
     if (dragSrcRef.current !== null) {
       // Drag is active — track hover target
       onDragPointerMove(e);
-      return;
-    }
-    // Not yet dragging — cancel long-press if finger moved too much
-    if (longPressTimerRef.current) {
-      const dx = e.clientX - longPressStartRef.current.x;
-      const dy = e.clientY - longPressStartRef.current.y;
-      if (Math.sqrt(dx * dx + dy * dy) > 8) {
-        clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      }
     }
   };
 
   const onRowBodyPointerUp = (e: React.PointerEvent) => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     if (dragSrcRef.current === null) return;
     const target = document.elementFromPoint(e.clientX, e.clientY);
@@ -701,20 +721,41 @@ export default function QuoteForm() {
 
   const handleProductAutoTranslate = async (index: number, text: string, currentAr: string, force = true) => {
     if (!text) return;
-    try {
-      const res = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.translation) updateItem(index, 'description_ar', data.translation);
+    // Mark row as translating
+    setTranslatingRows(prev => { const s = new Set(prev); s.add(index); return s; });
+    const clearIndicator = () => setTranslatingRows(prev => { const s = new Set(prev); s.delete(index); return s; });
+    const attempt = async (tries = 0): Promise<void> => {
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.translation) {
+            updateItem(index, 'description_ar', data.translation);
+          } else if (tries < 2) {
+            // Empty result — retry once after a short delay
+            await new Promise(r => setTimeout(r, 700));
+            return attempt(tries + 1);
+          }
+        } else if (tries < 2) {
+          await new Promise(r => setTimeout(r, 700));
+          return attempt(tries + 1);
+        }
+      } catch (e) {
+        if (tries < 2) {
+          await new Promise(r => setTimeout(r, 700));
+          return attempt(tries + 1);
+        }
+        console.error('Translation failed', e);
       }
-    } catch (e) {
-      console.error('Translation failed', e);
-    }
+    };
+    await attempt();
+    clearIndicator();
   };
+
 
   // Auto-translate Debounced Effect for Notes
   useEffect(() => {
@@ -805,22 +846,70 @@ export default function QuoteForm() {
       setCustomFields(parsedCustomFields);
       setShowCustomField(parsedCustomFields.length > 0);
 
+      setAuthorName(data.author_name || data.author_username || '');
+
+      let increases = 0;
+      let decreases = 0;
+
       setItems(data.items.map((item: any) => {
-        // Fallback: if original_price is null (missing from DB for old quotes), 
-        // try to find the current product's original price.
         let original_price = item.original_price;
-        if ((original_price === null || original_price === undefined) && item.product_id) {
+        let manual_price = item.manual_price !== null ? item.manual_price : undefined;
+
+        let costShift: 'up' | 'down' | undefined = undefined;
+
+        if (item.product_id) {
           const prod = productsList.find(p => p.id === item.product_id);
-          if (prod) original_price = prod.unit_price;
+          if (prod) {
+            const dbPrice = prod.unit_price;
+            if (original_price !== dbPrice) {
+              if (dbPrice > original_price) {
+                increases++;
+                costShift = 'up';
+              } else {
+                decreases++;
+                costShift = 'down';
+              }
+
+              original_price = dbPrice;
+              const expectedNewUnitPrice = dbPrice * (1 + (data.markup !== undefined ? data.markup : 8) / 100);
+              const currentUnitPrice = item.unit_price;
+              if (manual_price === undefined && Math.abs(currentUnitPrice - expectedNewUnitPrice) > 0.01) {
+                manual_price = Math.round(currentUnitPrice * 100) / 100;
+              }
+            }
+          }
+        }
+
+        // Round manual price if it exists
+        if (manual_price !== undefined) {
+          manual_price = Math.round(manual_price * 100) / 100;
+        }
+
+        // Determine current unit price
+        let unit_price = item.unit_price;
+        if (manual_price !== undefined) {
+          unit_price = manual_price;
+        } else if (original_price !== undefined) {
+          unit_price = Math.round(original_price * (1 + (data.markup || 8) / 100) * 100) / 100;
         }
 
         return {
           ...item,
           id: generateId(),
           original_price: original_price !== null ? original_price : undefined,
-          manual_price: item.manual_price !== null ? item.manual_price : undefined
+          manual_price: manual_price,
+          unit_price: unit_price,
+          net_price: Math.round(unit_price * item.qty * 100) / 100,
+          costShift
         };
       }));
+
+      if (increases > 0 || decreases > 0) {
+        let type: 'increase' | 'decrease' | 'mixed' = 'mixed';
+        if (increases > 0 && decreases === 0) type = 'increase';
+        if (decreases > 0 && increases === 0) type = 'decrease';
+        setPriceAlert({ type, count: increases + decreases });
+      }
     }
   };
 
@@ -874,7 +963,7 @@ export default function QuoteForm() {
     setBankDetailsAr('');
     setFooter('Thank you for your business!');
     setFooterAr('شكرا لتعاملكم معنا!');
-    setItems([{ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+    setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
   };
 
   const handleProductSelect = (index: number, productId: string) => {
@@ -958,18 +1047,19 @@ export default function QuoteForm() {
 
       if (field === 'manual_price') {
         if (value !== undefined && value !== null && value !== '' && !isNaN(value)) {
-          newItems[index].unit_price = value;
+          newItems[index].unit_price = Math.round(value * 100) / 100;
+          newItems[index].manual_price = Math.round(value * 100) / 100;
         } else {
           const orig = newItems[index].original_price;
-          newItems[index].unit_price = orig !== undefined ? orig * (1 + markup / 100) : 0;
+          newItems[index].unit_price = orig !== undefined ? Math.round(orig * (1 + markup / 100) * 100) / 100 : 0;
           newItems[index].manual_price = undefined;
         }
       } else if (field === 'unit_price') {
-        newItems[index].manual_price = value === '' || isNaN(value) ? undefined : value;
+        newItems[index].manual_price = value === '' || isNaN(value) ? undefined : Math.round(value * 100) / 100;
       }
 
       if (field === 'qty' || field === 'unit_price' || field === 'manual_price') {
-        newItems[index].net_price = newItems[index].qty * newItems[index].unit_price;
+        newItems[index].net_price = Math.round(newItems[index].qty * newItems[index].unit_price * 100) / 100;
       }
       return newItems;
     });
@@ -1743,7 +1833,7 @@ export default function QuoteForm() {
               <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID">
                 Create Revision
               </button>
-              {type !== 'Tax Invoice' && (
+              {type !== 'Tax Invoice' && (user.role === 'admin' || user.permissions?.canConvertInvoice) && workflowVisibility.invoice && (
                 <button onClick={handleConvertToInvoice} className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors" title="Switch type to Tax Invoice">
                   To Invoice
                 </button>
@@ -1751,10 +1841,12 @@ export default function QuoteForm() {
             </>
           )}
           {/* ── TEMPLATE BUTTONS ───────────────────────────────────────────────────── */}
-          <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors" title="Save current Terms as a reusable template">
-            <Bookmark size={18} /> Save Template
-          </button>
-          {templates.length > 0 && (
+          {(user.role === 'admin' || user.permissions?.canSaveTemplate) && workflowVisibility.template && (
+            <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors" title="Save current Terms as a reusable template">
+              <Bookmark size={18} /> Save Template
+            </button>
+          )}
+          {templates.length > 0 && workflowVisibility.template && (
             <div className="relative group">
               <button className="flex items-center gap-2 px-4 py-2 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors">
                 <BookOpen size={18} /> Load Template ▾
@@ -1777,12 +1869,17 @@ export default function QuoteForm() {
               </div>
             </div>
           )}
-          <button onClick={handleSendEmail} disabled={isSending} className="flex items-center gap-2 px-4 py-2 text-white bg-sky-500 hover:bg-sky-600 rounded-lg transition-colors disabled:opacity-50">
-            {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />} Email
-          </button>
-          <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors">
-            <Printer size={18} /> Print
-          </button>
+          {(user.role === 'admin' || user.permissions?.canEmailQuote) && workflowVisibility.email && (
+            <button onClick={handleSendEmail} disabled={isSending} className="flex items-center gap-2 px-4 py-2 text-white bg-sky-500 hover:bg-sky-600 rounded-lg transition-colors disabled:opacity-50">
+              {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />} Email
+            </button>
+          )}
+          {(user.role === 'admin' || user.permissions?.canPrintQuote) && workflowVisibility.print && (
+            <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors">
+              <Printer size={18} /> Print
+            </button>
+          )}
+
           <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
             <FileSpreadsheet size={18} /> Export Excel
           </button>
@@ -1804,9 +1901,16 @@ export default function QuoteForm() {
             <div className="flex flex-wrap gap-4 mb-6 print:hidden bg-gray-50 p-4 rounded-lg border border-gray-200">
               <div className="flex flex-col">
                 <label className="text-xs font-bold text-gray-500 uppercase">Document Type</label>
-                <select value={type} onChange={(e) => setType(e.target.value)} className="bg-transparent border-b border-gray-300 outline-none font-medium py-1">
+                <select 
+                  value={type} 
+                  onChange={(e) => setType(e.target.value)} 
+                  disabled={type === 'Tax Invoice' && user.role !== 'admin' && !user.permissions?.canConvertInvoice}
+                  className="bg-transparent border-b border-gray-300 outline-none font-medium py-1 disabled:opacity-50"
+                >
                   <option value="Quotation">Quotation</option>
-                  <option value="Tax Invoice">Tax Invoice</option>
+                  {(user.role === 'admin' || user.permissions?.canConvertInvoice || type === 'Tax Invoice') && workflowVisibility.invoice && (
+                    <option value="Tax Invoice">Tax Invoice</option>
+                  )}
                 </select>
               </div>
               <div className="flex flex-col">
@@ -1923,6 +2027,16 @@ export default function QuoteForm() {
                             {c.name}
                           </div>
                         ))}
+                      {customerSearch.length > 0 && !customers.some(c => c.name.toLowerCase() === customerSearch.toLowerCase()) && (
+                        <div
+                          className="cursor-pointer hover:bg-gray-100 px-3 py-2 text-sm text-indigo-600 font-semibold border-t border-gray-100 flex items-center gap-2"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => setAddCustomerModal({ name: customerSearch, mobile: '', address: '', contact: '', email: '' })}
+                        >
+                          <Plus size={14} />
+                          Add "{customerSearch}" to Customer DB
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1989,7 +2103,7 @@ export default function QuoteForm() {
           {/* ── ITEMS TABLE ─────────────────────────────────────────────────── */}
           <div className="w-full min-w-0 mb-6">
             <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
-              <div className={`min-w-[1350px] print:min-w-0 transition-all ${focusedDescriptionIndex !== null ? 'pb-48' : ''}`}>
+              <div className="min-w-[1350px] print:min-w-0">
                 <div className="border-2" style={{ borderColor: '#1f2937' }}>
                   {/* ── TABLE HEADER ROW ──────────────────────────────────────────
                     backgroundColor: '#dcfce7' = light green — change to recolor.
@@ -2027,8 +2141,17 @@ export default function QuoteForm() {
                           ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
                         `}
                         style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
-                        <div className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1">
-                          {index + 1}
+                        <div 
+                          className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1 group/grip cursor-grab active:cursor-grabbing touch-none select-none print:cursor-auto"
+                          onPointerDown={(e) => onGripPointerDown(e, index)}
+                          onPointerMove={onGripPointerMove}
+                          onPointerUp={onGripPointerUp}
+                          onPointerCancel={pointerCancelDrag}
+                        >
+                          <span className="group-hover/grip:hidden font-medium text-gray-500 print:block">{index + 1}</span>
+                          <div className="hidden group-hover/grip:flex print:hidden items-center justify-center text-gray-400 h-[24px]">
+                            <GripVertical size={16} />
+                          </div>
                           {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
                             <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
                           )}
@@ -2036,6 +2159,7 @@ export default function QuoteForm() {
                         <div className="p-0 border-r border-gray-300 h-full flex relative group">
                           <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
                             <textarea
+                              ref={el => { descriptionRefs.current[index] = el; }}
                               className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
                               value={item.description}
                               placeholder="Type to search product..."
@@ -2048,42 +2172,62 @@ export default function QuoteForm() {
                               rows={item.description.split('\n').length || 1}
                             />
 
-                            {focusedDescriptionIndex === index && item.description.length > 1 && (
-                              <div className="product-dropdown absolute top-full left-0 z-50 w-[200%] mt-1 bg-white border border-gray-200 rounded shadow-xl max-h-48 overflow-y-auto print:hidden">
-                                {(() => {
-                                  const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-                                  const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-
-                                  if (searchTerms.length === 0) return [];
-
-                                  return products
-                                    .filter(p => {
-                                      const desc = p.description.toLowerCase();
-                                      if (desc === item.description.toLowerCase()) return false;
-
-                                      const normDesc = normalize(desc);
-                                      return searchTerms.every(term => {
-                                        const nTerm = normalize(term);
-                                        return desc.includes(term) || (nTerm && normDesc.includes(nTerm));
-                                      });
-                                    })
-                                    .map(p => (
+                            {/* ── Product search dropdown — fixed-position via useEffect ── */}
+                            {focusedDescriptionIndex === index && item.description.length > 1 && dropdownPos && (() => {
+                                const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+                                const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+                                const matched = searchTerms.length === 0 ? [] : products.filter(p => {
+                                  const desc = p.description.toLowerCase();
+                                  if (desc === item.description.toLowerCase()) return false;
+                                  const normDesc = normalize(desc);
+                                  return searchTerms.every(term => {
+                                    const nTerm = normalize(term);
+                                    return desc.includes(term) || (nTerm && normDesc.includes(nTerm));
+                                  });
+                                });
+                                return (
+                                  <div
+                                    className="product-dropdown print:hidden"
+                                    style={{ position: 'fixed', top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }}
+                                  >
+                                    <div className="bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden">
+                                      <div className="max-h-52 overflow-y-auto">
+                                        {matched.length === 0 && (
+                                          <div className="px-3 py-2.5 text-xs text-gray-400 italic">No matching products found</div>
+                                        )}
+                                        {matched.map(p => (
+                                          <div
+                                            key={p.id}
+                                            className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                            onMouseDown={e => e.preventDefault()}
+                                            onClick={() => {
+                                              handleProductSelect(index, p.id.toString());
+                                              setFocusedDescriptionIndex(null);
+                                              handleProductAutoTranslate(index, p.description, '');
+                                            }}
+                                          >
+                                            <div className="font-medium text-gray-800">{p.description}</div>
+                                            {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                            <div className="text-xs text-gray-400 mt-0.5">{p.unit} · {p.unit_price.toFixed(2)}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                      {/* Add to Product DB — opens a proper modal, no focus issues */}
                                       <div
-                                        key={p.id}
-                                        className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                        className="px-3 py-2.5 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer border-t border-indigo-100 bg-white"
+                                        onMouseDown={e => e.preventDefault()}
                                         onClick={() => {
-                                          handleProductSelect(index, p.id.toString());
+                                          setAddProductModal({ rowIndex: index, description: item.description.trim(), unit: 'Pc', price: '0' });
                                           setFocusedDescriptionIndex(null);
-                                          handleProductAutoTranslate(index, p.description, '');
                                         }}
                                       >
-                                        <div className="font-medium">{p.description}</div>
-                                        {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                        <Plus size={14} />
+                                        Add "{item.description.trim()}" to Product DB
                                       </div>
-                                    ))
-                                })()}
-                              </div>
-                            )}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
                               <div className="relative flex items-center">
                                 <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
@@ -2100,7 +2244,12 @@ export default function QuoteForm() {
                             </div>
                           </div>
                           <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
-                          <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center">
+                          <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                            {translatingRows.has(index) && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-white/70 rounded z-10 print:hidden pointer-events-none">
+                                <span className="text-[10px] text-indigo-500 font-semibold animate-pulse">Translating…</span>
+                              </div>
+                            )}
                             <textarea
                               dir="rtl"
                               className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[40px]"
@@ -2154,32 +2303,11 @@ export default function QuoteForm() {
                           <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       </div>
-                      {/* Controls: hidden on xl (handled by the outside column), visible on smaller screens */}
-                      <div className="w-9 shrink-0 print:hidden xl:hidden flex flex-col items-center justify-center gap-1">
-                        {rowReorderMode === 'drag' ? (
-                          <div
-                            className="text-gray-400 hover:text-gray-600 cursor-grab active:cursor-grabbing touch-none select-none p-1"
-                            title="Drag to reorder"
-                            onPointerDown={(e) => onGripPointerDown(e, index)}
-                            onPointerMove={onGripPointerMove}
-                            onPointerUp={onGripPointerUp}
-                            onPointerCancel={pointerCancelDrag}
-                          >
-                            <GripVertical size={16} />
-                          </div>
-                        ) : (
-                          <>
-                            <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                              <ArrowUp size={12} />
-                            </button>
-                            <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                              <Trash2 size={14} />
-                            </button>
-                            <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                              <ArrowDown size={12} />
-                            </button>
-                          </>
-                        )}
+                      {/* Controls */}
+                      <div className="w-9 shrink-0 print:hidden xl:hidden flex flex-col items-center justify-center gap-1 transition-opacity">
+                        <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-1" title="Remove Item">
+                          <Trash2 size={16} />
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -2210,7 +2338,6 @@ export default function QuoteForm() {
 
           {/* Bottom Section: Terms & Totals */}
           <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
-            {/* Terms & Conditions */}
             {/* Terms & Conditions */}
             <div className="flex-1 space-y-2 text-sm">
               {showNote && (
@@ -2485,6 +2612,19 @@ export default function QuoteForm() {
 
           </div>
 
+          {workflowVisibility.preparedBy && (
+            <div className="mt-8 flex justify-between items-end border-t border-gray-100 pt-6">
+              <div className="flex flex-col gap-1">
+                <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">Prepared By:</p>
+                <p className="text-lg font-bold text-indigo-700">{authorName || user.name || user.username}</p>
+              </div>
+              <div className="flex flex-col items-center gap-1">
+                <div className="w-48 border-b-2 border-gray-400 mb-1"></div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Authorized Signature</p>
+              </div>
+            </div>
+          )}
+
           <div className="mt-auto">
             {footerImageUrl && (
               <div className="text-center border-t-2 border-gray-800 pt-4 mt-8 flex flex-col gap-2">
@@ -2504,36 +2644,11 @@ export default function QuoteForm() {
               className="flex flex-col items-center justify-center gap-1"
               style={{ height: rowHeights[index] || 40 }}
             >
-              {rowReorderMode === 'drag' ? (
-                <>
-                  <div
-                    className="text-gray-400 hover:text-gray-600 cursor-grab active:cursor-grabbing touch-none select-none p-1 transition-colors"
-                    title="Drag to reorder"
-                    onPointerDown={(e) => onGripPointerDown(e, index)}
-                    onPointerMove={onGripPointerMove}
-                    onPointerUp={onGripPointerUp}
-                    onPointerCancel={pointerCancelDrag}
-                  >
-                    <GripVertical size={16} />
-                  </div>
-                  <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                    <Trash2 size={14} />
-                  </button>
-                </>
-              ) : (
-                // In click mode: original arrow buttons.
-                <>
-                  <button onClick={() => moveItemUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Up">
-                    <ArrowUp size={12} />
-                  </button>
-                  <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Item">
-                    <Trash2 size={14} />
-                  </button>
-                  <button onClick={() => moveItemDown(index)} disabled={index === items.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-0 transition-colors" title="Move Down">
-                    <ArrowDown size={12} />
-                  </button>
-                </>
-              )}
+              <div className="flex flex-col gap-2 transition-opacity">
+                <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-1" title="Remove Item">
+                  <Trash2 size={16} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -2549,7 +2664,22 @@ export default function QuoteForm() {
               {/* Spacer to align with table headers */}
               <div style={{ height: formTopHeight }} className="flex flex-col justify-end">
                 <div className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded-lg shadow-sm z-10 box-border">
-                  <span className="font-bold text-sm text-gray-800">M.U. %</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-gray-800">M.U. %</span>
+                    {priceAlert && (
+                      <div 
+                        className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold animate-pulse flex items-center gap-1 ${
+                          priceAlert.type === 'increase' ? 'bg-red-100 text-red-600' : 
+                          priceAlert.type === 'decrease' ? 'bg-green-100 text-green-600' : 
+                          'bg-amber-100 text-amber-600'
+                        }`}
+                        title={`${priceAlert.count} product(s) have updated prices in the database since this quote was created.`}
+                      >
+                        <AlertTriangle size={10} />
+                        {priceAlert.type === 'increase' ? 'COST ↑' : priceAlert.type === 'decrease' ? 'COST ↓' : 'COST ~'}
+                      </div>
+                    )}
+                  </div>
                   <input
                     type="number"
                     value={markup}
@@ -2596,18 +2726,30 @@ export default function QuoteForm() {
                             {rule === '--' && <span className="text-gray-400">--</span>}
                           </div>
                         )}
-                        <div className="p-1 flex items-center border-r border-gray-200 relative">
+                        <div className="p-1 flex items-center border-r border-gray-200 relative group/manual">
                           {/* When the item is Excluded or Zero Markup, manually overriding makes no sense. We disable the input. */}
-                          <input
-                            type="number"
-                            disabled={rule === 'EXCL' || rule === 'ZM'}
-                            className={`w-full h-full text-center outline-none bg-transparent ${(item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price) ? 'text-red-600 font-bold' : ''} disabled:opacity-30 disabled:cursor-not-allowed`}
-                            value={item.manual_price !== undefined ? item.manual_price : ''}
-                            onChange={e => {
-                              if (e.target.value === '') updateItem(index, 'manual_price', undefined);
-                              else updateItem(index, 'manual_price', parseFloat(e.target.value));
-                            }}
-                          />
+                          {(() => {
+                            const isBelowCost = item.manual_price !== undefined && item.original_price !== undefined && item.manual_price < item.original_price;
+                            const warnings = [
+                              item.costShift === 'up' ? 'Cost INCREASED in database.' : item.costShift === 'down' ? 'Cost DECREASED in database.' : '',
+                              isBelowCost ? 'SELLING BELOW COST!' : ''
+                            ].filter(Boolean);
+                            const tooltip = warnings.join(' ');
+                            
+                            return (
+                              <input
+                                type="number"
+                                disabled={rule === 'EXCL' || rule === 'ZM'}
+                                title={tooltip}
+                                className={`w-full h-full text-center outline-none bg-transparent ${isBelowCost ? 'text-red-600 font-bold' : ''} ${item.costShift ? 'bg-amber-50/50' : ''} disabled:opacity-30 disabled:cursor-not-allowed`}
+                                value={item.manual_price !== undefined ? item.manual_price : ''}
+                                onChange={e => {
+                                  if (e.target.value === '') updateItem(index, 'manual_price', undefined);
+                                  else updateItem(index, 'manual_price', parseFloat(e.target.value));
+                                }}
+                              />
+                            );
+                          })()}
                         </div>
                         <div className="p-1 flex items-center justify-center text-[13px] border-r border-gray-200 uppercase font-mono">
                           {rule === 'EXCL' ? '-' : displayBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -2750,6 +2892,253 @@ export default function QuoteForm() {
       <datalist id="unit-suggestions">
         {UNIT_SUGGESTIONS.map(u => <option key={u} value={u} />)}
       </datalist>
+
+      {/* ── Add Product Modal ────────────────────────────────────────────── */}
+      {addProductModal && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600">
+              <div className="flex items-center gap-2">
+                <Plus size={18} className="text-white" />
+                <h2 className="text-white font-bold text-base">Add to Product DB</h2>
+              </div>
+              <button onClick={() => setAddProductModal(null)} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name</label>
+                <input
+                  type="text"
+                  autoFocus
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={addProductModal.description}
+                  onChange={e => setAddProductModal(m => m ? { ...m, description: e.target.value } : m)}
+                />
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit</label>
+                  <input
+                    type="text"
+                    list="unit-suggestions"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={addProductModal.unit}
+                    onChange={e => setAddProductModal(m => m ? { ...m, unit: e.target.value } : m)}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit Price</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={addProductModal.price}
+                    onChange={e => setAddProductModal(m => m ? { ...m, price: e.target.value } : m)}
+                  />
+                </div>
+              </div>
+            </div>
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end bg-gray-50">
+              <button
+                className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg text-sm hover:bg-gray-100 transition-colors"
+                onClick={() => setAddProductModal(null)}
+              >Cancel</button>
+              <button
+                disabled={addProductModal.isSaving}
+                className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-70 flex items-center gap-2"
+                onClick={async () => {
+                  const { rowIndex, description, unit, price } = addProductModal;
+                  const unit_price = parseFloat(price) || 0;
+                  if (!description.trim()) return;
+                  
+                  setAddProductModal(m => m ? { ...m, isSaving: true } : m);
+                  
+                  try {
+                    // Pre-translate before saving to DB
+                    let description_ar = '';
+                    const trans = await translateSingle(description.trim());
+                    if (trans) description_ar = trans;
+
+                    const res = await fetch('/api/products', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ 
+                        description: description.trim(), 
+                        description_ar,
+                        unit: unit || 'Pc', 
+                        unit_price 
+                      }),
+                    });
+                    if (res.ok) {
+                      const { id } = await res.json();
+                      const refreshed = await fetch(`/api/products?_t=${Date.now()}`);
+                      if (refreshed.ok) {
+                        const data = await refreshed.json();
+                        if (Array.isArray(data)) {
+                          setProducts(data);
+                          const newProd = data.find((p: any) => p.id === id);
+                          if (newProd) {
+                            setItems(prev => {
+                              const next = [...prev];
+                              const calcPrice = newProd.unit_price * (1 + markup / 100);
+                              next[rowIndex] = {
+                                ...next[rowIndex],
+                                product_id: newProd.id,
+                                original_price: newProd.unit_price,
+                                description: newProd.description,
+                                description_ar: newProd.description_ar || '',
+                                unit: newProd.unit,
+                                unit_price: calcPrice,
+                                net_price: next[rowIndex].qty * calcPrice,
+                              };
+                              return next;
+                            });
+                          }
+                        }
+                      }
+                      setAddProductModal(null);
+                    } else {
+                      setAddProductModal(m => m ? { ...m, isSaving: false } : m);
+                    }
+                  } catch (e) { 
+                    console.error('Failed to add product:', e); 
+                    setAddProductModal(m => m ? { ...m, isSaving: false } : m);
+                  }
+                }}
+              >
+                {addProductModal.isSaving ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Saving...
+                  </>
+                ) : 'Save & Add to Quote'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* ── Add Customer Modal ────────────────────────────────────────────── */}
+      {addCustomerModal && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-teal-600">
+              <div className="flex items-center gap-2">
+                <Users size={18} className="text-white" />
+                <h2 className="text-white font-bold text-base">Add to Customer DB</h2>
+              </div>
+              <button onClick={() => setAddCustomerModal(null)} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Customer Name</label>
+                <input
+                  type="text"
+                  autoFocus
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                  value={addCustomerModal.name}
+                  onChange={e => setAddCustomerModal({ ...addCustomerModal, name: e.target.value })}
+                  placeholder="Company or Individual Name"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Mobile</label>
+                  <input
+                    type="text"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                    value={addCustomerModal.mobile}
+                    onChange={e => setAddCustomerModal({ ...addCustomerModal, mobile: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Contact Person</label>
+                  <input
+                    type="text"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                    value={addCustomerModal.contact}
+                    onChange={e => setAddCustomerModal({ ...addCustomerModal, contact: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Email</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                  value={addCustomerModal.email}
+                  onChange={e => setAddCustomerModal({ ...addCustomerModal, email: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Address</label>
+                <textarea
+                  rows={2}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                  value={addCustomerModal.address}
+                  onChange={e => setAddCustomerModal({ ...addCustomerModal, address: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
+              <button
+                onClick={() => setAddCustomerModal(null)}
+                className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-bold flex items-center gap-2"
+                disabled={addCustomerModal.isSaving}
+                onClick={async () => {
+                  if (!addCustomerModal.name.trim()) return alert('Name is required');
+                  setAddCustomerModal(m => m ? { ...m, isSaving: true } : m);
+                  try {
+                    const res = await fetch('/api/customers', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ 
+                        name: addCustomerModal.name.trim(), 
+                        mobile: addCustomerModal.mobile,
+                        address: addCustomerModal.address,
+                        contact: addCustomerModal.contact,
+                        email: addCustomerModal.email
+                      }),
+                    });
+                    if (res.ok) {
+                      const { id } = await res.json();
+                      const refreshed = await fetch(`/api/customers?_t=${Date.now()}`);
+                      if (refreshed.ok) {
+                        const data = await refreshed.json();
+                        if (Array.isArray(data)) {
+                          setCustomers(data);
+                          const newCust = data.find((c: any) => c.id === id);
+                          if (newCust) {
+                            setSelectedCustomerId(newCust.id);
+                            setSelectedCustomer(newCust);
+                            setCustomerSearch(newCust.name);
+                          }
+                        }
+                      }
+                      setAddCustomerModal(null);
+                    } else {
+                      setAddCustomerModal(m => m ? { ...m, isSaving: false } : m);
+                    }
+                  } catch (e) {
+                    setAddCustomerModal(m => m ? { ...m, isSaving: false } : m);
+                  }
+                }}
+              >
+                {addCustomerModal.isSaving ? 'Saving...' : 'Save & Select'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
