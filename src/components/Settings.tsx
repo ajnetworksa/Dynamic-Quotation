@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X } from 'lucide-react';
+import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
-const APP_VERSION = '1.2.4';
+const APP_VERSION = '1.3.0';
 
 export default function Settings() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -45,6 +45,18 @@ export default function Settings() {
   const [excludedKeywords, setExcludedKeywords] = useState<string[]>(['Installation']);
   const [muFilterInput, setMuFilterInput] = useState({ zero: '', excluded: '' });
   const [muFilterStatus, setMuFilterStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  // Workflow visibility: controls system-wide presence of buttons
+  const [workflowVisibility, setWorkflowVisibility] = useState({
+    invoice: true,
+    template: true,
+    email: true,
+    print: true,
+    preparedBy: true,
+    showFeatureAccess: true,
+    inspectionProtection: true
+  });
+  const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
   const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
@@ -112,6 +124,11 @@ export default function Settings() {
     fetch('/api/settings/rowReorderMode')
       .then(res => res.json())
       .then(data => { if (data.value) setRowReorderMode(data.value as 'click' | 'drag'); })
+      .catch(console.error);
+
+    fetch('/api/settings/workflowVisibility')
+      .then(res => res.json())
+      .then(data => { if (data.value) setWorkflowVisibility(JSON.parse(data.value)); })
       .catch(console.error);
 
     fetch('/api/settings/developerMode')
@@ -394,6 +411,23 @@ export default function Settings() {
       setSmtpStatus('error');
     }
     setTimeout(() => setSmtpStatus('idle'), 3000);
+  };
+
+  const handleWorkflowToggle = async (key: keyof typeof workflowVisibility) => {
+    const next = { ...workflowVisibility, [key]: !workflowVisibility[key] };
+    setWorkflowVisibility(next);
+    setWorkflowStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'workflowVisibility', value: JSON.stringify(next) })
+      });
+      if (res.ok) {
+        setWorkflowStatus('success');
+        setTimeout(() => setWorkflowStatus('idle'), 2000);
+      } else setWorkflowStatus('error');
+    } catch { setWorkflowStatus('error'); }
   };
 
   const handleThemeSave = async () => {
@@ -1075,6 +1109,54 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* Access Control: Workflow Visibility */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+            <Shield size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Access Control</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Toggle system-wide visibility for key workflow buttons</p>
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              { id: 'invoice', label: 'Invoice Button', desc: 'Convert Quote to Tax Invoice' },
+              { id: 'template', label: 'Save Template', desc: 'Save reusable term templates' },
+              { id: 'email', label: 'Email Button', desc: 'Send Quote via SMTP' },
+              { id: 'print', label: 'Print Button', desc: 'Open browser print dialog' },
+              { id: 'preparedBy', label: 'Prepared By', desc: 'Show "Prepared By" on documents' },
+              { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
+            ].map((btn) => (
+              <div
+                key={btn.id}
+                onClick={() => handleWorkflowToggle(btn.id as any)}
+                className={`flex flex-col p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                  workflowVisibility[btn.id as keyof typeof workflowVisibility]
+                    ? 'border-indigo-500 bg-indigo-50'
+                    : 'border-gray-100 bg-white hover:border-gray-200'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-gray-800">{btn.label}</span>
+                  <div className={`w-10 h-5 rounded-full relative transition-colors ${workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'bg-indigo-600' : 'bg-gray-300'}`}>
+                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'left-5.5' : 'left-0.5'}`} style={{ transform: workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'translateX(20px)' : 'translateX(0)' }}></div>
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-500 leading-tight">{btn.desc}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex justify-end h-4">
+            {workflowStatus === 'loading' && <Loader2 size={16} className="animate-spin text-indigo-600" />}
+            {workflowStatus === 'success' && <span className="text-emerald-600 text-xs font-semibold flex items-center gap-1"><CheckCircle2 size={14} /> Workflow settings updated</span>}
+            {workflowStatus === 'error' && <span className="text-red-600 text-xs font-semibold flex items-center gap-1"><XCircle size={14} /> Failed to save settings</span>}
+          </div>
+        </div>
+      </div>
+
       {/* Row Reorder Mode */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
@@ -1163,6 +1245,32 @@ export default function Settings() {
             </span>
             {devModeStatus === 'success' && <span className="text-emerald-600 text-xs">Saved</span>}
             {devModeStatus === 'error' && <span className="text-red-600 text-xs">Save failed</span>}
+          </div>
+        </div>
+
+        {/* Inspection Protection Toggle within Developer Section */}
+        <div className="px-6 py-4 bg-purple-50/50 border-t border-purple-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Shield size={18} className="text-purple-600" />
+            <div>
+              <p className="text-sm font-bold text-gray-800">Source Inspection Protection</p>
+              <p className="text-xs text-gray-500">Disable Right-Click and DevTools shortcuts (F12, Ctrl+Shift+I) for non-admins.</p>
+            </div>
+          </div>
+          <div className="flex flex-col items-center gap-2">
+            <button
+              onClick={() => handleWorkflowToggle('inspectionProtection' as any)}
+              className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none ${
+                workflowVisibility.inspectionProtection ? 'bg-purple-600' : 'bg-gray-200'
+              }`}
+            >
+              <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
+                workflowVisibility.inspectionProtection ? 'translate-x-8' : 'translate-x-1'
+              }`} />
+            </button>
+            <span className={`text-[10px] font-bold ${workflowVisibility.inspectionProtection ? 'text-purple-700' : 'text-gray-400'}`}>
+              {workflowVisibility.inspectionProtection ? 'ACTIVE' : 'DISABLED'}
+            </span>
           </div>
         </div>
       </div>

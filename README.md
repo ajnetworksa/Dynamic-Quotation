@@ -15,10 +15,15 @@ A professional, dual-language (English/Arabic) quotation and invoice management 
 - **Automated Translation**: Instant translation of product descriptions into Arabic.
 - **Smart Search**: Multi-word fuzzy search for products (handles out-of-order keywords).
 - **Pricing Analysis Sidebar**: Real-time margin tracking and cost analysis while building quotes.
-- **Advanced Permissions**: Granular toggles for "Creator Info" visibility and "View All" data access.
+- **AI Price Sync**: Bulk-update product databases by uploading supplier price lists (PDF/Excel) with AI-driven extraction and matching.
+- **Source Inspection Protection**: Admin-controlled protection that blocks right-click context menus and developer tools (F12, Ctrl+Shift+I) to prevent source code inspection.
+- **Advanced Permissions**: Granular toggles for "Creator Info" visibility, "AI Price Sync" access, and workflow actions (Email, Print, Invoice).
+- **Administrative Workflow Control**: System-wide visibility toggles for key action buttons (Save Template, Email, Print, Tax Invoice).
 - **Strict Data Security**: All endpoints enforce strict ownership—users can only access or modify their own quotations.
-- **Export Options**: Professional PDF and CSV exports with localized formatting.
-- **Security**: Password hashing (Bcrypt), secure sessions, and role-based access control.
+- **Enhanced Traceability**: Automated "Prepared By" attribution in documents and tracking views using full user names.
+- **Smart Pricing Analysis**: Sidebar with real-time margin tracking, cost auditing, and automated "Manual Override" protection during cost updates.
+- **Export Options**: Professional PDF and CSV exports with localized formatting and authorized signature fields.
+- **Security**: Password hashing (Bcrypt), secure sessions, and role-based access control (RBAC).
 
 ---
 
@@ -128,7 +133,8 @@ Containerization ensures identical behavior across all environments.
 ---
 
 ## 🔮 Roadmap
-- Integrated Inventory Management
-- Multi-currency Conversion
-- Dashboard Analytics Upgrade
+- AI-Driven Auto-Quotation from Emails/Notes
+- Dashboard Profitability Analytics
+- Client Approval Portal (E-Signatures)
 - Dark Mode Themes
+- Multicurrency & Real-time Exchange Rates

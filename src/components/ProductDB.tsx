@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 
 interface Product {
   id: number;
@@ -18,6 +18,9 @@ export default function ProductDB() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [lastTranslatedDesc, setLastTranslatedDesc] = useState('');
+  const [showPriceSync, setShowPriceSync] = useState(false);
+  const [syncData, setSyncData] = useState<{ id?: number; description: string; current_price: number; new_price: number; match_type: 'exact' | 'fuzzy' | 'none' }[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => { fetchProducts(); }, []);
@@ -145,10 +148,18 @@ export default function ProductDB() {
                 </button>
               )}
             </div>
+            {(user.role === 'admin' || user.permissions?.canUsePriceSync) && (
+              <button
+                onClick={() => setShowPriceSync(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors whitespace-nowrap font-bold"
+              >
+                <Bot size={18} /> Smart Update
+              </button>
+            )}
             <button
               onClick={() => { 
                 setIsAdding(true); 
-                setEditForm({ unit: 'set', unit_price: 0 }); 
+                setEditForm({ unit: 'Pc', unit_price: 0 }); 
                 setLastTranslatedDesc('');
               }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap"
@@ -309,6 +320,184 @@ export default function ProductDB() {
           </div>
         </div>
       </div>
+
+      {/* ── Price Sync Modal ────────────────────────────────────────────── */}
+      {showPriceSync && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-purple-600 to-indigo-600">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-lg"><Bot className="text-white" /></div>
+                <div>
+                  <h2 className="text-white font-bold text-lg">AI Price Sync</h2>
+                  <p className="text-white/70 text-xs">Update your database using supplier price lists (PDF/Excel)</p>
+                </div>
+              </div>
+              <button onClick={() => { setShowPriceSync(false); setSyncData([]); }} className="text-white/70 hover:text-white text-xl">&times;</button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {syncData.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50">
+                  <div className="p-4 bg-purple-100 rounded-full mb-4">
+                    <Upload className="text-purple-600" size={32} />
+                  </div>
+                  <h3 className="text-lg font-bold text-gray-800">Upload Price List</h3>
+                  <p className="text-gray-500 text-sm mb-6 max-w-xs text-center">Upload your supplier's PDF or Excel file. AI will extract model numbers and prices.</p>
+                  
+                  <input
+                    type="file"
+                    id="price-sync-upload"
+                    className="hidden"
+                    accept=".pdf,.xlsx,.xls,.csv"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setIsSyncing(true);
+                      
+                      const formData = new FormData();
+                      formData.append('file', file);
+                      
+                      try {
+                        const res = await fetch('/api/admin/price-sync/extract', {
+                          method: 'POST',
+                          body: formData
+                        });
+                        if (res.ok) {
+                          const data = await res.json();
+                          setSyncData(data);
+                        } else {
+                          const err = await res.json();
+                          alert(err.error || 'Failed to extract data');
+                        }
+                      } catch (err) {
+                        alert('Network error during AI extraction');
+                      } finally {
+                        setIsSyncing(false);
+                      }
+                    }}
+                  />
+                  <label
+                    htmlFor="price-sync-upload"
+                    className={`px-8 py-3 bg-purple-600 text-white rounded-xl font-bold cursor-pointer hover:bg-purple-700 transition-all shadow-lg flex items-center gap-2 ${isSyncing ? 'opacity-50 pointer-events-none' : ''}`}
+                  >
+                    {isSyncing ? <Loader2 className="animate-spin" /> : <Plus size={20} />}
+                    {isSyncing ? 'AI is analyzing...' : 'Select Document'}
+                  </label>
+                  {isSyncing && <p className="mt-4 text-xs text-purple-600 font-medium animate-pulse">Scanning pages, matching models, and calculating differences...</p>}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-100 rounded-xl">
+                    <div className="flex items-center gap-3">
+                      <AlertTriangle className="text-amber-600" />
+                      <div>
+                        <p className="text-sm font-bold text-amber-900">Review Prices before Syncing</p>
+                        <p className="text-xs text-amber-700">AI found {syncData.length} matches. You can edit the "New Price" column manually before applying.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead className="bg-gray-50 text-gray-600 font-bold">
+                        <tr>
+                          <th className="p-3">Product Description</th>
+                          <th className="p-3 text-right">Current Price</th>
+                          <th className="p-3 text-right">New Price</th>
+                          <th className="p-3 text-center">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {syncData.map((item, idx) => {
+                          const diff = item.new_price - item.current_price;
+                          return (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="p-3 font-medium text-gray-800">{item.description}</td>
+                              <td className="p-3 text-right font-mono text-gray-500">{item.current_price.toFixed(2)}</td>
+                              <td className="p-3 text-right">
+                                <input
+                                  type="number"
+                                  className="w-24 p-1 border border-indigo-200 rounded text-right font-mono font-bold bg-indigo-50/30 focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={item.new_price}
+                                  onChange={e => {
+                                    const next = [...syncData];
+                                    next[idx].new_price = parseFloat(e.target.value) || 0;
+                                    setSyncData(next);
+                                  }}
+                                />
+                              </td>
+                              <td className="p-3 text-center">
+                                {diff > 0 ? (
+                                  <span className="text-red-600 font-bold flex items-center justify-center gap-1">↑ {diff.toFixed(2)}</span>
+                                ) : diff < 0 ? (
+                                  <span className="text-emerald-600 font-bold flex items-center justify-center gap-1">↓ {Math.abs(diff).toFixed(2)}</span>
+                                ) : (
+                                  <span className="text-gray-400">No Change</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            {syncData.length > 0 && (
+              <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-between items-center">
+                <button
+                  onClick={() => { setSyncData([]); }}
+                  className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700"
+                >
+                  Clear & Start Over
+                </button>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowPriceSync(false)}
+                    className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setIsSyncing(true);
+                      try {
+                        const res = await fetch('/api/admin/price-sync/apply', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ updates: syncData.filter(d => d.id) })
+                        });
+                        if (res.ok) {
+                          alert('Prices updated successfully!');
+                          setShowPriceSync(false);
+                          setSyncData([]);
+                          fetchProducts();
+                        } else {
+                          alert('Failed to apply updates');
+                        }
+                      } catch (err) {
+                        alert('Network error during sync');
+                      } finally {
+                        setIsSyncing(false);
+                      }
+                    }}
+                    className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-bold flex items-center gap-2"
+                  >
+                    {isSyncing ? <Loader2 className="animate-spin" /> : <CheckCircle2 size={18} />}
+                    Apply {syncData.length} Updates
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
