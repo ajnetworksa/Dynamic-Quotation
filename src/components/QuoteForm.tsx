@@ -2533,7 +2533,7 @@ export default function QuoteForm() {
           {/* Bottom Section: Terms & Totals */}
           <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
             {/* Terms & Conditions */}
-            <div className="flex-1 space-y-2" style={{ fontSize: `${termsFontSize}px` }}>
+            <div className="flex-1 space-y-2 [&_input]:text-[inherit] [&_textarea]:text-[inherit]" style={{ fontSize: `${termsFontSize}px` }}>
               {showNote && (
                 <div className="flex flex-col md:flex-row gap-2 group relative">
                   <span className="font-bold w-32 shrink-0">
@@ -2755,8 +2755,9 @@ export default function QuoteForm() {
                 TEXT LABELS: 'SUBTOTAL', 'DISCOUNT', 'VAT', 'TOTAL PACKAGE'
                   → Simply change the text directly in the JSX below.
             ────────────────────────────────────────────────────────────────── */}
-            <div className="w-full md:w-72 border-2 border-gray-800 shrink-0 h-fit">
-              <div className="grid grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base text-up">
+            <div className="w-full md:w-72 shrink-0 flex flex-col relative">
+              <div className="border-2 border-gray-800 w-full h-fit">
+                <div className="grid grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base text-up">
                 <div className="font-bold">SUBTOTAL</div>
                 <div className="flex justify-between items-center font-mono font-bold">
                   <span>SAR</span>
@@ -2804,7 +2805,16 @@ export default function QuoteForm() {
               </div>
             </div>
 
+            {/* ── STAMP — adjustable via settings (placed below totals box) ─────────────────────────── */}
+            {stampUrl && (
+              <div id="stamp-section" style={{ display: 'none', transform: `translate(${stampOffsetX}px, ${stampOffsetY}px)` }} className="relative z-10 w-full mt-4 flex justify-center">
+                <img src={stampUrl} alt="Company Stamp" className="object-contain opacity-90 transition-all duration-300" style={{ height: `${stampSize}px`, width: `${stampSize}px` }} />
+              </div>
+            )}
+            
           </div>
+
+        </div>
 
           {workflowVisibility.preparedBy && (
             <div className="mt-8 flex justify-between items-end border-t border-gray-100 pt-6">
@@ -2816,13 +2826,6 @@ export default function QuoteForm() {
                 <div className="w-48 border-b-2 border-gray-400 mb-1"></div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Authorized Signature</p>
               </div>
-            </div>
-          )}
-
-          {/* ── STAMP — adjustable via settings ─────────────────────────── */}
-          {stampUrl && (
-            <div id="stamp-section" style={{ display: 'none', transform: `translate(${stampOffsetX}px, ${stampOffsetY}px)` }} className="justify-center mt-6 mb-2 relative z-10">
-              <img src={stampUrl} alt="Company Stamp" className="object-contain opacity-90 transition-all duration-300" style={{ height: `${stampSize}px`, width: `${stampSize}px` }} />
             </div>
           )}
 
