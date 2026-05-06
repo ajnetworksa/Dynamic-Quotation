@@ -12,8 +12,18 @@ export default function Settings() {
   const [logoSize, setLogoSize] = useState<number>(24); // default 24 (h-24)
   const [logoSizeStatus, setLogoSizeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
+  const [termsFontSize, setTermsFontSize] = useState<number>(14); // default 14px
+  const [termsFontSizeStatus, setTermsFontSizeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
   const [footerImageStatus, setFooterImageStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [currentFooterImage, setCurrentFooterImage] = useState<string | null>(null);
+
+  const [stampImageStatus, setStampImageStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [currentStampImage, setCurrentStampImage] = useState<string | null>(null);
+  const [stampSize, setStampSize] = useState<number>(140);
+  const [stampOffsetX, setStampOffsetX] = useState<number>(0);
+  const [stampOffsetY, setStampOffsetY] = useState<number>(0);
+  const [stampPositionStatus, setStampPositionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   const [smtpStatus, setSmtpStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [smtpConfig, setSmtpConfig] = useState({
@@ -82,11 +92,40 @@ export default function Settings() {
       })
       .catch(console.error);
 
+    fetch('/api/settings/termsFontSize')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setTermsFontSize(parseInt(data.value, 10));
+      })
+      .catch(console.error);
+
     fetch('/api/settings/footerImage')
       .then(res => res.json())
       .then(data => {
         if (data.value) setCurrentFooterImage(data.value);
       })
+      .catch(console.error);
+
+    fetch('/api/settings/stampImage')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setCurrentStampImage(data.value);
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/stampSize')
+      .then(res => res.json())
+      .then(data => { if (data.value) setStampSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/stampOffsetX')
+      .then(res => res.json())
+      .then(data => { if (data.value) setStampOffsetX(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/stampOffsetY')
+      .then(res => res.json())
+      .then(data => { if (data.value) setStampOffsetY(parseInt(data.value, 10)); })
       .catch(console.error);
 
     fetch('/api/settings/smtpConfig')
@@ -292,7 +331,7 @@ export default function Settings() {
 
         const res = await fetch('/api/db/import', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
           body: JSON.stringify(payload)
         });
 
@@ -337,7 +376,7 @@ export default function Settings() {
         const base64 = event.target?.result as string;
         const res = await fetch('/api/settings', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
           body: JSON.stringify({ key: 'logo', value: base64 })
         });
 
@@ -371,7 +410,7 @@ export default function Settings() {
         const base64 = event.target?.result as string;
         const res = await fetch('/api/settings', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
           body: JSON.stringify({ key: 'footerImage', value: base64 })
         });
 
@@ -394,12 +433,47 @@ export default function Settings() {
     reader.readAsDataURL(file);
   };
 
+  const handleStampUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStampImageStatus('loading');
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const base64 = event.target?.result as string;
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+          body: JSON.stringify({ key: 'stampImage', value: base64 })
+        });
+        if (res.ok) {
+          setCurrentStampImage(base64);
+          setStampImageStatus('success');
+          setTimeout(() => setStampImageStatus('idle'), 3000);
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          console.error('[Settings] Stamp upload failed:', res.status, res.statusText, errData);
+          alert(`Stamp upload failed: ${res.status} ${res.statusText}. ${errData.error || ''}`);
+          setStampImageStatus('error');
+          setTimeout(() => setStampImageStatus('idle'), 5000);
+        }
+      } catch (error) {
+        console.error('Stamp upload error:', error);
+        setStampImageStatus('error');
+        setTimeout(() => setStampImageStatus('idle'), 5000);
+      } finally {
+        e.target.value = '';
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSmtpSave = async () => {
     setSmtpStatus('loading');
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ key: 'smtpConfig', value: JSON.stringify(smtpConfig) })
       });
       if (res.ok) {
@@ -420,7 +494,7 @@ export default function Settings() {
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ key: 'workflowVisibility', value: JSON.stringify(next) })
       });
       if (res.ok) {
@@ -435,7 +509,7 @@ export default function Settings() {
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ key: 'themeColors', value: JSON.stringify(themeColors) })
       });
       if (res.ok) {
@@ -454,7 +528,7 @@ export default function Settings() {
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({
           key: 'muFilters',
           value: JSON.stringify({ zeroMarkup: zeroMarkupKeywords, excluded: excludedKeywords })
@@ -476,7 +550,7 @@ export default function Settings() {
     try {
       await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ key: 'rowReorderMode', value: val })
       });
       setRowReorderStatus('success');
@@ -492,7 +566,7 @@ export default function Settings() {
     try {
       await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ key: 'developerMode', value: String(val) })
       });
       setDevModeStatus('success');
@@ -677,7 +751,7 @@ export default function Settings() {
                       try {
                         const res = await fetch('/api/settings', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
                           body: JSON.stringify({ key: 'logoSize', value: logoSize.toString() })
                         });
                         if (res.ok) {
@@ -699,6 +773,49 @@ export default function Settings() {
                     <span className="text-emerald-600 text-xs font-medium">Size saved</span>
                   )}
                   {logoSizeStatus === 'error' && (
+                    <span className="text-red-600 text-xs font-medium">Failed to save size</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 border-t border-gray-100 pt-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Adjust Terms Font Size (px)
+                </label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="8"
+                    max="24"
+                    value={termsFontSize}
+                    onChange={(e) => setTermsFontSize(parseInt(e.target.value, 10))}
+                    onMouseUp={async () => {
+                      setTermsFontSizeStatus('loading');
+                      try {
+                        const res = await fetch('/api/settings', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                          body: JSON.stringify({ key: 'termsFontSize', value: termsFontSize.toString() })
+                        });
+                        if (res.ok) {
+                          setTermsFontSizeStatus('success');
+                          setTimeout(() => setTermsFontSizeStatus('idle'), 3000);
+                        } else {
+                          setTermsFontSizeStatus('error');
+                        }
+                      } catch (e) {
+                        setTermsFontSizeStatus('error');
+                      }
+                    }}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-gray-600 text-sm font-mono w-8">{termsFontSize}px</span>
+                </div>
+                <div className="mt-2 h-4">
+                  {termsFontSizeStatus === 'success' && (
+                    <span className="text-emerald-600 text-xs font-medium">Size saved</span>
+                  )}
+                  {termsFontSizeStatus === 'error' && (
                     <span className="text-red-600 text-xs font-medium">Failed to save size</span>
                   )}
                 </div>
@@ -771,7 +888,130 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Theme Colors Configuration */}
+      {/* Stamp Image Setup */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <ImageIcon className="text-indigo-600" />
+          <h2 className="text-xl font-semibold text-gray-800">Company Stamp Setup</h2>
+        </div>
+        <div className="p-6">
+          <p className="text-gray-600 mb-4 text-sm">
+            Upload your official company stamp (PNG with transparent background recommended). It will appear centered above the footer on documents and is included when using <strong>Export PDF + Stamp</strong>.
+          </p>
+          <div className="flex items-start gap-8">
+            <div className="flex-1">
+              <div className="relative inline-block">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleStampUpload}
+                  disabled={stampImageStatus === 'loading'}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                />
+                <button
+                  disabled={stampImageStatus === 'loading'}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  {stampImageStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                  {stampImageStatus === 'loading' ? 'Uploading...' : 'Upload Stamp Image'}
+                </button>
+              </div>
+              <div className="mt-3 h-6">
+                {stampImageStatus === 'success' && (
+                  <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                    <CheckCircle2 size={16} /> Stamp image updated successfully
+                  </span>
+                )}
+                {stampImageStatus === 'error' && (
+                  <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                    <XCircle size={16} /> Failed to upload stamp image
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-6 border-t border-gray-100 pt-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Adjust Stamp Size (px)
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range" min="50" max="400" value={stampSize}
+                      onChange={(e) => setStampSize(parseInt(e.target.value, 10))}
+                      onMouseUp={async () => {
+                        setStampPositionStatus('loading');
+                        try {
+                          const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampSize', value: stampSize.toString() }) });
+                          if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
+                          else setStampPositionStatus('error');
+                        } catch { setStampPositionStatus('error'); }
+                      }}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <span className="text-gray-600 text-sm font-mono w-12">{stampSize}px</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Horizontal Position Offset (px) - Move Right/Left
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range" min="-800" max="800" value={stampOffsetX}
+                      onChange={(e) => setStampOffsetX(parseInt(e.target.value, 10))}
+                      onMouseUp={async () => {
+                        setStampPositionStatus('loading');
+                        try {
+                          const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampOffsetX', value: stampOffsetX.toString() }) });
+                          if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
+                          else setStampPositionStatus('error');
+                        } catch { setStampPositionStatus('error'); }
+                      }}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <span className="text-gray-600 text-sm font-mono w-12">{stampOffsetX}px</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Vertical Position Offset (px) - Move Up/Down
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range" min="-400" max="400" value={stampOffsetY}
+                      onChange={(e) => setStampOffsetY(parseInt(e.target.value, 10))}
+                      onMouseUp={async () => {
+                        setStampPositionStatus('loading');
+                        try {
+                          const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampOffsetY', value: stampOffsetY.toString() }) });
+                          if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
+                          else setStampPositionStatus('error');
+                        } catch { setStampPositionStatus('error'); }
+                      }}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <span className="text-gray-600 text-sm font-mono w-12">{stampOffsetY}px</span>
+                  </div>
+                </div>
+
+                <div className="h-4">
+                  {stampPositionStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Layout saved</span>}
+                  {stampPositionStatus === 'error' && <span className="text-red-600 text-xs font-medium">Failed to save layout</span>}
+                </div>
+              </div>
+            </div>
+            <div className="w-36 h-36 border-2 border-dashed border-gray-300 rounded-full flex items-center justify-center bg-gray-50 overflow-hidden shrink-0">
+              {currentStampImage ? (
+                <img src={currentStampImage} alt="Current Stamp" className="max-w-full max-h-full object-contain p-1" />
+              ) : (
+                <span className="text-gray-400 text-xs text-center px-3">No stamp uploaded</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
           <div className="flex items-center gap-3">

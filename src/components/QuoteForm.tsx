@@ -86,6 +86,7 @@ export default function QuoteForm() {
   const recallQuoteId = searchParams.get('recall');
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [footerImageUrl, setFooterImageUrl] = useState<string | null>(null);
+  const [stampUrl, setStampUrl] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isRfqLoading, setIsRfqLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -104,6 +105,10 @@ export default function QuoteForm() {
   // You can change the default here, but it will be overridden by whatever is
   // saved in the database via the Settings page.
   const [logoSize, setLogoSize] = useState(24);
+  const [stampSize, setStampSize] = useState(140);
+  const [stampOffsetX, setStampOffsetX] = useState(0);
+  const [stampOffsetY, setStampOffsetY] = useState(0);
+  const [termsFontSize, setTermsFontSize] = useState(14); // Default 14px
   const [themeColors, setThemeColors] = useState<ThemeColors>({
     headerBg: "#039737a6",
     headerText: "#1f2937",
@@ -465,6 +470,12 @@ export default function QuoteForm() {
         if (dataSize.value) setLogoSize(parseInt(dataSize.value, 10));
       }
 
+      const resTermsFont = await fetch('/api/settings/termsFontSize');
+      if (resTermsFont.ok) {
+        const dataTermsFont = await resTermsFont.json();
+        if (dataTermsFont.value) setTermsFontSize(parseInt(dataTermsFont.value, 10));
+      }
+
       const resFooter = await fetch('/api/settings/footerImage');
       if (resFooter.ok) {
         const dataFooter = await resFooter.json();
@@ -505,6 +516,32 @@ export default function QuoteForm() {
         const dataRowMode = await resRowMode.json();
         if (dataRowMode.value) setRowReorderMode(dataRowMode.value as 'click' | 'drag');
       }
+
+      // Load workflow visibility (controls preparedBy, invoice, email, print, template toggles)
+      const resWorkflow = await fetch('/api/settings/workflowVisibility');
+      if (resWorkflow.ok) {
+        const dataWorkflow = await resWorkflow.json();
+        if (dataWorkflow.value) {
+          const parsed = JSON.parse(dataWorkflow.value);
+          setWorkflowVisibility(prev => ({ ...prev, ...parsed }));
+        }
+      }
+
+      // Load stamp image
+      const resStamp = await fetch('/api/settings/stampImage');
+      if (resStamp.ok) {
+        const dataStamp = await resStamp.json();
+        if (dataStamp.value) setStampUrl(dataStamp.value);
+      }
+      
+      const resStampSize = await fetch('/api/settings/stampSize');
+      if (resStampSize.ok) { const d = await resStampSize.json(); if(d.value) setStampSize(parseInt(d.value, 10)); }
+
+      const resStampOffsetX = await fetch('/api/settings/stampOffsetX');
+      if (resStampOffsetX.ok) { const d = await resStampOffsetX.json(); if(d.value) setStampOffsetX(parseInt(d.value, 10)); }
+
+      const resStampOffsetY = await fetch('/api/settings/stampOffsetY');
+      if (resStampOffsetY.ok) { const d = await resStampOffsetY.json(); if(d.value) setStampOffsetY(parseInt(d.value, 10)); }
     } catch (e) {
       console.error('Failed to fetch settings', e);
     }
@@ -1684,6 +1721,158 @@ export default function QuoteForm() {
     }
   };
 
+  const handleExportPDFWithStamp = async () => {
+    if (!printRef.current) return;
+
+    try {
+      const originalElements = printRef.current.querySelectorAll('input, textarea, select');
+      const elementData = Array.from(originalElements).map((el: any) => {
+        const computedStyle = window.getComputedStyle(el);
+        return {
+          value: el.tagName === 'SELECT' ? el.options[el.selectedIndex]?.text : el.value,
+          textAlign: computedStyle.textAlign,
+          fontFamily: computedStyle.fontFamily,
+          fontSize: computedStyle.fontSize,
+          fontWeight: computedStyle.fontWeight,
+          color: computedStyle.color,
+          padding: computedStyle.padding,
+        };
+      });
+
+      const canvas = await html2canvas(printRef.current, {
+        scale: 3,
+        useCORS: true,
+        logging: false,
+        onclone: (clonedDoc) => {
+          const clonedElements = clonedDoc.querySelectorAll('input, textarea, select');
+          clonedElements.forEach((el: any, index) => {
+            const data = elementData[index];
+            if (!data) return;
+
+            const div = clonedDoc.createElement('div');
+            div.innerText = data.value || '';
+            div.className = el.className;
+            div.style.textAlign = data.textAlign;
+            div.style.fontFamily = data.fontFamily;
+            div.style.fontSize = data.fontSize;
+            div.style.fontWeight = data.fontWeight;
+            div.style.color = data.color;
+            div.style.padding = data.padding;
+            div.style.whiteSpace = 'pre-wrap';
+            div.style.wordBreak = 'break-word';
+            div.style.display = 'flex';
+            div.style.alignItems = 'center';
+            if (data.textAlign === 'right') div.style.justifyContent = 'flex-end';
+            if (data.textAlign === 'center') div.style.justifyContent = 'center';
+
+            if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text')) {
+              div.style.minHeight = el.offsetHeight ? `${el.offsetHeight}px` : (el.style.height || 'auto');
+              div.style.height = 'auto';
+              div.style.overflow = 'visible';
+              div.style.alignItems = el.tagName === 'TEXTAREA' ? 'flex-start' : 'center';
+              div.style.whiteSpace = 'pre-wrap';
+              div.style.wordBreak = 'break-word';
+            }
+
+            div.style.border = 'none';
+            div.style.background = 'transparent';
+
+            el.parentNode?.replaceChild(div, el);
+          });
+
+          const hiddenElements = clonedDoc.querySelectorAll('.print\\:hidden');
+          hiddenElements.forEach((el: any) => {
+            el.style.display = 'none';
+          });
+
+          // FORCE THE STAMP TO BE VISIBLE FOR THIS EXPORT
+          const stampSection = clonedDoc.getElementById('stamp-section');
+          if (stampSection) {
+            stampSection.style.display = 'flex';
+          }
+
+          const printBlockElements = clonedDoc.querySelectorAll('.print\\:block, .print\\:flex');
+          printBlockElements.forEach((el: any) => {
+            el.style.display = el.classList.contains('print:flex') ? 'flex' : 'block';
+          });
+
+          clonedDoc.querySelectorAll('.print\\:border-none').forEach((el: any) => {
+            el.style.border = 'none';
+          });
+          
+          clonedDoc.querySelectorAll('.print\\:overflow-visible').forEach((el: any) => {
+            el.style.overflow = 'visible';
+          });
+
+          const tableOverflowContainer = clonedDoc.querySelector('.overflow-x-auto');
+          if (tableOverflowContainer) {
+            (tableOverflowContainer as HTMLElement).style.display = 'flex';
+            (tableOverflowContainer as HTMLElement).style.justifyContent = 'center';
+            (tableOverflowContainer as HTMLElement).style.width = '100%';
+          }
+
+          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[50px_1fr_80px_80px_100px_120px"]');
+          gridRows.forEach((el: any) => {
+            el.style.gridTemplateColumns = '50px 1fr 80px 80px 100px 120px';
+            el.style.width = '100%';
+            el.style.margin = '0 auto';
+            el.style.display = 'grid';
+          });
+
+          const pdfRoot = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement | null;
+          if (pdfRoot) {
+            const w = pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width;
+            pdfRoot.style.minHeight = `${w * (297 / 210)}px`;
+            pdfRoot.style.display = 'flex';
+            pdfRoot.style.flexDirection = 'column';
+            pdfRoot.style.justifyContent = 'space-between';
+          }
+        }
+      });
+
+      const imgData = canvas.toDataURL('image/jpeg', 1);
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 1) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, imgHeight, undefined, 'FAST');
+        heightLeft -= pageHeight;
+      }
+
+      const pdfBlob = pdf.output('blob');
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = url;
+
+      const customerName = (selectedCustomer?.name || 'Unknown')
+        .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
+        .trim();
+      link.download = `${customerName}-${quoteId}-stamped.pdf`;
+
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    } catch (error) {
+      console.error('Error generating PDF with Stamp:', error);
+      alert('Failed to generate PDF with Stamp');
+    }
+  };
+
   const handleExportExcel = async () => {
     // Create quote info sheet
     const quoteInfo = [
@@ -1886,6 +2075,11 @@ export default function QuoteForm() {
           <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
           </button>
+          {stampUrl && (
+            <button onClick={handleExportPDFWithStamp} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors" title="Export PDF with company stamp">
+              <Download size={18} /> Export PDF + Stamp
+            </button>
+          )}
         </div>
       </div>
 
@@ -2339,7 +2533,7 @@ export default function QuoteForm() {
           {/* Bottom Section: Terms & Totals */}
           <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
             {/* Terms & Conditions */}
-            <div className="flex-1 space-y-2 text-sm">
+            <div className="flex-1 space-y-2" style={{ fontSize: `${termsFontSize}px` }}>
               {showNote && (
                 <div className="flex flex-col md:flex-row gap-2 group relative">
                   <span className="font-bold w-32 shrink-0">
@@ -2622,6 +2816,13 @@ export default function QuoteForm() {
                 <div className="w-48 border-b-2 border-gray-400 mb-1"></div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Authorized Signature</p>
               </div>
+            </div>
+          )}
+
+          {/* ── STAMP — adjustable via settings ─────────────────────────── */}
+          {stampUrl && (
+            <div id="stamp-section" style={{ display: 'none', transform: `translate(${stampOffsetX}px, ${stampOffsetY}px)` }} className="justify-center mt-6 mb-2 relative z-10">
+              <img src={stampUrl} alt="Company Stamp" className="object-contain opacity-90 transition-all duration-300" style={{ height: `${stampSize}px`, width: `${stampSize}px` }} />
             </div>
           )}
 
