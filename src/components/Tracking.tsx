@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import QuoteDiffViewer from './QuoteDiffViewer';
@@ -159,6 +159,19 @@ export default function Tracking() {
       setSelectedIds(new Set());
       setBulkStatus('');
       fetchQuotes();
+    } catch (e) {
+      alert('Failed to update status.');
+    }
+  };
+
+  const updateSingleStatus = async (quoteId: string, newStatus: string) => {
+    try {
+      await fetch('/api/quotes/bulk-status', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [quoteId], status: newStatus })
+      });
+      setQuotes(prev => prev.map(q => q.quote_id === quoteId ? { ...q, status: newStatus } : q));
     } catch (e) {
       alert('Failed to update status.');
     }
@@ -465,10 +478,17 @@ export default function Tracking() {
                       {quote.type || 'Quotation'}
                     </span>
                   </td>
-                  <td className="p-4">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${STATUS_BADGE[quote.status || 'Draft'] || STATUS_BADGE.Draft}`}>
-                      {quote.status || 'Draft'}
-                    </span>
+                  <td className="p-4 cursor-default" onClick={e => e.stopPropagation()}>
+                    <select
+                      value={quote.status || 'Draft'}
+                      onChange={e => updateSingleStatus(quote.quote_id, e.target.value)}
+                      className={`text-xs font-semibold rounded px-2 py-1 border-0 outline-none cursor-pointer appearance-none ${STATUS_BADGE[quote.status || 'Draft'] || STATUS_BADGE.Draft}`}
+                    >
+                      <option value="Draft">Draft</option>
+                      <option value="Sent">Sent</option>
+                      <option value="Accepted">Accepted</option>
+                      <option value="Rejected">Rejected</option>
+                    </select>
                   </td>
                   <td className="p-4 text-gray-600">
                     {formatDisplayDate(quote.date)}

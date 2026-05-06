@@ -89,9 +89,25 @@ app.use(helmet({
 // ── SECURITY: Body size limit ─────────────────────────────────────────────────
 // The global limit is 1mb — sufficient for all normal API calls.
 // Allowing 50mb globally would let anyone flood the server with large payloads.
-// The /api/db/import route below overrides this with 50mb just for that endpoint.
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ limit: '1mb', extended: true }));
+// The /api/db/import route overrides this with 50mb and /api/settings with 10mb.
+app.use((req, res, next) => {
+  if (req.path === '/api/db/import') {
+    express.json({ limit: '50mb' })(req, res, next);
+  } else if (req.path === '/api/settings') {
+    express.json({ limit: '10mb' })(req, res, next);
+  } else {
+    express.json({ limit: '1mb' })(req, res, next);
+  }
+});
+app.use((req, res, next) => {
+  if (req.path === '/api/db/import') {
+    express.urlencoded({ limit: '50mb', extended: true })(req, res, next);
+  } else if (req.path === '/api/settings') {
+    express.urlencoded({ limit: '10mb', extended: true })(req, res, next);
+  } else {
+    express.urlencoded({ limit: '1mb', extended: true })(req, res, next);
+  }
+});
 
 // ── SECURITY: Login rate limiter ──────────────────────────────────────────────
 // Limits login attempts to 10 per 15 minutes per IP address.
@@ -558,7 +574,8 @@ const FollowupSchema = z.object({
 
 const SettingSchema = z.object({
   key:   z.string().min(1).max(100),
-  value: z.string().max(10000),
+  // Express body limits protect against abuse; allow large base64 strings
+  value: z.string().max(15000000),
 });
 
 // ── API Routes ────────────────────────────────────────────────────────────────
@@ -1345,7 +1362,7 @@ app.get('/api/db/export', requireAuth, requirePermission('canDatabaseMaintenance
 // The global limit is 1mb. This specific route needs 50mb for large imports.
 // We override body-parser just for this endpoint using express.json({ limit })
 // as inline middleware before the handler.
-app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenance'), express.json({ limit: '50mb' }), (req, res) => {
+app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
   const { customers, products, quotes, quote_items } = req.body;
   const importErrors: string[] = [];
 
@@ -1446,6 +1463,7 @@ app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), v
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
     res.json({ success: true });
   } catch (error: any) {
+    console.error(`[Settings Upload Error] Failed to save key "${key}":`, error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1550,7 +1568,7 @@ app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) 
     ];
 
     const response = await openai.chat.completions.create({
-      model: "google/gemma-3-27b-it:free", // Multimodal free model
+      model: "google/gemma-4-31b-it:free", // Free multimodal model with vision support
       // @ts-ignore
       messages: messages,
       temperature: 0.1,
@@ -1577,8 +1595,8 @@ app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) 
 
 // ── AI Price Sync ─────────────────────────────────────────────────────────────
 app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUsePriceSync'), upload.single('file'), async (req, res) => {
-  if (!process.env.GEMINI_API_KEY) {
-    return res.status(400).json({ error: 'Please set GEMINI_API_KEY in your .env file to use AI features.' });
+  if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
+    return res.status(400).json({ error: 'Please set OPENROUTER_API_KEY in your .env file to use AI features.' });
   }
 
   if (!req.file) {
@@ -1588,32 +1606,35 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
   try {
     const products = db.prepare('SELECT id, description, unit_price FROM products').all() as any[];
     
-    const base64Data = req.file.buffer.toString('base64');
     const mimeType = req.file.mimetype;
-    
-    const messages = [
-      {
-        role: "user",
-        // @ts-ignore
-        content: [
-          {
-            type: "text",
-            text: "You are a pricing expert. Extract product model numbers and their unit prices from this document. " +
-                   "Return a JSON array ONLY, where each object has: 'model' (string) and 'price' (number). " +
-                   "Clean the model names (remove serials if possible). Do not include formatting or text."
-          },
-          {
-            type: "image_url",
-            image_url: {
-              url: `data:${mimeType};base64,${base64Data}`
-            }
-          }
-        ]
-      }
-    ];
+    const isImage = mimeType.startsWith('image/');
+
+    const systemPrompt = "You are a pricing expert. Extract product model numbers and their unit prices from this document. " +
+      "Return a JSON array ONLY, where each object has: 'model' (string) and 'price' (number). " +
+      "Clean the model names (remove serial prefixes if possible). Do not include any markdown formatting, just the raw JSON array.";
+
+    let messageContent: any[];
+
+    if (isImage) {
+      // Image files: send as base64 image_url (supported by vision models)
+      const base64Data = req.file.buffer.toString('base64');
+      messageContent = [
+        { type: "text", text: systemPrompt },
+        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}` } }
+      ];
+    } else {
+      // Text-based files (CSV, TXT, Excel exported as CSV): send as plain text
+      // For binary Excel (.xlsx), attempt to read as UTF-8 text (may be garbled, but AI can often still parse)
+      const textContent = req.file.buffer.toString('utf-8');
+      messageContent = [
+        { type: "text", text: `${systemPrompt}\n\nDocument content:\n${textContent.substring(0, 8000)}` }
+      ];
+    }
+
+    const messages = [{ role: "user", content: messageContent }];
 
     const response = await openai.chat.completions.create({
-      model: "google/gemini-flash-1.5", 
+      model: "baidu/qianfan-ocr-fast:free", // Free OCR-specialized model (ideal for price list documents)
       // @ts-ignore
       messages: messages,
       temperature: 0.1,
@@ -1633,17 +1654,19 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
       // Fallback if AI output is not clean JSON
       const jsonMatch = text.match(/\[.*\]/s);
       if (jsonMatch) extracted = JSON.parse(jsonMatch[0]);
-      else throw new Error("AI output was not valid JSON");
+      else throw new Error(`AI output was not valid JSON. Raw output: ${text.substring(0, 200)}`);
+    }
+
+    if (!Array.isArray(extracted) || extracted.length === 0) {
+      throw new Error('AI returned no products. The document may not contain recognizable price data.');
     }
 
     // Fuzzy Match with local database
     const matches = extracted.map(item => {
-      // Find best match in our products list
-      // Prioritize items that contain the model name or are contained within it
       const match = products.find(p => {
         const pDesc = p.description.toLowerCase();
-        const iModel = item.model.toLowerCase();
-        return pDesc.includes(iModel) || iModel.includes(pDesc);
+        const iModel = (item.model || '').toLowerCase();
+        return iModel && (pDesc.includes(iModel) || iModel.includes(pDesc));
       });
       
       return {
@@ -1658,7 +1681,8 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
     res.json(matches);
   } catch (err: any) {
     console.error('Price Sync Error:', err);
-    res.status(500).json({ error: 'AI extraction failed. Ensure the file is readable.' });
+    logSystemError('PriceSync', 'ExtractionError', err.message, err.stack);
+    res.status(500).json({ error: err.message || 'AI extraction failed. Ensure the file is readable.' });
   }
 });
 

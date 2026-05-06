@@ -351,7 +351,7 @@ export default function ProductDB() {
                     type="file"
                     id="price-sync-upload"
                     className="hidden"
-                    accept=".pdf,.xlsx,.xls,.csv"
+                    accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp"
                     onChange={async (e) => {
                       const file = e.target.files?.[0];
                       if (!file) return;
@@ -361,8 +361,10 @@ export default function ProductDB() {
                       formData.append('file', file);
                       
                       try {
+                        const token = localStorage.getItem('token') || '';
                         const res = await fetch('/api/admin/price-sync/extract', {
                           method: 'POST',
+                          headers: { 'Authorization': `Bearer ${token}` },
                           body: formData
                         });
                         if (res.ok) {
