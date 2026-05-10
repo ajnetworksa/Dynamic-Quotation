@@ -739,6 +739,31 @@ export default function Tracking() {
                         <span className="text-xs font-semibold text-gray-700">{log.actor || 'System'}</span>
                         <span className="text-gray-300 text-xs">•</span>
                         <span className="text-xs text-gray-500">{new Date(log.timestamp).toLocaleString()}</span>
+                        
+                        {(user?.role === 'admin' || user?.permissions?.canUndoQuote) && log.previous_state && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!confirm('Are you sure you want to undo this action and restore the previous state?')) return;
+                              try {
+                                const res = await fetch(`/api/quotes/${timelineQuoteId}/undo/${log.id}`, { method: 'POST' });
+                                if (res.ok) {
+                                  alert('Quote restored successfully!');
+                                  fetchTimeline(timelineQuoteId!);
+                                  fetchQuotes();
+                                } else {
+                                  const err = await res.json();
+                                  alert('Failed to undo: ' + err.error);
+                                }
+                              } catch (err: any) {
+                                alert('Error: ' + err.message);
+                              }
+                            }}
+                            className="ml-auto flex items-center gap-1 px-2 py-0.5 bg-red-50 hover:bg-red-100 text-red-600 rounded text-[10px] font-bold uppercase transition-colors"
+                          >
+                            Undo Action
+                          </button>
+                        )}
                       </div>
                       {/* Field-level change details */}
                       {log.details && (() => {

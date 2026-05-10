@@ -281,6 +281,7 @@ addColumnIfNotExists('quotes', 'mobilization', 'TEXT');
 addColumnIfNotExists('quotes', 'duration', 'TEXT');
 addColumnIfNotExists('quotes', 'bank_details', 'TEXT');
 addColumnIfNotExists('quotes', 'subject_ar', 'TEXT');
+addColumnIfNotExists('activity_log', 'previous_state', 'TEXT');
 addColumnIfNotExists('quotes', 'note_header', 'TEXT');
 addColumnIfNotExists('quotes', 'discount', 'REAL');
 addColumnIfNotExists('quotes', 'status', 'TEXT DEFAULT "Draft"');
@@ -1187,6 +1188,11 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
         }
         finalVersion = (existing.version || 1) + 1;
 
+        // Fetch full previous state to save in activity_log for undo capability
+        const fullQuote = db.prepare('SELECT * FROM quotes WHERE quote_id = ?').get(quote_id);
+        const fullItems = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(quote_id);
+        const previousStateStr = JSON.stringify({ quote: fullQuote, items: fullItems });
+
         db.prepare(`
           UPDATE quotes SET 
             date = ?, customer_id = ?, subject = ?, subject_ar = ?, discount = ?, subtotal = ?, tax = ?, grand_total = ?, updated_at = ?,
@@ -1209,7 +1215,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
         const action = existing.status !== (status || 'Draft')
           ? `Status changed to ${status || 'Draft'}`
           : 'Updated';
-        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, action, actor, updated_at, logDetails);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details, previous_state) VALUES (?, ?, ?, ?, ?, ?)').run(quote_id, action, actor, updated_at, logDetails, previousStateStr);
       } else {
         db.prepare(`
           INSERT INTO quotes (
@@ -1238,6 +1244,9 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
   } catch (error: any) {
     if (error.message === 'VERSION_CONFLICT') {
       return res.status(409).json({ error: 'This quote was modified by someone else since you opened it.' });
+    }
+    if (error.message.includes('UNIQUE constraint failed: quotes.quote_id')) {
+      return res.status(409).json({ error: 'ID_TAKEN' });
     }
     console.error('Save quote error:', error);
     res.status(500).json({ error: error.message });
@@ -1298,6 +1307,71 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
 
     res.json({ quote, logs });
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Restore Previous Quote State (Undo Timeline action) ─────────────────────────
+app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
+  try {
+    const { quote_id, log_id } = req.params;
+    const currentUser = (req as any).user;
+    const actor = currentUser?.username || 'system';
+
+    const canUndo = currentUser.role === 'admin' || !!currentUser.permissions?.canUndoQuote;
+    if (!canUndo) {
+      return res.status(403).json({ error: 'Access denied: you do not have permission to undo timeline actions.' });
+    }
+
+    const existing = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    if (existing) {
+      const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+      if (!canSeeAll && existing.author_id !== currentUser.id) {
+        return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
+      }
+    }
+
+    const logEntry = db.prepare('SELECT previous_state FROM activity_log WHERE id = ? AND quote_id = ?').get(log_id, quote_id) as any;
+    if (!logEntry || !logEntry.previous_state) {
+      return res.status(400).json({ error: 'No previous state found for this log entry.' });
+    }
+
+    const parsed = JSON.parse(logEntry.previous_state);
+    const oldQuote = parsed.quote;
+    const oldItems = parsed.items || [];
+    
+    if (!oldQuote) return res.status(400).json({ error: 'Invalid previous state structure.' });
+
+    db.transaction(() => {
+      // Restore main quote
+      const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id');
+      const setClause = quoteCols.map(c => \`\${c} = ?\`).join(', ');
+      const values = quoteCols.map(c => oldQuote[c]);
+      
+      db.prepare(\`UPDATE quotes SET \${setClause} WHERE quote_id = ?\`).run(...values, quote_id);
+
+      // Restore items
+      db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
+      if (oldItems.length > 0) {
+        const itemCols = Object.keys(oldItems[0]).filter(k => k !== 'id');
+        const itemPlaceholders = itemCols.map(() => '?').join(', ');
+        const insertStmt = db.prepare(\`INSERT INTO quote_items (\${itemCols.join(', ')}) VALUES (\${itemPlaceholders})\`);
+        
+        for (const item of oldItems) {
+          const itemVals = itemCols.map(c => item[c]);
+          insertStmt.run(...itemVals);
+        }
+      }
+
+      const updated_at = new Date().toISOString();
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(
+        quote_id, 'Restored from previous version', actor, updated_at, null
+      );
+    })();
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Undo error:', error);
     res.status(500).json({ error: error.message });
   }
 });
