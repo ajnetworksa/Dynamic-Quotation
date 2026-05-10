@@ -154,6 +154,7 @@ export default function QuoteForm() {
   const [templateName, setTemplateName] = useState('');
   const [focusedDescriptionIndex, setFocusedDescriptionIndex] = useState<number | null>(null);
   const descriptionRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
+  const blurTimeoutRef = useRef<NodeJS.Timeout>();
   // Measured position of the active description textarea — updated by useEffect so it's always fresh
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   // Standalone modal for adding a new product (outside textarea focus chain)
@@ -165,6 +166,7 @@ export default function QuoteForm() {
   const [subject, setSubject] = useState('');
   const [subjectAr, setSubjectAr] = useState('');
   const [items, setItems] = useState<QuoteItem[]>([]);
+  const [itemsHistory, setItemsHistory] = useState<QuoteItem[][]>([]);
   const [discount, setDiscount] = useState(0);
   const [status, setStatus] = useState('Draft');
   const [type, setType] = useState('Quotation');
@@ -457,6 +459,28 @@ export default function QuoteForm() {
     };
   }, [focusedDescriptionIndex]);
 
+  // Undo (Ctrl+Z) for dragging operations
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        // Prevent intercepting native text undo if typing in an input
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+        e.preventDefault();
+        setItemsHistory(prevHistory => {
+          if (prevHistory.length === 0) return prevHistory;
+          const newHistory = [...prevHistory];
+          const previousItems = newHistory.pop()!;
+          setItems(previousItems);
+          return newHistory;
+        });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const fetchLogo = async () => {
     try {
       const res = await fetch('/api/settings/logo');
@@ -565,6 +589,9 @@ export default function QuoteForm() {
     setDragOverIndex(null);
     if (src !== null && src !== targetIndex) {
       setItems(prev => {
+        // Save current items to history before mutating (keep last 20)
+        setItemsHistory(h => [...h, prev].slice(-20));
+        
         const next = [...prev];
         const [moved] = next.splice(src, 1);
         next.splice(targetIndex, 0, moved);
@@ -820,47 +847,58 @@ export default function QuoteForm() {
     const res = await fetch(`/api/quotes/${id}`);
     if (res.ok) {
       const data = await res.json();
+
+      let parsedDraft: any = null;
+      if (data.draft_data) {
+        try {
+          parsedDraft = typeof data.draft_data === 'string' ? JSON.parse(data.draft_data) : data.draft_data;
+        } catch(e) {}
+      }
+
       setQuoteId(data.quote_id);
-      setDate(data.date);
-      setExpiryDate(data.expiry_date || '');
-      setSelectedCustomerId(data.customer_id || '');
+      setDate(parsedDraft?.date || data.date);
+      setExpiryDate(parsedDraft?.expiryDate || data.expiry_date || '');
+      setSelectedCustomerId(parsedDraft?.selectedCustomerId || data.customer_id || '');
+      
       // Update search field if customer found
-      const c = customersList.find(cust => cust.id === data.customer_id);
+      const custId = parsedDraft?.selectedCustomerId || data.customer_id;
+      const c = customersList.find(cust => cust.id === custId);
       if (c) {
         setSelectedCustomer(c);
         setCustomerSearch(c.name);
       }
-      setSubject(data.subject || '');
-      setSubjectAr(data.subject_ar || '');
-      setNoteHeader(data.note_header || 'NOTE:');
-      setNoteHeader(data.note_header || 'NOTE:');
-      setNote(data.note || 'Any additional work|device will be considered Change Order\nInternet source is provided by the OWNER');
-      setNoteAr(data.note_ar || 'سيتم اعتبار أي عمل إضافي | جهاز بمثابة أمر تغيير\nيتم توفير مصدر الإنترنت من قبل المالك');
-      setDiscount(data.discount || 0);
+      
+      setSubject(parsedDraft?.subject || data.subject || '');
+      setSubjectAr(parsedDraft?.subjectAr || data.subject_ar || '');
+      setNoteHeader(parsedDraft?.noteHeader || data.note_header || 'NOTE:');
+      setNote(parsedDraft?.note || data.note || 'Any additional work|device will be considered Change Order\nInternet source is provided by the OWNER');
+      setNoteAr(parsedDraft?.noteAr || data.note_ar || 'سيتم اعتبار أي عمل إضافي | جهاز بمثابة أمر تغيير\nيتم توفير مصدر الإنترنت من قبل المالك');
+      setDiscount(parsedDraft?.discount !== undefined ? parsedDraft.discount : (data.discount || 0));
       setStatus(data.status || 'Draft');
       setType(data.type || 'Quotation');
       setVersion(data.version || 1);
-      setVatRate(data.vat_rate !== undefined ? data.vat_rate : 15);
-      setMarkup(data.markup !== undefined ? data.markup : 8);
-      setPayment(data.payment || 'Full Payment in ADVANCE');
-      setPaymentAr(data.payment_ar || 'الدفع الكامل مقدما');
-      setWarranty(data.warranty || "2 YEARS limited warranty and/or supplier's recommendation");
-      setWarrantyAr(data.warranty_ar || 'ضمان محدود لمدة عامين و/أو توصية المورد');
-      setManpower(data.manpower || '2 Technicians, 1 Supervisor');
-      setManpowerAr(data.manpower_ar || 'فنيين، 1 مشرف 2');
-      setMobilization(data.mobilization || '3-4 days upon confirmation of payment');
-      setMobilizationAr(data.mobilization_ar || 'أيام بعد تأكيد الدفع 4-3');
-      setDuration(data.duration || '1-2 Working Days');
-      setDurationAr(data.duration_ar || 'أيام عمل 2-1');
-      setBankDetails(data.bank_details || 'ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
-      setBankDetailsAr(data.bank_details_ar || 'بنك الإنماء - الحساب: 68206662020000\nالأيبان: SA0305000068206662020000 عبدالمحسن\nعبدالعزيز الجبر للتجارة');
-      setFooter(data.footer || 'Thank you for your business!');
-      setFooterAr(data.footer_ar || 'شكرا لتعاملكم معنا!');
+      setVatRate(parsedDraft?.vatRate !== undefined ? parsedDraft.vatRate : (data.vat_rate !== undefined ? data.vat_rate : 15));
+      setMarkup(parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8));
+      setPayment(parsedDraft?.payment || data.payment || 'Full Payment in ADVANCE');
+      setPaymentAr(parsedDraft?.paymentAr || data.payment_ar || 'الدفع الكامل مقدما');
+      setWarranty(parsedDraft?.warranty || data.warranty || "2 YEARS limited warranty and/or supplier's recommendation");
+      setWarrantyAr(parsedDraft?.warrantyAr || data.warranty_ar || 'ضمان محدود لمدة عامين و/أو توصية المورد');
+      setManpower(parsedDraft?.manpower || data.manpower || '2 Technicians, 1 Supervisor');
+      setManpowerAr(parsedDraft?.manpowerAr || data.manpower_ar || 'فنيين، 1 مشرف 2');
+      setMobilization(parsedDraft?.mobilization || data.mobilization || '3-4 days upon confirmation of payment');
+      setMobilizationAr(parsedDraft?.mobilizationAr || data.mobilization_ar || 'أيام بعد تأكيد الدفع 4-3');
+      setDuration(parsedDraft?.duration || data.duration || '1-2 Working Days');
+      setDurationAr(parsedDraft?.durationAr || data.duration_ar || 'أيام عمل 2-1');
+      setBankDetails(parsedDraft?.bankDetails || data.bank_details || 'ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
+      setBankDetailsAr(parsedDraft?.bankDetailsAr || data.bank_details_ar || 'بنك الإنماء - الحساب: 68206662020000\nالأيبان: SA0305000068206662020000 عبدالمحسن\nعبدالعزيز الجبر للتجارة');
+      setFooter(parsedDraft?.footer || data.footer || 'Thank you for your business!');
+      setFooterAr(parsedDraft?.footerAr || data.footer_ar || 'شكرا لتعاملكم معنا!');
 
       let parsedCustomFields: CustomField[] = [];
-      if (data.custom_field) {
+      const cfSource = parsedDraft?.customFields ? JSON.stringify(parsedDraft.customFields) : data.custom_field;
+      if (cfSource) {
         try {
-          const parsed = JSON.parse(data.custom_field);
+          const parsed = JSON.parse(cfSource);
           if (Array.isArray(parsed)) {
             parsedCustomFields = parsed;
           } else {
@@ -888,9 +926,18 @@ export default function QuoteForm() {
       let increases = 0;
       let decreases = 0;
 
-      setItems(data.items.map((item: any) => {
+      let itemsToProcess = data.items || [];
+      if (parsedDraft && parsedDraft.items && parsedDraft.items.length > 0) {
+        itemsToProcess = parsedDraft.items;
+      }
+      
+      if (itemsToProcess.length === 0) {
+        itemsToProcess = Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }));
+      }
+
+      setItems(itemsToProcess.map((item: any) => {
         let original_price = item.original_price;
-        let manual_price = item.manual_price !== null ? item.manual_price : undefined;
+        let manual_price = item.manual_price !== null && item.manual_price !== undefined ? item.manual_price : undefined;
 
         let costShift: 'up' | 'down' | undefined = undefined;
 
@@ -898,7 +945,7 @@ export default function QuoteForm() {
           const prod = productsList.find(p => p.id === item.product_id);
           if (prod) {
             const dbPrice = prod.unit_price;
-            if (original_price !== dbPrice) {
+            if (original_price !== dbPrice && original_price !== undefined) {
               if (dbPrice > original_price) {
                 increases++;
                 costShift = 'up';
@@ -908,7 +955,8 @@ export default function QuoteForm() {
               }
 
               original_price = dbPrice;
-              const expectedNewUnitPrice = dbPrice * (1 + (data.markup !== undefined ? data.markup : 8) / 100);
+              const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8);
+              const expectedNewUnitPrice = dbPrice * (1 + currentMarkup / 100);
               const currentUnitPrice = item.unit_price;
               if (manual_price === undefined && Math.abs(currentUnitPrice - expectedNewUnitPrice) > 0.01) {
                 manual_price = Math.round(currentUnitPrice * 100) / 100;
@@ -923,20 +971,21 @@ export default function QuoteForm() {
         }
 
         // Determine current unit price
-        let unit_price = item.unit_price;
+        let unit_price = item.unit_price || 0;
         if (manual_price !== undefined) {
           unit_price = manual_price;
         } else if (original_price !== undefined) {
-          unit_price = Math.round(original_price * (1 + (data.markup || 8) / 100) * 100) / 100;
+          const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup || 8);
+          unit_price = Math.round(original_price * (1 + currentMarkup / 100) * 100) / 100;
         }
 
         return {
           ...item,
-          id: generateId(),
+          id: item.id || generateId(),
           original_price: original_price !== null ? original_price : undefined,
           manual_price: manual_price,
           unit_price: unit_price,
-          net_price: Math.round(unit_price * item.qty * 100) / 100,
+          net_price: Math.round(unit_price * (item.qty || 1) * 100) / 100,
           costShift
         };
       }));
@@ -1249,7 +1298,13 @@ export default function QuoteForm() {
       setShowOverwriteModal(false);
       setShowConflictModal(false);
     } else if (res.status === 409) {
-      setShowConflictModal(true);
+      const errorData = await res.json();
+      if (errorData.error === 'ID_TAKEN') {
+        alert("This Quote ID was just used by someone else! Generating a new one for you automatically...");
+        handleCreateNewId();
+      } else {
+        setShowConflictModal(true);
+      }
     } else {
       const error = await res.json();
       alert(`Failed to record quote: ${error.error}`);
@@ -2358,9 +2413,12 @@ export default function QuoteForm() {
                               value={item.description}
                               placeholder="Type to search product..."
                               onChange={e => updateItem(index, 'description', e.target.value)}
-                              onFocus={() => setFocusedDescriptionIndex(index)}
+                              onFocus={() => {
+                                if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+                                setFocusedDescriptionIndex(index);
+                              }}
                               onBlur={() => {
-                                setTimeout(() => setFocusedDescriptionIndex(null), 200);
+                                blurTimeoutRef.current = setTimeout(() => setFocusedDescriptionIndex(null), 200);
                                 handleProductAutoTranslate(index, item.description, item.description_ar || '');
                               }}
                               rows={item.description.split('\n').length || 1}
@@ -2370,9 +2428,9 @@ export default function QuoteForm() {
                             {focusedDescriptionIndex === index && item.description.length > 1 && dropdownPos && (() => {
                                 const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
                                 const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+                                const exactMatch = products.some(p => p.description.toLowerCase() === item.description.trim().toLowerCase());
                                 const matched = searchTerms.length === 0 ? [] : products.filter(p => {
                                   const desc = p.description.toLowerCase();
-                                  if (desc === item.description.toLowerCase()) return false;
                                   const normDesc = normalize(desc);
                                   return searchTerms.every(term => {
                                     const nTerm = normalize(term);
@@ -2386,7 +2444,7 @@ export default function QuoteForm() {
                                   >
                                     <div className="bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden">
                                       <div className="max-h-52 overflow-y-auto">
-                                        {matched.length === 0 && (
+                                        {matched.length === 0 && !exactMatch && (
                                           <div className="px-3 py-2.5 text-xs text-gray-400 italic">No matching products found</div>
                                         )}
                                         {matched.map(p => (
@@ -2396,6 +2454,7 @@ export default function QuoteForm() {
                                             onMouseDown={e => e.preventDefault()}
                                             onClick={() => {
                                               handleProductSelect(index, p.id.toString());
+                                              if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
                                               setFocusedDescriptionIndex(null);
                                               handleProductAutoTranslate(index, p.description, '');
                                             }}
@@ -2407,17 +2466,20 @@ export default function QuoteForm() {
                                         ))}
                                       </div>
                                       {/* Add to Product DB — opens a proper modal, no focus issues */}
-                                      <div
-                                        className="px-3 py-2.5 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer border-t border-indigo-100 bg-white"
-                                        onMouseDown={e => e.preventDefault()}
-                                        onClick={() => {
-                                          setAddProductModal({ rowIndex: index, description: item.description.trim(), unit: 'Pc', price: '0' });
-                                          setFocusedDescriptionIndex(null);
-                                        }}
-                                      >
-                                        <Plus size={14} />
-                                        Add "{item.description.trim()}" to Product DB
-                                      </div>
+                                      {!exactMatch && (
+                                        <div
+                                          className="px-3 py-2.5 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer border-t border-indigo-100 bg-white"
+                                          onMouseDown={e => e.preventDefault()}
+                                          onClick={() => {
+                                            setAddProductModal({ rowIndex: index, description: item.description.trim(), unit: 'Pc', price: '0' });
+                                            if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+                                            setFocusedDescriptionIndex(null);
+                                          }}
+                                        >
+                                          <Plus size={14} />
+                                          Add "{item.description.trim()}" to Product DB
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 );

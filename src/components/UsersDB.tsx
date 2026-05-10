@@ -20,6 +20,8 @@ interface Permissions {
   canPrintQuote?: boolean;
   canViewFeatureAccess?: boolean;
   canUsePriceSync?: boolean;
+  canUsePriceSync?: boolean;
+  canUndoQuote?: boolean;
 }
 
 interface AppUser {
@@ -55,6 +57,7 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
   { key: 'canPrintQuote', label: 'Print Quote', icon: <Printer size={14} />, description: 'Generate and print PDF versions of documents.' },
   { key: 'canViewFeatureAccess', label: 'Show Feature Access', icon: <Eye size={14} />, description: 'Allow the user to see their own granted feature access list in the profile menu.' },
   { key: 'canUsePriceSync', label: 'AI Price Sync', icon: <Bot size={14} />, description: 'Bulk update product prices using AI to extract data from supplier lists (PDF/Excel).' },
+  { key: 'canUndoQuote', label: 'Undo Timeline Actions', icon: <History size={14} />, description: 'Allow restoring quotes to previous states via the timeline.' },
 ];
 
 // ── Permission Toggles ────────────────────────────────────────────────────────
