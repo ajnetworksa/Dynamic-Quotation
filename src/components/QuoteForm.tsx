@@ -2632,7 +2632,7 @@ export default function QuoteForm() {
               <div className="flex flex-col gap-y-0.5 mt-4">
                 {showPayment ? (
                   <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0">PAYMENT:</span>
+                    <span className="font-bold w-40 shrink-0 text-base">PAYMENT:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent italic" value={payment} onChange={e => setPayment(e.target.value)} onBlur={() => handleAutoTranslate(payment, paymentAr, setPaymentAr)} />
                     </div>
@@ -2648,7 +2648,7 @@ export default function QuoteForm() {
 
                 {showWarranty ? (
                   <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0">WARRANTY:</span>
+                    <span className="font-bold w-40 shrink-0 text-base">WARRANTY:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={warranty} onChange={e => setWarranty(e.target.value)} onBlur={() => handleAutoTranslate(warranty, warrantyAr, setWarrantyAr)} />
                     </div>
@@ -2664,7 +2664,7 @@ export default function QuoteForm() {
 
                 {showManpower ? (
                   <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0">MANPOWER:</span>
+                    <span className="font-bold w-40 shrink-0 text-base">MANPOWER:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={manpower} onChange={e => setManpower(e.target.value)} onBlur={() => handleAutoTranslate(manpower, manpowerAr, setManpowerAr)} />
                     </div>
@@ -2680,7 +2680,7 @@ export default function QuoteForm() {
 
                 {showMobilization ? (
                   <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0">MOBILIZATION:</span>
+                    <span className="font-bold w-40 shrink-0 text-base">MOBILIZATION:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={mobilization} onChange={e => setMobilization(e.target.value)} onBlur={() => handleAutoTranslate(mobilization, mobilizationAr, setMobilizationAr)} />
                     </div>
@@ -2696,7 +2696,7 @@ export default function QuoteForm() {
 
                 {showDuration ? (
                   <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0">DURATION:</span>
+                    <span className="font-bold w-40 shrink-0 text-base">DURATION:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={duration} onChange={e => setDuration(e.target.value)} onBlur={() => handleAutoTranslate(duration, durationAr, setDurationAr)} />
                     </div>
@@ -2712,7 +2712,7 @@ export default function QuoteForm() {
 
                 {showBankDetails ? (
                   <div className="flex flex-col md:flex-row md:items-start group mt-1">
-                    <span className="font-bold w-40 shrink-0 mt-1">BANK DETAILS:</span>
+                    <span className="font-bold w-40 shrink-0 mt-1 text-base">BANK DETAILS:</span>
                     <div className="flex-1 flex flex-col justify-center relative group/bank pr-2">
                       <textarea
                         className="w-full outline-none bg-transparent resize-none overflow-hidden font-mono"
@@ -2742,7 +2742,7 @@ export default function QuoteForm() {
                   <div className="flex flex-col gap-2 mt-2">
                     {customFields.map((cf, index) => (
                       <div key={cf.id} className="flex flex-col md:flex-row gap-2 group relative">
-                        <span className="font-bold w-40 shrink-0">
+                        <span className="font-bold w-40 shrink-0 text-base">
                           <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={cf.header} onChange={(e) => updateCustomField(index, 'header', e.target.value)} />
                         </span>
                         <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2935,8 +2935,8 @@ export default function QuoteForm() {
                     {priceAlert && (
                       <div
                         className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold animate-pulse flex items-center gap-1 ${priceAlert.type === 'increase' ? 'bg-red-100 text-red-600' :
-                            priceAlert.type === 'decrease' ? 'bg-green-100 text-green-600' :
-                              'bg-amber-100 text-amber-600'
+                          priceAlert.type === 'decrease' ? 'bg-green-100 text-green-600' :
+                            'bg-amber-100 text-amber-600'
                           }`}
                         title={`${priceAlert.count} product(s) have updated prices in the database since this quote was created.`}
                       >
