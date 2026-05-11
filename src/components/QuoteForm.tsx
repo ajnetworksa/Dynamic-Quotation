@@ -31,7 +31,7 @@ const generateId = () => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID();
     }
-  } catch (e) {}
+  } catch (e) { }
   return Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
 };
 
@@ -348,7 +348,7 @@ export default function QuoteForm() {
     const init = async () => {
       // If we are not visible and not on the quote page, don't trigger the heavy init sequence
       if (document.visibilityState !== 'visible' && location.pathname !== '/quote') return;
-      
+
       const dbCustomers = await fetchCustomers();
       const dbProducts = await fetchProducts();
       fetchLogo();
@@ -404,7 +404,7 @@ export default function QuoteForm() {
     if (document.visibilityState !== 'visible' && Date.now() - lastFetchRef.current < FETCH_THROTTLE) {
       return customers;
     }
-    
+
     try {
       const res = await fetch(`/api/customers?_t=${Date.now()}`);
       if (!res.ok) return [];
@@ -557,15 +557,15 @@ export default function QuoteForm() {
         const dataStamp = await resStamp.json();
         if (dataStamp.value) setStampUrl(dataStamp.value);
       }
-      
+
       const resStampSize = await fetch('/api/settings/stampSize');
-      if (resStampSize.ok) { const d = await resStampSize.json(); if(d.value) setStampSize(parseInt(d.value, 10)); }
+      if (resStampSize.ok) { const d = await resStampSize.json(); if (d.value) setStampSize(parseInt(d.value, 10)); }
 
       const resStampOffsetX = await fetch('/api/settings/stampOffsetX');
-      if (resStampOffsetX.ok) { const d = await resStampOffsetX.json(); if(d.value) setStampOffsetX(parseInt(d.value, 10)); }
+      if (resStampOffsetX.ok) { const d = await resStampOffsetX.json(); if (d.value) setStampOffsetX(parseInt(d.value, 10)); }
 
       const resStampOffsetY = await fetch('/api/settings/stampOffsetY');
-      if (resStampOffsetY.ok) { const d = await resStampOffsetY.json(); if(d.value) setStampOffsetY(parseInt(d.value, 10)); }
+      if (resStampOffsetY.ok) { const d = await resStampOffsetY.json(); if (d.value) setStampOffsetY(parseInt(d.value, 10)); }
     } catch (e) {
       console.error('Failed to fetch settings', e);
     }
@@ -591,7 +591,7 @@ export default function QuoteForm() {
       setItems(prev => {
         // Save current items to history before mutating (keep last 20)
         setItemsHistory(h => [...h, prev].slice(-20));
-        
+
         const next = [...prev];
         const [moved] = next.splice(src, 1);
         next.splice(targetIndex, 0, moved);
@@ -653,7 +653,7 @@ export default function QuoteForm() {
     if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'LABEL', 'TH'].includes(tag)) return;
     longPressStartRef.current = { x: e.clientX, y: e.clientY };
     const el = e.currentTarget as HTMLElement;
-    
+
     // Start drag instantly (matches Tracking method)
     el.setPointerCapture(e.pointerId);
     dragSrcRef.current = index;
@@ -852,14 +852,14 @@ export default function QuoteForm() {
       if (data.draft_data) {
         try {
           parsedDraft = typeof data.draft_data === 'string' ? JSON.parse(data.draft_data) : data.draft_data;
-        } catch(e) {}
+        } catch (e) { }
       }
 
       setQuoteId(data.quote_id);
       setDate(parsedDraft?.date || data.date);
       setExpiryDate(parsedDraft?.expiryDate || data.expiry_date || '');
       setSelectedCustomerId(parsedDraft?.selectedCustomerId || data.customer_id || '');
-      
+
       // Update search field if customer found
       const custId = parsedDraft?.selectedCustomerId || data.customer_id;
       const c = customersList.find(cust => cust.id === custId);
@@ -867,7 +867,7 @@ export default function QuoteForm() {
         setSelectedCustomer(c);
         setCustomerSearch(c.name);
       }
-      
+
       setSubject(parsedDraft?.subject || data.subject || '');
       setSubjectAr(parsedDraft?.subjectAr || data.subject_ar || '');
       setNoteHeader(parsedDraft?.noteHeader || data.note_header || 'NOTE:');
@@ -930,7 +930,7 @@ export default function QuoteForm() {
       if (parsedDraft && parsedDraft.items && parsedDraft.items.length > 0) {
         itemsToProcess = parsedDraft.items;
       }
-      
+
       if (itemsToProcess.length === 0) {
         itemsToProcess = Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }));
       }
@@ -1348,9 +1348,9 @@ export default function QuoteForm() {
     // Only autosave to LocalStorage if we have meaningful work to protect, 
     // or if we are already in the middle of a session.
     // This prevents a NEW blank form from overwriting an OLD draft from a previous session.
-    const isMeaningful = subject.trim() !== '' || 
-                         selectedCustomerId !== '' || 
-                         items.some(i => i.description.trim() !== '');
+    const isMeaningful = subject.trim() !== '' ||
+      selectedCustomerId !== '' ||
+      items.some(i => i.description.trim() !== '');
 
     if (isMeaningful) {
       localStorage.setItem(DRAFT_KEY, JSON.stringify({
@@ -1382,10 +1382,10 @@ export default function QuoteForm() {
         await fetch('/api/quotes/autosave', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            quote_id: quoteId, 
+          body: JSON.stringify({
+            quote_id: quoteId,
             draft_data: draft,
-            grand_total: grandTotal 
+            grand_total: grandTotal
           })
         });
       } catch (e) {
@@ -1854,7 +1854,7 @@ export default function QuoteForm() {
           clonedDoc.querySelectorAll('.print\\:border-none').forEach((el: any) => {
             el.style.border = 'none';
           });
-          
+
           clonedDoc.querySelectorAll('.print\\:overflow-visible').forEach((el: any) => {
             el.style.overflow = 'visible';
           });
@@ -2150,9 +2150,9 @@ export default function QuoteForm() {
             <div className="flex flex-wrap gap-4 mb-6 print:hidden bg-gray-50 p-4 rounded-lg border border-gray-200">
               <div className="flex flex-col">
                 <label className="text-xs font-bold text-gray-500 uppercase">Document Type</label>
-                <select 
-                  value={type} 
-                  onChange={(e) => setType(e.target.value)} 
+                <select
+                  value={type}
+                  onChange={(e) => setType(e.target.value)}
                   disabled={type === 'Tax Invoice' && user.role !== 'admin' && !user.permissions?.canConvertInvoice}
                   className="bg-transparent border-b border-gray-300 outline-none font-medium py-1 disabled:opacity-50"
                 >
@@ -2390,7 +2390,7 @@ export default function QuoteForm() {
                           ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
                         `}
                         style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
-                        <div 
+                        <div
                           className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1 group/grip cursor-grab active:cursor-grabbing touch-none select-none print:cursor-auto"
                           onPointerDown={(e) => onGripPointerDown(e, index)}
                           onPointerMove={onGripPointerMove}
@@ -2426,64 +2426,64 @@ export default function QuoteForm() {
 
                             {/* ── Product search dropdown — fixed-position via useEffect ── */}
                             {focusedDescriptionIndex === index && item.description.length > 1 && dropdownPos && (() => {
-                                const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-                                const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-                                const exactMatch = products.some(p => p.description.toLowerCase() === item.description.trim().toLowerCase());
-                                const matched = searchTerms.length === 0 ? [] : products.filter(p => {
-                                  const desc = p.description.toLowerCase();
-                                  const normDesc = normalize(desc);
-                                  return searchTerms.every(term => {
-                                    const nTerm = normalize(term);
-                                    return desc.includes(term) || (nTerm && normDesc.includes(nTerm));
-                                  });
+                              const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+                              const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+                              const exactMatch = products.some(p => p.description.toLowerCase() === item.description.trim().toLowerCase());
+                              const matched = searchTerms.length === 0 ? [] : products.filter(p => {
+                                const desc = p.description.toLowerCase();
+                                const normDesc = normalize(desc);
+                                return searchTerms.every(term => {
+                                  const nTerm = normalize(term);
+                                  return desc.includes(term) || (nTerm && normDesc.includes(nTerm));
                                 });
-                                return (
-                                  <div
-                                    className="product-dropdown print:hidden"
-                                    style={{ position: 'fixed', top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }}
-                                  >
-                                    <div className="bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden">
-                                      <div className="max-h-52 overflow-y-auto">
-                                        {matched.length === 0 && !exactMatch && (
-                                          <div className="px-3 py-2.5 text-xs text-gray-400 italic">No matching products found</div>
-                                        )}
-                                        {matched.map(p => (
-                                          <div
-                                            key={p.id}
-                                            className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
-                                            onMouseDown={e => e.preventDefault()}
-                                            onClick={() => {
-                                              handleProductSelect(index, p.id.toString());
-                                              if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-                                              setFocusedDescriptionIndex(null);
-                                              handleProductAutoTranslate(index, p.description, '');
-                                            }}
-                                          >
-                                            <div className="font-medium text-gray-800">{p.description}</div>
-                                            {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                            <div className="text-xs text-gray-400 mt-0.5">{p.unit} · {p.unit_price.toFixed(2)}</div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                      {/* Add to Product DB — opens a proper modal, no focus issues */}
-                                      {!exactMatch && (
+                              });
+                              return (
+                                <div
+                                  className="product-dropdown print:hidden"
+                                  style={{ position: 'fixed', top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }}
+                                >
+                                  <div className="bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden">
+                                    <div className="max-h-52 overflow-y-auto">
+                                      {matched.length === 0 && !exactMatch && (
+                                        <div className="px-3 py-2.5 text-xs text-gray-400 italic">No matching products found</div>
+                                      )}
+                                      {matched.map(p => (
                                         <div
-                                          className="px-3 py-2.5 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer border-t border-indigo-100 bg-white"
+                                          key={p.id}
+                                          className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
                                           onMouseDown={e => e.preventDefault()}
                                           onClick={() => {
-                                            setAddProductModal({ rowIndex: index, description: item.description.trim(), unit: 'Pc', price: '0' });
+                                            handleProductSelect(index, p.id.toString());
                                             if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
                                             setFocusedDescriptionIndex(null);
+                                            handleProductAutoTranslate(index, p.description, '');
                                           }}
                                         >
-                                          <Plus size={14} />
-                                          Add "{item.description.trim()}" to Product DB
+                                          <div className="font-medium text-gray-800">{p.description}</div>
+                                          {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                          <div className="text-xs text-gray-400 mt-0.5">{p.unit} · {p.unit_price.toFixed(2)}</div>
                                         </div>
-                                      )}
+                                      ))}
                                     </div>
+                                    {/* Add to Product DB — opens a proper modal, no focus issues */}
+                                    {!exactMatch && (
+                                      <div
+                                        className="px-3 py-2.5 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer border-t border-indigo-100 bg-white"
+                                        onMouseDown={e => e.preventDefault()}
+                                        onClick={() => {
+                                          setAddProductModal({ rowIndex: index, description: item.description.trim(), unit: 'Pc', price: '0' });
+                                          if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+                                          setFocusedDescriptionIndex(null);
+                                        }}
+                                      >
+                                        <Plus size={14} />
+                                        Add "{item.description.trim()}" to Product DB
+                                      </div>
+                                    )}
                                   </div>
-                                );
-                              })()}
+                                </div>
+                              );
+                            })()}
                             <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
                               <div className="relative flex items-center">
                                 <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
@@ -2820,63 +2820,63 @@ export default function QuoteForm() {
             <div className="w-full md:w-72 shrink-0 flex flex-col relative">
               <div className="border-2 border-gray-800 w-full h-fit">
                 <div className="grid grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base text-up">
-                <div className="font-bold">SUBTOTAL</div>
-                <div className="flex justify-between items-center font-mono font-bold">
-                  <span>SAR</span>
-                  <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <div className="font-bold">SUBTOTAL</div>
+                  <div className="flex justify-between items-center font-mono font-bold">
+                    <span>SAR</span>
+                    <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+                <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
+                  <div className="font-bold flex items-center whitespace-nowrap">DISCOUNT <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span></div>
+                  <div className="flex justify-between items-center font-mono">
+                    <span>SAR</span>
+                    <input
+                      type="number"
+                      className="w-full max-w-[100px] text-right outline-none bg-transparent ml-2"
+                      value={discount || ''}
+                      onChange={e => setDiscount(parseFloat(e.target.value) || 0)}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
+                  <div className="font-bold flex items-center whitespace-nowrap">
+                    VAT
+                    <input
+                      type="number"
+                      className="w-9 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
+                      value={vatRate}
+                      onChange={e => setVatRate(parseFloat(e.target.value) || 0)}
+                      min="0"
+                      max="100"
+                    />%
+                  </div>
+                  <div className="flex justify-between items-center font-mono">
+                    <span>SAR</span>
+                    <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 border-gray-300 p-2 pt-0 pb-3 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
+                  <div className="font-bold">TOTAL PACKAGE</div>
+                  <div className="flex justify-between items-center font-mono font-bold text-md rounded-md bg-green-400 text-black pt-0 pb-3">
+                    <span className="mr-2">SAR</span>
+                    <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
                 </div>
               </div>
-              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
-                <div className="font-bold flex items-center whitespace-nowrap">DISCOUNT <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span></div>
-                <div className="flex justify-between items-center font-mono">
-                  <span>SAR</span>
-                  <input
-                    type="number"
-                    className="w-full max-w-[100px] text-right outline-none bg-transparent ml-2"
-                    value={discount || ''}
-                    onChange={e => setDiscount(parseFloat(e.target.value) || 0)}
-                    min="0"
-                    step="0.01"
-                    placeholder="0.00"
-                  />
+
+              {/* ── STAMP — adjustable via settings (placed below totals box) ─────────────────────────── */}
+              {stampUrl && (
+                <div id="stamp-section" style={{ display: 'none', transform: `translate(${stampOffsetX}px, ${stampOffsetY}px)` }} className="relative z-10 w-full mt-4 flex justify-center">
+                  <img src={stampUrl} alt="Company Stamp" className="object-contain opacity-90 transition-all duration-300" style={{ height: `${stampSize}px`, width: `${stampSize}px` }} />
                 </div>
-              </div>
-              <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
-                <div className="font-bold flex items-center whitespace-nowrap">
-                  VAT
-                  <input
-                    type="number"
-                    className="w-9 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
-                    value={vatRate}
-                    onChange={e => setVatRate(parseFloat(e.target.value) || 0)}
-                    min="0"
-                    max="100"
-                  />%
-                </div>
-                <div className="flex justify-between items-center font-mono">
-                  <span>SAR</span>
-                  <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 border-gray-300 p-2 pt-0 pb-3 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
-                <div className="font-bold">TOTAL PACKAGE</div>
-                <div className="flex justify-between items-center font-mono font-bold text-md rounded-md bg-green-400 text-black pt-0 pb-3">
-                  <span className="mr-2">SAR</span>
-                  <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-              </div>
+              )}
+
             </div>
 
-            {/* ── STAMP — adjustable via settings (placed below totals box) ─────────────────────────── */}
-            {stampUrl && (
-              <div id="stamp-section" style={{ display: 'none', transform: `translate(${stampOffsetX}px, ${stampOffsetY}px)` }} className="relative z-10 w-full mt-4 flex justify-center">
-                <img src={stampUrl} alt="Company Stamp" className="object-contain opacity-90 transition-all duration-300" style={{ height: `${stampSize}px`, width: `${stampSize}px` }} />
-              </div>
-            )}
-            
           </div>
-
-        </div>
 
           {workflowVisibility.preparedBy && (
             <div className="mt-8 flex justify-between items-end border-t border-gray-100 pt-6">
@@ -2933,12 +2933,11 @@ export default function QuoteForm() {
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-sm text-gray-800">M.U. %</span>
                     {priceAlert && (
-                      <div 
-                        className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold animate-pulse flex items-center gap-1 ${
-                          priceAlert.type === 'increase' ? 'bg-red-100 text-red-600' : 
-                          priceAlert.type === 'decrease' ? 'bg-green-100 text-green-600' : 
-                          'bg-amber-100 text-amber-600'
-                        }`}
+                      <div
+                        className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold animate-pulse flex items-center gap-1 ${priceAlert.type === 'increase' ? 'bg-red-100 text-red-600' :
+                            priceAlert.type === 'decrease' ? 'bg-green-100 text-green-600' :
+                              'bg-amber-100 text-amber-600'
+                          }`}
                         title={`${priceAlert.count} product(s) have updated prices in the database since this quote was created.`}
                       >
                         <AlertTriangle size={10} />
@@ -3001,7 +3000,7 @@ export default function QuoteForm() {
                               isBelowCost ? 'SELLING BELOW COST!' : ''
                             ].filter(Boolean);
                             const tooltip = warnings.join(' ');
-                            
+
                             return (
                               <input
                                 type="number"
@@ -3220,9 +3219,9 @@ export default function QuoteForm() {
                   const { rowIndex, description, unit, price } = addProductModal;
                   const unit_price = parseFloat(price) || 0;
                   if (!description.trim()) return;
-                  
+
                   setAddProductModal(m => m ? { ...m, isSaving: true } : m);
-                  
+
                   try {
                     // Pre-translate before saving to DB
                     let description_ar = '';
@@ -3232,11 +3231,11 @@ export default function QuoteForm() {
                     const res = await fetch('/api/products', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ 
-                        description: description.trim(), 
+                      body: JSON.stringify({
+                        description: description.trim(),
                         description_ar,
-                        unit: unit || 'Pc', 
-                        unit_price 
+                        unit: unit || 'Pc',
+                        unit_price
                       }),
                     });
                     if (res.ok) {
@@ -3270,8 +3269,8 @@ export default function QuoteForm() {
                     } else {
                       setAddProductModal(m => m ? { ...m, isSaving: false } : m);
                     }
-                  } catch (e) { 
-                    console.error('Failed to add product:', e); 
+                  } catch (e) {
+                    console.error('Failed to add product:', e);
                     setAddProductModal(m => m ? { ...m, isSaving: false } : m);
                   }
                 }}
@@ -3287,7 +3286,7 @@ export default function QuoteForm() {
           </div>
         </div>
       )}
-      
+
       {/* ── Add Customer Modal ────────────────────────────────────────────── */}
       {addCustomerModal && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
@@ -3367,8 +3366,8 @@ export default function QuoteForm() {
                     const res = await fetch('/api/customers', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ 
-                        name: addCustomerModal.name.trim(), 
+                      body: JSON.stringify({
+                        name: addCustomerModal.name.trim(),
                         mobile: addCustomerModal.mobile,
                         address: addCustomerModal.address,
                         contact: addCustomerModal.contact,
