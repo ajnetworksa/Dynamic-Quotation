@@ -20,9 +20,10 @@ interface Permissions {
   canPrintQuote?: boolean;
   canViewFeatureAccess?: boolean;
   canUsePriceSync?: boolean;
-  canUsePriceSync?: boolean;
   canUndoQuote?: boolean;
   canChangeAuthor?: boolean;
+  canShareQuote?: boolean;
+  canEditSharedQuote?: boolean;
 }
 
 interface AppUser {
@@ -37,6 +38,7 @@ interface PermissionGroup {
   name: string;
   description: string;
   permissions: Permissions;
+  members: number[];
 }
 
 const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.ReactNode; description: string }[] = [
@@ -60,6 +62,8 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
   { key: 'canUsePriceSync', label: 'AI Price Sync', icon: <Bot size={14} />, description: 'Bulk update product prices using AI to extract data from supplier lists (PDF/Excel).' },
   { key: 'canUndoQuote', label: 'Undo Timeline Actions', icon: <History size={14} />, description: 'Allow restoring quotes to previous states via the timeline.' },
   { key: 'canChangeAuthor', label: 'Change Prepared By', icon: <UserCheck size={14} />, description: 'Allow modifying the "Prepared By" name on quotes.' },
+  { key: 'canShareQuote', label: 'Share Quotes', icon: <Users size={14} />, description: 'Allow sharing specific quotes with selected users or groups.' },
+  { key: 'canEditSharedQuote', label: 'Edit Shared Quotes', icon: <Eye size={14} />, description: 'Allow editing and saving quotes that were shared with this user (not just viewing).' },
 ];
 
 // ── Permission Toggles ────────────────────────────────────────────────────────
@@ -295,11 +299,16 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
 function GroupsTab({ groups, onGroupsChange }: { groups: PermissionGroup[]; onGroupsChange: () => void }) {
   const [isAdding, setIsAdding] = useState(false);
   const [isEditing, setIsEditing] = useState<number | null>(null);
-  const [form, setForm] = useState<{ name: string; description: string; permissions: Permissions }>({ name: '', description: '', permissions: {} });
+  const [form, setForm] = useState<{ name: string; description: string; permissions: Permissions; members: number[] }>({ name: '', description: '', permissions: {}, members: [] });
   const [error, setError] = useState('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [allUsers, setAllUsers] = useState<{id: number; username: string; name: string}[]>([]);
 
-  const resetForm = () => setForm({ name: '', description: '', permissions: {} });
+  useEffect(() => {
+    fetch('/api/users').then(r => r.ok ? r.json() : []).then(d => { if (Array.isArray(d)) setAllUsers(d); }).catch(() => {});
+  }, []);
+
+  const resetForm = () => setForm({ name: '', description: '', permissions: {}, members: [] });
 
   const togglePerm = (key: keyof Permissions) =>
     setForm(prev => ({ ...prev, permissions: { ...prev.permissions, [key]: !prev.permissions[key] } }));
@@ -323,7 +332,7 @@ function GroupsTab({ groups, onGroupsChange }: { groups: PermissionGroup[]; onGr
   const startEdit = (g: PermissionGroup) => {
     setIsEditing(g.id);
     setIsAdding(false);
-    setForm({ name: g.name, description: g.description || '', permissions: { ...g.permissions } });
+    setForm({ name: g.name, description: g.description || '', permissions: { ...g.permissions }, members: Array.isArray(g.members) ? g.members : [] });
   };
 
   const grantedCount = (perms: Permissions) => ALL_PERMISSIONS.filter(p => perms?.[p.key]).length;
@@ -353,6 +362,33 @@ function GroupsTab({ groups, onGroupsChange }: { groups: PermissionGroup[]; onGr
             <input type="text" className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Description (optional)" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
           </div>
           <PermissionToggles perms={form.permissions} role="user" onChange={togglePerm} />
+
+          {/* Members Section */}
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-amber-800 mb-2">Group Members (users who belong to this group):</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-40 overflow-y-auto">
+              {allUsers.map(u => (
+                <label key={u.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer text-sm transition-colors ${
+                  form.members.includes(u.id) ? 'border-amber-400 bg-amber-100' : 'border-gray-200 bg-white hover:bg-gray-50'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={form.members.includes(u.id)}
+                    onChange={() => setForm(prev => ({
+                      ...prev,
+                      members: prev.members.includes(u.id)
+                        ? prev.members.filter(id => id !== u.id)
+                        : [...prev.members, u.id]
+                    }))}
+                    className="accent-amber-600"
+                  />
+                  <span className="font-medium text-gray-800">{u.name || u.username}</span>
+                  <span className="text-gray-400 text-[10px]">@{u.username}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
           <div className="flex gap-2 mt-3">
             <button onClick={handleSave} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"><Save size={15} /> Save Group</button>
             <button onClick={() => { setIsAdding(false); setIsEditing(null); resetForm(); }} className="flex items-center gap-1.5 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 text-sm"><X size={15} /> Cancel</button>
@@ -378,6 +414,9 @@ function GroupsTab({ groups, onGroupsChange }: { groups: PermissionGroup[]; onGr
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-gray-900">{g.name}</span>
                     <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs font-bold">{count} Feature Access{count !== 1 ? 'es' : ''}</span>
+                    {Array.isArray(g.members) && g.members.length > 0 && (
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-bold">{g.members.length} Member{g.members.length !== 1 ? 's' : ''}</span>
+                    )}
                     {g.description && <span className="text-xs text-gray-500">— {g.description}</span>}
                   </div>
                   {/* Badges */}

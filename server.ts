@@ -290,6 +290,8 @@ addColumnIfNotExists('quotes', 'revision_of', 'TEXT');
 addColumnIfNotExists('quotes', 'author_id', 'INTEGER');
 addColumnIfNotExists('quotes', 'vat_rate', 'REAL DEFAULT 15');
 addColumnIfNotExists('quotes', 'author_name', 'TEXT');
+addColumnIfNotExists('quotes', 'shared_with', 'TEXT DEFAULT "{}"');
+addColumnIfNotExists('permission_groups', 'members', 'TEXT DEFAULT "[]"');
 addColumnIfNotExists('quotes', 'note_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'payment_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'warranty_ar', 'TEXT');
@@ -563,6 +565,12 @@ const QuoteSchema = z.object({
   version:           z.number().int().optional(),
   author_name:       z.string().max(100).nullable().optional(),
   author_id:         z.number().int().nullable().optional(),
+  shared_with:       z.object({
+    users:          z.array(z.number().int()).optional().default([]),
+    groups:         z.array(z.number().int()).optional().default([]),
+    canEditUsers:   z.array(z.number().int()).optional().default([]),
+    canEditGroups:  z.array(z.number().int()).optional().default([]),
+  }).optional(),
   force:             z.boolean().optional(),
 });
 
@@ -743,20 +751,26 @@ app.delete('/api/users/:id', requireAuth, requirePermission('canManageUsers'), (
 // Admins create named permission presets (e.g. "Sales Team") that bundle a set
 // of permissions together. When assigning a user, the admin picks a group and
 // all its permissions are applied in one click (they can still tweak after).
-app.get('/api/permission-groups', requireAuth, requirePermission('canManageUsers'), (req, res) => {
+app.get('/api/permission-groups', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  if (user.role !== 'admin' && !user.permissions?.canManageUsers && !user.permissions?.canShareQuote && !user.permissions?.canChangeAuthor) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   const groups = db.prepare('SELECT * FROM permission_groups ORDER BY name ASC').all() as any[];
   const parsed = groups.map(g => ({
     ...g,
-    permissions: (() => { try { return JSON.parse(g.permissions || '{}'); } catch { return {}; } })()
+    permissions: (() => { try { return JSON.parse(g.permissions || '{}'); } catch { return {}; } })(),
+    members: (() => { try { return JSON.parse(g.members || '[]'); } catch { return []; } })()
   }));
   res.json(parsed);
 });
 
 app.post('/api/permission-groups', requireAuth, requirePermission('canManageUsers'), validate(PermissionGroupSchema), (req, res) => {
-  const { name, description, permissions } = req.body;
+  const { name, description, permissions, members } = req.body;
   try {
     const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
-    const info = db.prepare('INSERT INTO permission_groups (name, description, permissions, created_at) VALUES (?, ?, ?, ?)').run(name.trim(), description ?? '', permStr, new Date().toISOString());
+    const membersStr = JSON.stringify(Array.isArray(members) ? members : []);
+    const info = db.prepare('INSERT INTO permission_groups (name, description, permissions, members, created_at) VALUES (?, ?, ?, ?, ?)').run(name.trim(), description ?? '', permStr, membersStr, new Date().toISOString());
     res.json({ id: info.lastInsertRowid });
   } catch (error: any) {
     res.status(400).json({ error: 'Group name might already exist' });
@@ -764,10 +778,11 @@ app.post('/api/permission-groups', requireAuth, requirePermission('canManageUser
 });
 
 app.put('/api/permission-groups/:id', requireAuth, requirePermission('canManageUsers'), validate(PermissionGroupSchema), (req, res) => {
-  const { name, description, permissions } = req.body;
+  const { name, description, permissions, members } = req.body;
   try {
     const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
-    db.prepare('UPDATE permission_groups SET name = ?, description = ?, permissions = ? WHERE id = ?').run(name.trim(), description ?? '', permStr, req.params.id);
+    const membersStr = JSON.stringify(Array.isArray(members) ? members : []);
+    db.prepare('UPDATE permission_groups SET name = ?, description = ?, permissions = ?, members = ? WHERE id = ?').run(name.trim(), description ?? '', permStr, membersStr, req.params.id);
     res.json({ success: true });
   } catch (error: any) {
     res.status(400).json({ error: 'Update failed' });
@@ -844,12 +859,17 @@ app.delete('/api/products/:id', requireAuth, requirePermission('canDeleteData'),
 // ── Quotes ────────────────────────────────────────────────────────────────────
 app.get('/api/quotes/next-id', requireAuth, (req, res) => {
   try {
+    // Read configurable prefix from settings (defaults to 'AJ' if not set)
+    const prefixRow = db.prepare("SELECT value FROM settings WHERE key = 'quotePrefix'").get() as any;
+    const prefix = (prefixRow?.value || 'AJ').trim().replace(/[^A-Z0-9]/gi, '');
+    const regex = new RegExp(`^${prefix}-(\\d+)`);
+
     const rows = db.prepare('SELECT quote_id FROM quotes').all() as { quote_id: string }[];
     let maxNum = 0;
 
     for (const row of rows) {
       if (row.quote_id) {
-        const match = row.quote_id.match(/AJ-(\d+)/);
+        const match = row.quote_id.match(regex);
         if (match) {
           const num = parseInt(match[1], 10);
           if (num > maxNum) maxNum = num;
@@ -858,7 +878,7 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
     }
 
     const nextNum = maxNum > 0 ? maxNum + 1 : 10001;
-    const nextId = `AJ-${nextNum.toString().padStart(5, '0')}`;
+    const nextId = `${prefix}-${nextNum.toString().padStart(5, '0')}`;
     res.json({ nextId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -873,6 +893,27 @@ app.get('/api/quotes', requireAuth, (req, res) => {
     // Otherwise they are restricted to only the quotes they created.
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
+    // Helper: check if currentUser is in a quote's shared_with
+    const isSharedWith = (sharedWithJson: string | null) => {
+      if (!sharedWithJson) return false;
+      try {
+        const sw = JSON.parse(sharedWithJson);
+        // Direct user share
+        if (Array.isArray(sw.users) && sw.users.includes(currentUser.id)) return true;
+        // Group membership share
+        if (Array.isArray(sw.groups) && sw.groups.length > 0) {
+          const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.groups.map(() => '?').join(',') + ')').all(...sw.groups) as any[];
+          for (const g of groups) {
+            try {
+              const members = JSON.parse(g.members || '[]');
+              if (members.includes(currentUser.id)) return true;
+            } catch {}
+          }
+        }
+        return false;
+      } catch { return false; }
+    };
+
     const quotes = canSeeAll
       ? db.prepare(`
           SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
@@ -881,14 +922,35 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           LEFT JOIN users u ON q.author_id = u.id
           ORDER BY q.id DESC
         `).all()
-      : db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
-          FROM quotes q 
-          LEFT JOIN customers c ON q.customer_id = c.id
-          LEFT JOIN users u ON q.author_id = u.id
-          WHERE q.author_id = ?
-          ORDER BY q.id DESC
-        `).all(currentUser.id);
+      : (() => {
+          const owned = db.prepare(`
+            SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+            FROM quotes q 
+            LEFT JOIN customers c ON q.customer_id = c.id
+            LEFT JOIN users u ON q.author_id = u.id
+            WHERE q.author_id = ?
+            ORDER BY q.id DESC
+          `).all(currentUser.id) as any[];
+
+          // Also fetch quotes shared with this user
+          const all = db.prepare(`
+            SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+            FROM quotes q 
+            LEFT JOIN customers c ON q.customer_id = c.id
+            LEFT JOIN users u ON q.author_id = u.id
+            WHERE q.author_id != ? AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '')
+            ORDER BY q.id DESC
+          `).all(currentUser.id) as any[];
+
+          const sharedQuotes = all.filter(q => isSharedWith(q.shared_with));
+          // Merge, deduplicate by quote_id
+          const seen = new Set(owned.map((q: any) => q.quote_id));
+          const merged = [...owned];
+          for (const q of sharedQuotes) {
+            if (!seen.has(q.quote_id)) { merged.push(q); seen.add(q.quote_id); }
+          }
+          return merged.sort((a: any, b: any) => b.id - a.id);
+        })();
 
     res.json(quotes);
   } catch (error: any) {
@@ -926,7 +988,19 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
 
   // Ownership check — block users who don't own this quote and lack elevated access
   if (!canSeeAll && quote.author_id !== currentUser.id) {
-    return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
+    // Check if shared with this user
+    let isShared = false;
+    try {
+      const sw = JSON.parse(quote.shared_with || '{}');
+      if (Array.isArray(sw.users) && sw.users.includes(currentUser.id)) isShared = true;
+      if (!isShared && Array.isArray(sw.groups) && sw.groups.length > 0) {
+        const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.groups.map(() => '?').join(',') + ')').all(...sw.groups) as any[];
+        for (const g of groups) {
+          try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { isShared = true; break; } } catch {}
+        }
+      }
+    } catch {}
+    if (!isShared) return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
   }
 
   const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id);
@@ -1063,18 +1137,17 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
           grand_total || null,
           (req as any).user?.id || null
         );
-      
-      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
-        quote_id, 'Draft Created (Autosave)', actor, timestamp
-      );
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
+          quote_id, 'Draft Created (Autosave)', actor, timestamp
+        );
+      } // ← closes if/else
+
+      res.json({ success: true }); // ← always reached
+    } catch (error) {
+      console.error('Autosave error:', error);
+      res.status(500).json({ error: 'Failed to autosave' });
     }
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Autosave error:', error);
-    res.status(500).json({ error: 'Failed to autosave' });
-  }
-});
+  });
 
 app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
   const {
@@ -1082,8 +1155,9 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    author_name, author_id, version, force
+    author_name, author_id, shared_with, version, force
   } = req.body;
+  const shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
   const updated_at = new Date().toISOString();
   const currentUser = (req as any).user;
   const actor = currentUser?.username || 'system';
@@ -1103,7 +1177,31 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     if (existing) {
       const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
       if (!canSeeAll && existing.author_id !== currentUser.id) {
-        return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
+        // Check if the user is in shared_with AND has per-quote canEdit permission
+        let canEditAsShared = false;
+        try {
+          const existingFull = db.prepare('SELECT shared_with FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+          const sw = JSON.parse(existingFull?.shared_with || '{}');
+          const canEditUsers: number[] = Array.isArray(sw.canEditUsers) ? sw.canEditUsers : [];
+          const canEditGroups: number[] = Array.isArray(sw.canEditGroups) ? sw.canEditGroups : [];
+          // Direct user canEdit
+          if (canEditUsers.includes(currentUser.id)) canEditAsShared = true;
+          // Global permission fallback
+          if (!canEditAsShared && currentUser.permissions?.canEditSharedQuote) {
+            const allUsers: number[] = Array.isArray(sw.users) ? sw.users : [];
+            if (allUsers.includes(currentUser.id)) canEditAsShared = true;
+          }
+          // Group canEdit check
+          if (!canEditAsShared && canEditGroups.length > 0) {
+            const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + canEditGroups.map(() => '?').join(',') + ')').all(...canEditGroups) as any[];
+            for (const g of groups) {
+              try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { canEditAsShared = true; break; } } catch {}
+            }
+          }
+        } catch {}
+        if (!canEditAsShared) {
+          return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
+        }
       }
     }
 
@@ -1207,7 +1305,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
             custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?,
-            author_name = ?, author_id = ?, version = ?, draft_data = NULL
+            author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
@@ -1215,7 +1313,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          author_name || null, author_id || existing.author_id, finalVersion, quote_id
+          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion, quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
 
@@ -1230,14 +1328,14 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, 1
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1
         );
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }

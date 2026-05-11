@@ -17,13 +17,11 @@ A professional, dual-language (English/Arabic) quotation and invoice management 
 - **Pricing Analysis Sidebar**: Real-time margin tracking and cost analysis while building quotes.
 - **AI Price Sync**: Bulk-update product databases by uploading supplier price lists (PDF/Excel) with AI-driven extraction and matching.
 - **Source Inspection Protection**: Admin-controlled protection that blocks right-click context menus and developer tools (F12, Ctrl+Shift+I) to prevent source code inspection.
-- **Advanced Permissions**: Granular toggles for "Creator Info" visibility, "AI Price Sync" access, and workflow actions (Email, Print, Invoice).
-- **Administrative Workflow Control**: System-wide visibility toggles for key action buttons (Save Template, Email, Print, Tax Invoice).
-- **Strict Data Security**: All endpoints enforce strict ownership—users can only access or modify their own quotations.
-- **Enhanced Traceability**: Automated "Prepared By" attribution in documents and tracking views using full user names.
-- **Smart Pricing Analysis**: Sidebar with real-time margin tracking, cost auditing, and automated "Manual Override" protection during cost updates.
-- **Export Options**: Professional PDF and CSV exports with localized formatting and authorized signature fields.
-- **Security**: Password hashing (Bcrypt), secure sessions, and role-based access control (RBAC).
+- **Granular Quote Sharing**: Share quotations with specific users or entire groups with per-target "View Only" or "Can Edit" permissions.
+- **Configurable ID Prefixes**: Administrators can customize the Quote ID prefix (e.g., `AJ-`, `QT-`, `INV-`) directly from settings.
+- **Group-Based RBAC**: Assign users to permission groups for bulk access management.
+- **Security**: Password hashing (Bcrypt), secure sessions, role-based access control (RBAC), and persistent ownership validation.
+- **Export Consistency**: Cross-browser fix for stamp aspect-ratio distortion in generated PDF documents.
 
 ---
 
@@ -138,3 +136,5 @@ Containerization ensures identical behavior across all environments.
 - Client Approval Portal (E-Signatures)
 - Dark Mode Themes
 - Multicurrency & Real-time Exchange Rates
+- Inventory Tracking Integration
+- Automated Subscription/Recurring Invoices
