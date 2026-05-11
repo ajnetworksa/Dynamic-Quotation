@@ -1345,17 +1345,17 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
     db.transaction(() => {
       // Restore main quote
       const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id');
-      const setClause = quoteCols.map(c => \`\${c} = ?\`).join(', ');
+      const setClause = quoteCols.map(c => `${c} = ?`).join(', ');
       const values = quoteCols.map(c => oldQuote[c]);
       
-      db.prepare(\`UPDATE quotes SET \${setClause} WHERE quote_id = ?\`).run(...values, quote_id);
+      db.prepare(`UPDATE quotes SET ${setClause} WHERE quote_id = ?`).run(...values, quote_id);
 
       // Restore items
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
       if (oldItems.length > 0) {
         const itemCols = Object.keys(oldItems[0]).filter(k => k !== 'id');
         const itemPlaceholders = itemCols.map(() => '?').join(', ');
-        const insertStmt = db.prepare(\`INSERT INTO quote_items (\${itemCols.join(', ')}) VALUES (\${itemPlaceholders})\`);
+        const insertStmt = db.prepare(`INSERT INTO quote_items (${itemCols.join(', ')}) VALUES (${itemPlaceholders})`);
         
         for (const item of oldItems) {
           const itemVals = itemCols.map(c => item[c]);
