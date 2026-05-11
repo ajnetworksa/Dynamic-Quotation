@@ -219,7 +219,7 @@ export default function Tracking() {
     const rows = filtered.map(q => [
       q.quote_id, q.type || 'Quotation', q.status || 'Draft', q.date, `"${(q.customer_name || '').replace(/"/g, '""')}"`,
       `"${(q.subject || '').replace(/"/g, '""')}"`, q.grand_total, q.updated_at ? new Date(q.updated_at).toLocaleString() : '',
-      ...(showCreatedBy ? [q.author_username || '—'] : [])
+      ...(showCreatedBy ? [q.author_name || q.author_username || '—'] : [])
     ]);
     const csvContent = [header, ...rows].map(e => e.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -237,7 +237,7 @@ export default function Tracking() {
 
   // Collect unique creator names for the dropdown (only for users who can see creator info)
   const creatorOptions = showCreatedBy
-    ? Array.from(new Set(quotes.map(q => q.author_username).filter(Boolean))).sort() as string[]
+    ? Array.from(new Set(quotes.map(q => q.author_name || q.author_username).filter(Boolean))).sort() as string[]
     : [];
 
   let filtered = quotes.filter(quote => {
@@ -265,7 +265,7 @@ export default function Tracking() {
     const matchType = !typeFilter || (quote.type || 'Quotation') === typeFilter;
     const matchDateFrom = !dateFrom || quote.date >= dateFrom;
     const matchDateTo = !dateTo || quote.date <= dateTo;
-    const matchCreator = !creatorFilter || quote.author_username === creatorFilter;
+    const matchCreator = !creatorFilter || (quote.author_name || quote.author_username) === creatorFilter;
     return matchSearch && matchStatus && matchType && matchDateFrom && matchDateTo && matchCreator;
   });
 
@@ -506,12 +506,12 @@ export default function Tracking() {
                   </td>
                   {showCreatedBy && (
                     <td className="p-4">
-                      {quote.author_username || quote.author_name ? (
+                      {quote.author_name || quote.author_username ? (
                         <button
-                          onClick={e => { e.stopPropagation(); setCreatorFilter(creatorFilter === quote.author_username ? '' : (quote.author_username || '')); }}
-                          title={`Filter by ${quote.author_username || quote.author_name}`}
+                          onClick={e => { e.stopPropagation(); setCreatorFilter(creatorFilter === (quote.author_name || quote.author_username) ? '' : (quote.author_name || quote.author_username || '')); }}
+                          title={`Filter by ${quote.author_name || quote.author_username}`}
                           className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                            creatorFilter === quote.author_username
+                            creatorFilter === (quote.author_name || quote.author_username)
                               ? 'bg-indigo-600 text-white border-indigo-600'
                               : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                           }`}
@@ -697,9 +697,9 @@ export default function Tracking() {
                   <p className="text-[10px] font-bold uppercase text-indigo-400 mb-0.5">Created By</p>
                   <div className="flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 text-[10px] font-bold flex items-center justify-center shrink-0">
-                      {(timelineQuote.author_username || '?').charAt(0).toUpperCase()}
+                      {(timelineQuote.author_name || timelineQuote.author_username || '?').charAt(0).toUpperCase()}
                     </span>
-                    <span className="font-semibold text-gray-900">{timelineQuote.author_username || 'Unknown'}</span>
+                    <span className="font-semibold text-gray-900">{timelineQuote.author_name || timelineQuote.author_username || 'Unknown'}</span>
                   </div>
                 </div>
                 <div>
