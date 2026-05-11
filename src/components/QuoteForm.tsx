@@ -3039,8 +3039,8 @@ export default function QuoteForm() {
                 </div>
 
                 <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">
-                  <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-xs">TTL PROFIT</div>
-                  <div className="bg-yellow-400 px-2 py-1 flex items-center justify-center font-mono text-sm">
+                  <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-lg">TTL PROFIT</div>
+                  <div className="bg-yellow-400 px-2 py-1 flex items-center justify-center font-mono text-lg">
                     {markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                 </div>
