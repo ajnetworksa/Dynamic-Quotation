@@ -6,7 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+!.env_example
+
+# Database files — never commit live data
 quotes.db
+*.sqlite
+database.sqlite
 *.db-wal*
 *.db-shm*
 *.db.backup*
@@ -14,3 +19,15 @@ quotes.db
 quotes_recovered*
 *.db-wal
 quotes.db-wal
+
+# Debug / scratch development files
+all_useStates.txt
+const_search.txt
+useState_search.txt
+build_error.log
+error.log
+get-gemini.js
+get-models.js
+test-api.ts
+scratch/
+metadata.json

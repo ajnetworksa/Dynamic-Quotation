@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 
 export default function Settings() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -24,6 +24,9 @@ export default function Settings() {
   const [stampOffsetX, setStampOffsetX] = useState<number>(0);
   const [stampOffsetY, setStampOffsetY] = useState<number>(0);
   const [stampPositionStatus, setStampPositionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  const [quotePrefix, setQuotePrefix] = useState('AJ');
+  const [quotePrefixStatus, setQuotePrefixStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   const [smtpStatus, setSmtpStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [smtpConfig, setSmtpConfig] = useState({
@@ -180,6 +183,12 @@ export default function Settings() {
         }
       })
       .catch(console.error);
+
+    fetch('/api/settings/quotePrefix')
+      .then(res => res.json())
+      .then(data => { if (data.value) setQuotePrefix(data.value); })
+      .catch(console.error);
+
     if (user.role === 'admin') {
       fetchLogs();
     }
@@ -1349,6 +1358,53 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* Quote ID Prefix */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700 font-mono font-bold text-sm">#</div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Quote ID Prefix</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Customize the prefix used when generating new quote numbers (e.g. AJ-10001, ACME-10001)</p>
+          </div>
+        </div>
+        <div className="p-6 flex items-center gap-4">
+          <div className="flex items-center gap-3 flex-1 max-w-xs">
+            <input
+              type="text"
+              value={quotePrefix}
+              maxLength={8}
+              onChange={e => setQuotePrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+              className="w-32 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono font-bold text-center text-lg uppercase"
+              placeholder="AJ"
+            />
+            <span className="text-gray-400 font-mono text-lg">— 10001, 10002 …</span>
+          </div>
+          <button
+            onClick={async () => {
+              if (!quotePrefix.trim()) return;
+              setQuotePrefixStatus('loading');
+              try {
+                const res = await fetch('/api/settings', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                  body: JSON.stringify({ key: 'quotePrefix', value: quotePrefix.trim() })
+                });
+                if (res.ok) { setQuotePrefixStatus('success'); setTimeout(() => setQuotePrefixStatus('idle'), 3000); }
+                else setQuotePrefixStatus('error');
+              } catch { setQuotePrefixStatus('error'); }
+            }}
+            disabled={quotePrefixStatus === 'loading'}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 text-sm font-medium"
+          >
+            {quotePrefixStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save Prefix'}
+          </button>
+          <div className="h-5">
+            {quotePrefixStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
+            {quotePrefixStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save</span>}
+          </div>
+        </div>
+      </div>
+
       {/* Access Control: Workflow Visibility */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
@@ -1368,6 +1424,7 @@ export default function Settings() {
               { id: 'email', label: 'Email Button', desc: 'Send Quote via SMTP' },
               { id: 'print', label: 'Print Button', desc: 'Open browser print dialog' },
               { id: 'preparedBy', label: 'Prepared By', desc: 'Show "Prepared By" on documents' },
+              { id: 'shareWith', label: 'Share With', desc: 'Show "Share With" panel on quotes' },
               { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
             ].map((btn) => (
               <div

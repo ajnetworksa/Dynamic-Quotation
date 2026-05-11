@@ -175,12 +175,16 @@ export default function QuoteForm() {
   const [authorName, setAuthorName] = useState('');
   const [authorId, setAuthorId] = useState<number | null>(null);
   const [usersList, setUsersList] = useState<{id: number, username: string, name: string}[]>([]);
+  const [groupsList, setGroupsList] = useState<{id: number, name: string, members: number[]}[]>([]);
+  const [sharedWith, setSharedWith] = useState<{users: number[], groups: number[], canEditUsers: number[], canEditGroups: number[]}>({users: [], groups: [], canEditUsers: [], canEditGroups: []});
+  const [showSharePanel, setShowSharePanel] = useState(false);
   const [workflowVisibility, setWorkflowVisibility] = useState({
     invoice: true,
     template: true,
     email: true,
     print: true,
-    preparedBy: true
+    preparedBy: true,
+    shareWith: true
   });
 
   // Global markup percentage added for automated pricing.
@@ -354,12 +358,14 @@ export default function QuoteForm() {
       const dbCustomers = await fetchCustomers();
       const dbProducts = await fetchProducts();
       fetchLogo();
-      if (user.role === 'admin' || user.permissions?.canChangeAuthor) {
+      if (user.role === 'admin' || user.permissions?.canChangeAuthor || user.permissions?.canShareQuote) {
         fetch('/api/users')
           .then(res => res.json())
-          .then(data => {
-            if (Array.isArray(data)) setUsersList(data);
-          })
+          .then(data => { if (Array.isArray(data)) setUsersList(data); })
+          .catch(() => {});
+        fetch('/api/permission-groups')
+          .then(res => res.json())
+          .then(data => { if (Array.isArray(data)) setGroupsList(data.map((g: any) => ({ id: g.id, name: g.name, members: Array.isArray(g.members) ? g.members : [] }))); })
           .catch(() => {});
       }
       loadTemplates();
@@ -933,6 +939,15 @@ export default function QuoteForm() {
 
       setAuthorName(data.author_name || data.author_username || '');
       setAuthorId(data.author_id || null);
+      try {
+        const sw = typeof data.shared_with === 'string' ? JSON.parse(data.shared_with || '{}') : (data.shared_with || {});
+        setSharedWith({
+          users: Array.isArray(sw.users) ? sw.users : [],
+          groups: Array.isArray(sw.groups) ? sw.groups : [],
+          canEditUsers: Array.isArray(sw.canEditUsers) ? sw.canEditUsers : [],
+          canEditGroups: Array.isArray(sw.canEditGroups) ? sw.canEditGroups : [],
+        });
+      } catch { setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] }); }
 
       let increases = 0;
       let decreases = 0;
@@ -1062,6 +1077,7 @@ export default function QuoteForm() {
     setFooterAr('شكرا لتعاملكم معنا!');
     setAuthorName(user.name || user.username);
     setAuthorId(null);
+    setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
     setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
   };
 
@@ -1284,6 +1300,7 @@ export default function QuoteForm() {
       markup: markup,
       author_name: authorName,
       author_id: authorId,
+      shared_with: sharedWith,
       items: items.filter(item => item.description.trim() !== '').map(item => ({
         product_id: item.product_id,
         description: item.description,
@@ -2942,8 +2959,27 @@ export default function QuoteForm() {
 
               {/* ── STAMP — adjustable via settings (placed below totals box) ─────────────────────────── */}
               {stampUrl && (
-                <div id="stamp-section" style={{ display: 'none', transform: `translate(${stampOffsetX}px, ${stampOffsetY}px)` }} className="relative z-10 w-full mt-4 flex justify-center">
-                  <img src={stampUrl} alt="Company Stamp" className="object-contain opacity-90 transition-all duration-300" style={{ height: `${stampSize}px`, width: `${stampSize}px` }} />
+                <div
+                  id="stamp-section"
+                  style={{
+                    display: 'none',
+                    transform: `translate(${stampOffsetX}px, ${stampOffsetY}px)`,
+                    alignSelf: 'center',
+                  }}
+                  className="mt-4"
+                >
+                  <img
+                    src={stampUrl}
+                    alt="Company Stamp"
+                    style={{
+                      display: 'block',
+                      maxWidth: `${stampSize}px`,
+                      maxHeight: `${stampSize}px`,
+                      width: 'auto',
+                      height: 'auto',
+                      opacity: 0.9,
+                    }}
+                  />
                 </div>
               )}
 
@@ -2976,10 +3012,159 @@ export default function QuoteForm() {
                   <p className="text-lg font-bold text-indigo-700">{authorName || user.name || user.username}</p>
                 )}
               </div>
+
               <div className="flex flex-col items-center gap-1">
                 <div className="w-48 border-b-2 border-gray-400 mb-1"></div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Authorized Signature</p>
               </div>
+            </div>
+          )}
+
+          {/* Share With Panel — independent of Prepared By visibility */}
+          {workflowVisibility.shareWith && (user.role === 'admin' || user.permissions?.canShareQuote) && (
+            <div className="mt-4 print:hidden border-t border-gray-100 pt-4">
+              <button
+                onClick={() => setShowSharePanel(p => !p)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                  (sharedWith.users.length + sharedWith.groups.length) > 0
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50'
+                }`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8z" /></svg>
+                Share With{(sharedWith.users.length + sharedWith.groups.length) > 0 ? ` (${sharedWith.users.length + sharedWith.groups.length})` : ''}
+              </button>
+
+              {showSharePanel && (
+                <div className="mt-3 p-4 border border-indigo-200 rounded-xl bg-indigo-50 shadow-sm">
+                  <p className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-3">Share this quote with:</p>
+
+                  {/* Groups */}
+                  {groupsList.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-[10px] font-bold text-gray-500 uppercase mb-2">Groups</p>
+                      <div className="flex flex-col gap-2">
+                        {groupsList.map(g => {
+                          const checked = sharedWith.groups.includes(g.id);
+                          const canEdit = sharedWith.canEditGroups.includes(g.id);
+                          return (
+                            <div key={g.id} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all ${
+                              checked ? 'bg-white border-indigo-300' : 'bg-white border-gray-200'
+                            }`}>
+                              <button
+                                onClick={() => setSharedWith(prev => ({
+                                  ...prev,
+                                  groups: checked ? prev.groups.filter(id => id !== g.id) : [...prev.groups, g.id],
+                                  canEditGroups: checked ? prev.canEditGroups.filter(id => id !== g.id) : prev.canEditGroups,
+                                }))}
+                                className={`flex items-center gap-2 text-xs font-semibold transition-colors ${
+                                  checked ? 'text-indigo-700' : 'text-gray-400 hover:text-gray-700'
+                                }`}
+                              >
+                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                                  checked ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'
+                                }`}>
+                                  {checked && <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={3}><polyline points="20 6 9 17 4 12" /></svg>}
+                                </div>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8z" /></svg>
+                                {g.name}{g.members.length > 0 ? ` (${g.members.length})` : ''}
+                              </button>
+                              {checked && (
+                                <button
+                                  onClick={() => setSharedWith(prev => ({
+                                    ...prev,
+                                    canEditGroups: canEdit
+                                      ? prev.canEditGroups.filter(id => id !== g.id)
+                                      : [...prev.canEditGroups, g.id]
+                                  }))}
+                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
+                                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${
+                                    canEdit
+                                      ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
+                                      : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                                  }`}
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z" /></svg>
+                                  {canEdit ? 'Can Edit' : 'View Only'}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Individual Users */}
+                  {usersList.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-500 uppercase mb-2">Individual Users</p>
+                      <div className="flex flex-col gap-2">
+                        {usersList.filter(u => u.id !== (authorId || user.id)).map(u => {
+                          const checked = sharedWith.users.includes(u.id);
+                          const canEdit = sharedWith.canEditUsers.includes(u.id);
+                          return (
+                            <div key={u.id} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all ${
+                              checked ? 'bg-white border-green-300' : 'bg-white border-gray-200'
+                            }`}>
+                              <button
+                                onClick={() => setSharedWith(prev => ({
+                                  ...prev,
+                                  users: checked ? prev.users.filter(id => id !== u.id) : [...prev.users, u.id],
+                                  canEditUsers: checked ? prev.canEditUsers.filter(id => id !== u.id) : prev.canEditUsers,
+                                }))}
+                                className={`flex items-center gap-2 text-xs font-semibold transition-colors ${
+                                  checked ? 'text-green-800' : 'text-gray-400 hover:text-gray-700'
+                                }`}
+                              >
+                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                                  checked ? 'bg-green-600 border-green-600' : 'border-gray-300'
+                                }`}>
+                                  {checked && <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={3}><polyline points="20 6 9 17 4 12" /></svg>}
+                                </div>
+                                <span className={`w-5 h-5 rounded-full text-[9px] font-bold flex items-center justify-center ${
+                                  checked ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'
+                                }`}>
+                                  {(u.name || u.username).charAt(0).toUpperCase()}
+                                </span>
+                                {u.name || u.username}
+                              </button>
+                              {checked && (
+                                <button
+                                  onClick={() => setSharedWith(prev => ({
+                                    ...prev,
+                                    canEditUsers: canEdit
+                                      ? prev.canEditUsers.filter(id => id !== u.id)
+                                      : [...prev.canEditUsers, u.id]
+                                  }))}
+                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
+                                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${
+                                    canEdit
+                                      ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
+                                      : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                                  }`}
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z" /></svg>
+                                  {canEdit ? 'Can Edit' : 'View Only'}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {(sharedWith.users.length + sharedWith.groups.length) > 0 && (
+                    <button
+                      onClick={() => setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] })}
+                      className="mt-3 text-xs text-red-500 hover:text-red-700 font-medium underline"
+                    >
+                      Clear all sharing
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
