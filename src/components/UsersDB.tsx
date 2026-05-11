@@ -22,6 +22,7 @@ interface Permissions {
   canUsePriceSync?: boolean;
   canUsePriceSync?: boolean;
   canUndoQuote?: boolean;
+  canChangeAuthor?: boolean;
 }
 
 interface AppUser {
@@ -58,6 +59,7 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
   { key: 'canViewFeatureAccess', label: 'Show Feature Access', icon: <Eye size={14} />, description: 'Allow the user to see their own granted feature access list in the profile menu.' },
   { key: 'canUsePriceSync', label: 'AI Price Sync', icon: <Bot size={14} />, description: 'Bulk update product prices using AI to extract data from supplier lists (PDF/Excel).' },
   { key: 'canUndoQuote', label: 'Undo Timeline Actions', icon: <History size={14} />, description: 'Allow restoring quotes to previous states via the timeline.' },
+  { key: 'canChangeAuthor', label: 'Change Prepared By', icon: <UserCheck size={14} />, description: 'Allow modifying the "Prepared By" name on quotes.' },
 ];
 
 // ── Permission Toggles ────────────────────────────────────────────────────────

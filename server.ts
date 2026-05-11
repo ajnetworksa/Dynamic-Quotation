@@ -289,6 +289,7 @@ addColumnIfNotExists('quotes', 'type', 'TEXT DEFAULT "Quotation"');
 addColumnIfNotExists('quotes', 'revision_of', 'TEXT');
 addColumnIfNotExists('quotes', 'author_id', 'INTEGER');
 addColumnIfNotExists('quotes', 'vat_rate', 'REAL DEFAULT 15');
+addColumnIfNotExists('quotes', 'author_name', 'TEXT');
 addColumnIfNotExists('quotes', 'note_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'payment_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'warranty_ar', 'TEXT');
@@ -868,14 +869,14 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 
     const quotes = canSeeAll
       ? db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username, u.name as author_name
+          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
           ORDER BY q.id DESC
         `).all()
       : db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username, u.name as author_name
+          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
@@ -1075,7 +1076,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    version, force
+    author_name, version, force
   } = req.body;
   const updated_at = new Date().toISOString();
   const currentUser = (req as any).user;
@@ -1200,7 +1201,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
             custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?,
-            version = ?, draft_data = NULL
+            author_name = ?, version = ?, draft_data = NULL
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
@@ -1208,7 +1209,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          finalVersion, quote_id
+          author_name || null, finalVersion, quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
 
@@ -1223,14 +1224,14 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, 1
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, 1
         );
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
