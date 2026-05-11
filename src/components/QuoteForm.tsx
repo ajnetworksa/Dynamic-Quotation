@@ -1049,6 +1049,7 @@ export default function QuoteForm() {
     setBankDetailsAr('');
     setFooter('Thank you for your business!');
     setFooterAr('شكرا لتعاملكم معنا!');
+    setAuthorName(user.name || user.username);
     setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
   };
 
@@ -1269,6 +1270,7 @@ export default function QuoteForm() {
       type,
       vat_rate: vatRate,
       markup: markup,
+      author_name: authorName,
       items: items.filter(item => item.description.trim() !== '').map(item => ({
         product_id: item.product_id,
         description: item.description,
@@ -1354,7 +1356,7 @@ export default function QuoteForm() {
 
     if (isMeaningful) {
       localStorage.setItem(DRAFT_KEY, JSON.stringify({
-        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup,
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName,
         selectedCustomerId, selectedCustomer, customerSearch,
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1368,7 +1370,7 @@ export default function QuoteForm() {
       if (document.visibilityState !== 'visible' || !isMeaningful) return;
 
       const draft = {
-        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup,
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName,
         selectedCustomerId, selectedCustomer, customerSearch,
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1418,6 +1420,7 @@ export default function QuoteForm() {
       if (d.discount) setDiscount(d.discount);
       if (d.vatRate !== undefined) setVatRate(d.vatRate);
       if (d.markup !== undefined) setMarkup(d.markup);
+      if (d.authorName !== undefined) setAuthorName(d.authorName);
       if (d.note) setNote(d.note);
       if (d.noteAr) setNoteAr(d.noteAr);
       if (d.noteHeader) setNoteHeader(d.noteHeader);
@@ -1948,20 +1951,43 @@ export default function QuoteForm() {
 
     // Create items sheet data
     const itemsData = [
-      ['ITEM', 'DESCRIPTION', 'DESCRIPTION (ARABIC)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE'],
-      ...items.map((item, index) => [
-        index + 1,
-        item.description,
-        item.description_ar || '',
-        item.qty,
-        item.unit,
-        `SAR ${item.unit_price.toFixed(2)}`,
-        `SAR ${item.net_price.toFixed(2)}`
-      ]),
-      ['', '', '', '', '', 'SUBTOTAL', `SAR ${subtotal.toFixed(2)}`],
+      ['ITEM', 'DESCRIPTION', 'DESCRIPTION (ARABIC)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'MANUAL', 'BASE PRICE', 'BASE TOTAL', 'M.U. %'],
+      ...items.map((item, index) => {
+        const rule = getItemRule(item);
+        let displayBase = 0;
+        let displayTotal = 0;
+
+        if (rule === 'EXCL') {
+          displayBase = 0;
+          displayTotal = 0;
+        } else if (rule === 'ZM') {
+          displayBase = item.unit_price || 0;
+          displayTotal = item.net_price || 0;
+        } else {
+          if (rule === 'MAN') displayBase = item.manual_price || 0;
+          else if (rule === 'DB') displayBase = item.original_price || 0;
+          else displayBase = item.original_price || 0;
+          displayTotal = displayBase * item.qty;
+        }
+
+        return [
+          index + 1,
+          item.description,
+          item.description_ar || '',
+          item.qty,
+          item.unit,
+          `SAR ${item.unit_price.toFixed(2)}`,
+          `SAR ${item.net_price.toFixed(2)}`,
+          item.manual_price !== undefined ? `SAR ${item.manual_price.toFixed(2)}` : '-',
+          rule === 'EXCL' ? '-' : `SAR ${displayBase.toFixed(2)}`,
+          rule === 'EXCL' ? '-' : `SAR ${displayTotal.toFixed(2)}`,
+          index === 0 ? `${markup}%` : ''
+        ];
+      }),
+      ['', '', '', '', '', 'SUBTOTAL', `SAR ${subtotal.toFixed(2)}`, '', 'B.TOTAL', `SAR ${baseTotal.toFixed(2)}`],
       ['', '', '', '', '', 'DISCOUNT', `SAR ${discount.toFixed(2)}`],
       ['', '', '', '', '', 'VAT (15%)', `SAR ${tax.toFixed(2)}`],
-      ['', '', '', '', '', 'TOTAL PACKAGE', `SAR ${grandTotal.toFixed(2)}`],
+      ['', '', '', '', '', 'TOTAL PACKAGE', `SAR ${grandTotal.toFixed(2)}`, '', 'TTL PROFIT', `SAR ${markupProfit.toFixed(2)}`],
       [''],
       ['TERMS & CONDITIONS'],
       ...(showNote ? [[noteHeader, note, noteAr]] : []),
@@ -1979,13 +2005,17 @@ export default function QuoteForm() {
     const ws = workbook.addWorksheet('Quote');
 
     ws.columns = [
-      { key: 'A', width: 15 },
-      { key: 'B', width: 50 },
-      { key: 'C', width: 50 },
-      { key: 'D', width: 10 },
-      { key: 'E', width: 10 },
+      { key: 'A', width: 6 },
+      { key: 'B', width: 45 },
+      { key: 'C', width: 45 },
+      { key: 'D', width: 6 },
+      { key: 'E', width: 8 },
       { key: 'F', width: 15 },
       { key: 'G', width: 15 },
+      { key: 'H', width: 12 },
+      { key: 'I', width: 15 },
+      { key: 'J', width: 15 },
+      { key: 'K', width: 10 },
     ];
 
     const allData = [...quoteInfo, ...itemsData];
@@ -2012,6 +2042,35 @@ export default function QuoteForm() {
             cell.font = { name: 'Arial', size: 10, bold: true };
           }
         });
+      }
+
+      // STYLIZE ROW: headers
+      if (firstCellVal === 'ITEM') {
+        row.eachCell(cell => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+          cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF1E293B' } };
+          cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        });
+      }
+
+      // STYLIZE SUBTOTAL, DISCOUNT, VAT, TOTAL PACKAGE
+      const col6Val = row.getCell(6).value?.toString();
+      const col9Val = row.getCell(9).value?.toString();
+      
+      if (col6Val === 'SUBTOTAL' || col6Val === 'DISCOUNT' || col6Val === 'VAT (15%)' || col6Val === 'TOTAL PACKAGE') {
+        row.getCell(6).font = { name: 'Arial', size: 10, bold: true };
+        row.getCell(7).font = { name: 'Arial', size: 10, bold: true };
+        row.getCell(9).font = { name: 'Arial', size: 10, bold: true };
+        row.getCell(10).font = { name: 'Arial', size: 10, bold: true };
+        
+        if (col6Val === 'TOTAL PACKAGE') {
+           row.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } }; // green
+           row.getCell(7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } }; 
+        }
+        if (col9Val === 'TTL PROFIT') {
+           row.getCell(9).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } }; // yellow
+           row.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } }; 
+        }
       }
     });
 
@@ -2882,7 +2941,20 @@ export default function QuoteForm() {
             <div className="mt-8 flex justify-between items-end border-t border-gray-100 pt-6">
               <div className="flex flex-col gap-1">
                 <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">Prepared By:</p>
-                <p className="text-lg font-bold text-indigo-700">{authorName || user.name || user.username}</p>
+                {user.role === 'admin' || user.permissions?.canChangeAuthor ? (
+                  <input
+                    type="text"
+                    value={authorName || ''}
+                    onChange={(e) => setAuthorName(e.target.value)}
+                    onBlur={() => {
+                      if (!authorName.trim()) setAuthorName(user.name || user.username);
+                    }}
+                    className="text-lg font-bold text-indigo-700 outline-none bg-transparent border-b border-dashed border-indigo-300 focus:border-indigo-600 print:border-none min-w-[200px]"
+                    placeholder="Enter name..."
+                  />
+                ) : (
+                  <p className="text-lg font-bold text-indigo-700">{authorName || user.name || user.username}</p>
+                )}
               </div>
               <div className="flex flex-col items-center gap-1">
                 <div className="w-48 border-b-2 border-gray-400 mb-1"></div>
