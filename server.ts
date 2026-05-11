@@ -561,6 +561,8 @@ const QuoteSchema = z.object({
   custom_field_ar:   z.string().max(5000).optional(),
   items:             z.array(QuoteItemSchema).max(500),
   version:           z.number().int().optional(),
+  author_name:       z.string().max(100).nullable().optional(),
+  author_id:         z.number().int().nullable().optional(),
   force:             z.boolean().optional(),
 });
 
@@ -673,7 +675,11 @@ app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema),
 });
 
 // ── Users Management ─────────────────────────────────────────────────────────
-app.get('/api/users', requireAuth, requirePermission('canManageUsers'), (req, res) => {
+app.get('/api/users', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  if (user.role !== 'admin' && !user.permissions?.canManageUsers && !user.permissions?.canChangeAuthor) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   const users = db.prepare('SELECT id, username, name, role, permissions FROM users').all() as any[];
   // Parse permissions for each user
   const parsed = users.map(u => ({
@@ -910,7 +916,7 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
   const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
   const quote = db.prepare(`
-    SELECT q.*, c.name as customer_name, u.username as author_username, u.name as author_name
+    SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
     FROM quotes q
     LEFT JOIN customers c ON q.customer_id = c.id
     LEFT JOIN users u ON q.author_id = u.id
@@ -1076,7 +1082,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    author_name, version, force
+    author_name, author_id, version, force
   } = req.body;
   const updated_at = new Date().toISOString();
   const currentUser = (req as any).user;
@@ -1201,7 +1207,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
             custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?,
-            author_name = ?, version = ?, draft_data = NULL
+            author_name = ?, author_id = ?, version = ?, draft_data = NULL
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
@@ -1209,7 +1215,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          author_name || null, finalVersion, quote_id
+          author_name || null, author_id || existing.author_id, finalVersion, quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
 
@@ -1231,7 +1237,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, 1
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, 1
         );
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
@@ -1290,7 +1296,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
 
     const quote = db.prepare(`
       SELECT q.quote_id, q.date, q.status, q.type, q.updated_at, q.author_id,
-             c.name as customer_name, u.username as author_username
+             c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       LEFT JOIN users u ON q.author_id = u.id

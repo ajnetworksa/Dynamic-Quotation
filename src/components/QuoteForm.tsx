@@ -173,6 +173,8 @@ export default function QuoteForm() {
   const [version, setVersion] = useState(1);
   const [showConflictModal, setShowConflictModal] = useState(false);
   const [authorName, setAuthorName] = useState('');
+  const [authorId, setAuthorId] = useState<number | null>(null);
+  const [usersList, setUsersList] = useState<{id: number, username: string, name: string}[]>([]);
   const [workflowVisibility, setWorkflowVisibility] = useState({
     invoice: true,
     template: true,
@@ -352,6 +354,14 @@ export default function QuoteForm() {
       const dbCustomers = await fetchCustomers();
       const dbProducts = await fetchProducts();
       fetchLogo();
+      if (user.role === 'admin' || user.permissions?.canChangeAuthor) {
+        fetch('/api/users')
+          .then(res => res.json())
+          .then(data => {
+            if (Array.isArray(data)) setUsersList(data);
+          })
+          .catch(() => {});
+      }
       loadTemplates();
       if (recallQuoteId) {
         fetchQuote(recallQuoteId, dbCustomers, dbProducts);
@@ -922,6 +932,7 @@ export default function QuoteForm() {
       setShowCustomField(parsedCustomFields.length > 0);
 
       setAuthorName(data.author_name || data.author_username || '');
+      setAuthorId(data.author_id || null);
 
       let increases = 0;
       let decreases = 0;
@@ -1050,6 +1061,7 @@ export default function QuoteForm() {
     setFooter('Thank you for your business!');
     setFooterAr('شكرا لتعاملكم معنا!');
     setAuthorName(user.name || user.username);
+    setAuthorId(null);
     setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
   };
 
@@ -1271,6 +1283,7 @@ export default function QuoteForm() {
       vat_rate: vatRate,
       markup: markup,
       author_name: authorName,
+      author_id: authorId,
       items: items.filter(item => item.description.trim() !== '').map(item => ({
         product_id: item.product_id,
         description: item.description,
@@ -1356,7 +1369,7 @@ export default function QuoteForm() {
 
     if (isMeaningful) {
       localStorage.setItem(DRAFT_KEY, JSON.stringify({
-        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName,
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName, authorId,
         selectedCustomerId, selectedCustomer, customerSearch,
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1370,7 +1383,7 @@ export default function QuoteForm() {
       if (document.visibilityState !== 'visible' || !isMeaningful) return;
 
       const draft = {
-        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName,
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName, authorId,
         selectedCustomerId, selectedCustomer, customerSearch,
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1421,6 +1434,7 @@ export default function QuoteForm() {
       if (d.vatRate !== undefined) setVatRate(d.vatRate);
       if (d.markup !== undefined) setMarkup(d.markup);
       if (d.authorName !== undefined) setAuthorName(d.authorName);
+      if (d.authorId !== undefined) setAuthorId(d.authorId);
       if (d.note) setNote(d.note);
       if (d.noteAr) setNoteAr(d.noteAr);
       if (d.noteHeader) setNoteHeader(d.noteHeader);
@@ -2942,16 +2956,22 @@ export default function QuoteForm() {
               <div className="flex flex-col gap-1">
                 <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">Prepared By:</p>
                 {user.role === 'admin' || user.permissions?.canChangeAuthor ? (
-                  <input
-                    type="text"
-                    value={authorName || ''}
-                    onChange={(e) => setAuthorName(e.target.value)}
-                    onBlur={() => {
-                      if (!authorName.trim()) setAuthorName(user.name || user.username);
+                  <select
+                    value={authorId || user.id}
+                    onChange={(e) => {
+                      const newId = Number(e.target.value);
+                      setAuthorId(newId);
+                      const selectedUser = usersList.find(u => u.id === newId);
+                      if (selectedUser) setAuthorName(selectedUser.name || selectedUser.username);
                     }}
                     className="text-lg font-bold text-indigo-700 outline-none bg-transparent border-b border-dashed border-indigo-300 focus:border-indigo-600 print:border-none min-w-[200px]"
-                    placeholder="Enter name..."
-                  />
+                  >
+                    {usersList.length > 0 ? usersList.map(u => (
+                      <option key={u.id} value={u.id}>{u.name || u.username}</option>
+                    )) : (
+                      <option value={user.id}>{authorName || user.name || user.username}</option>
+                    )}
+                  </select>
                 ) : (
                   <p className="text-lg font-bold text-indigo-700">{authorName || user.name || user.username}</p>
                 )}
