@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
@@ -496,6 +496,24 @@ export default function QuoteForm() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // ── KEYBOARD SHORTCUTS ──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+S to Save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        performSave();
+      }
+      // Ctrl+P to Print
+      if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+        e.preventDefault();
+        handlePrint();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [items, quoteId, subject, selectedCustomerId, discount, vatRate]);
 
   const fetchLogo = async () => {
     try {
@@ -2117,46 +2135,34 @@ export default function QuoteForm() {
   };
 
   return (
-    <div className="space-y-6">
-      {/* ── ACTION BAR ── Hidden when printing/exporting PDF ─────────────────
-          This bar contains all the action buttons: Clear, Record, Email, Print,
-          Export Excel, Export PDF. It is NOT shown in the printed/PDF output.
-
-          BUTTON COLOR GUIDE (change the bg-* and hover:bg-* class to recolor):
-            Clear           → bg-gray-100  hover:bg-gray-200  (light gray)
-            Record          → bg-indigo-600 hover:bg-indigo-700 (blue-purple)
-            Create Revision → bg-orange-500 hover:bg-orange-600 (orange)
-            To Invoice      → bg-purple-600 hover:bg-purple-700 (purple)
-            Email           → bg-sky-500   hover:bg-sky-600    (light blue)
-            Print           → bg-emerald-600 hover:bg-emerald-700 (teal-green)
-            Export Excel    → bg-green-600 hover:bg-green-700  (green)
-            Export PDF      → bg-blue-600  hover:bg-blue-700   (blue)
-
-          Color names reference: gray, red, orange, amber, yellow, lime, green,
-          emerald, teal, cyan, sky, blue, indigo, violet, purple, fuchsia, pink.
-          Number suffix controls darkness: 50 (lightest) → 950 (darkest).
-      ────────────────────────────────────────────────────────────────────── */}
-      {/* ── DRAFT RESTORE BANNER ────────────────────────────────────────────────────── */}
-      {draftBanner && (
-        <div className="flex items-center justify-between bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 print:hidden">
-          <span className="text-amber-800 text-sm font-medium">📝 You have an unsaved draft from a previous session.</span>
-          <div className="flex gap-2">
-            <button onClick={restoreDraft} className="px-3 py-1.5 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors font-medium">Restore Draft</button>
-            <button onClick={discardDraft} className="px-3 py-1.5 text-sm bg-white border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 transition-colors">Discard</button>
+    <div className="flex flex-col gap-6 dark:text-gray-100">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
+        <div className="flex items-center gap-4">
+          <div className="bg-indigo-100 dark:bg-indigo-900/40 p-3 rounded-xl text-indigo-700 dark:text-indigo-400">
+            <FileText size={24} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-gray-800 dark:text-white">Document Editor</h2>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                status === 'Draft' ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400' :
+                status === 'Invoiced' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' :
+                'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
+              }`}>
+                {status}
+              </span>
+              <span className="text-xs text-gray-400 font-mono">v{version}</span>
+            </div>
           </div>
         </div>
-      )}
-
-      <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 print:hidden gap-4">
-        <h2 className="text-xl font-bold text-gray-800 w-full md:w-auto text-center md:text-left">Quote Generator</h2>
-        <div className="flex flex-wrap justify-center md:justify-end gap-2 md:gap-3 w-full md:w-auto">
-          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">
+        <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
+          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors">
             <RefreshCw size={18} /> Clear
           </button>
           <button onClick={recordQuote} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">
             <Save size={18} /> Record
           </button>
-          <button onClick={handleTranslateAll} className="flex items-center gap-2 px-4 py-2 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors" title="Translate all empty Arabic fields">
+          <button onClick={handleTranslateAll} className="flex items-center gap-2 px-4 py-2 text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 border border-indigo-200 dark:border-indigo-800 rounded-lg transition-colors" title="Translate all empty Arabic fields">
             <Languages size={18} /> Translate
           </button>
           {recallQuoteId && (
@@ -2176,19 +2182,19 @@ export default function QuoteForm() {
           )}
           {/* ── TEMPLATE BUTTONS ───────────────────────────────────────────────────── */}
           {(user.role === 'admin' || user.permissions?.canSaveTemplate) && workflowVisibility.template && (
-            <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors" title="Save current Terms as a reusable template">
+            <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 border border-amber-200 dark:border-amber-800 rounded-lg transition-colors" title="Save current Terms as a reusable template">
               <Bookmark size={18} /> Save Template
             </button>
           )}
           {templates.length > 0 && workflowVisibility.template && (
             <div className="relative group">
-              <button className="flex items-center gap-2 px-4 py-2 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors">
+              <button className="flex items-center gap-2 px-4 py-2 text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 border border-amber-200 dark:border-amber-800 rounded-lg transition-colors">
                 <BookOpen size={18} /> Load Template ▾
               </button>
-              <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[180px] hidden group-hover:block">
+              <div className="absolute right-0 top-full mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg min-w-[180px] hidden group-hover:block">
                 {templates.map(t => (
-                  <div key={t.name} className="flex items-center hover:bg-amber-50 group/item">
-                    <button onClick={() => applyTemplate(t)} className="flex-1 text-left px-4 py-2 text-sm text-gray-700">
+                  <div key={t.name} className="flex items-center hover:bg-amber-50 dark:hover:bg-amber-900/20 group/item">
+                    <button onClick={() => applyTemplate(t)} className="flex-1 text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300">
                       {t.name}
                     </button>
                     <button

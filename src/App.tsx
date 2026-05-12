@@ -8,7 +8,9 @@ import {
   Settings as SettingsIcon, LogOut, Shield,
   LayoutDashboard, KeyRound, X, ChevronDown,
   User, CheckCircle2, Lock, Eye, EyeOff,
+  Moon, Sun, Kanban
 } from 'lucide-react';
+import KanbanBoard from './components/KanbanBoard';
 import QuoteForm from './components/QuoteForm';
 import Dashboard from './components/Dashboard';
 import ProductDB from './components/ProductDB';
@@ -507,7 +509,7 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
 }
 
 // ── Main Layout ───────────────────────────────────────────────────────────────
-function MainLayout({ user, handleLogout }: { user: any; handleLogout: () => void }) {
+function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: any; handleLogout: () => void; isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) {
   const location = useLocation();
 
   return (
@@ -528,6 +530,7 @@ function MainLayout({ user, handleLogout }: { user: any; handleLogout: () => voi
                 <NavItem to="/products" icon={Database} label="Product DB" />
                 <NavItem to="/customers" icon={Users} label="Customer DB" />
                 <NavItem to="/tracking" icon={History} label="Tracking" />
+                <NavItem to="/kanban" icon={Kanban} label="Kanban" />
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                   <NavItem to="/users" icon={Shield} label="Users" />
                 )}
@@ -535,6 +538,14 @@ function MainLayout({ user, handleLogout }: { user: any; handleLogout: () => voi
                   <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
                 )}
               </nav>
+              {/* Theme Toggle */}
+              <button
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition-colors"
+                title={isDarkMode ? 'Light Mode' : 'Dark Mode'}
+              >
+                {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+              </button>
               {/* Profile Dropdown — outside of overflow-x-auto nav so it doesn't clip */}
               <div className="shrink-0">
                 <ProfileDropdown user={user} handleLogout={handleLogout} />
@@ -553,6 +564,7 @@ function MainLayout({ user, handleLogout }: { user: any; handleLogout: () => voi
           <Route path="/products" element={<ProductDB />} />
           <Route path="/customers" element={<CustomerDB />} />
           <Route path="/tracking" element={<Tracking />} />
+          <Route path="/kanban" element={<KanbanBoard />} />
           <Route path="/quote" element={null} />
           {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
             <Route path="/users" element={<UsersDB />} />
@@ -571,6 +583,17 @@ function MainLayout({ user, handleLogout }: { user: any; handleLogout: () => voi
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
   const [user, setUser] = useState<any>(JSON.parse(localStorage.getItem('user') || 'null'));
+  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('theme') === 'dark');
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -600,7 +623,7 @@ export default function App() {
 
   return (
     <Router>
-      <MainLayout user={user} handleLogout={handleLogout} />
+      <MainLayout user={user} handleLogout={handleLogout} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
     </Router>
   );
 }
