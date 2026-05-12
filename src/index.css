@@ -280,9 +280,50 @@
   body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    background: white !important;
   }
   
   @page {
-    margin: 1cm;
+    size: A4;
+    margin: 1.5cm;
   }
+
+  .print-no-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* RTL Print Adjustments */
+  [dir="rtl"] {
+    text-align: right;
+  }
+}
+
+/* Dark Mode Global Overrides */
+.dark body {
+  background-color: var(--color-slate-950);
+  color: var(--color-slate-100);
+}
+
+.dark .bg-white {
+  background-color: var(--color-slate-900) !important;
+}
+
+.dark .border-gray-200 {
+  border-color: var(--color-slate-800) !important;
+}
+
+.dark .text-gray-800, 
+.dark .text-gray-900 {
+  color: var(--color-slate-100) !important;
+}
+
+.dark .text-gray-500,
+.dark .text-gray-600 {
+  color: var(--color-slate-400) !important;
+}
+
+.dark .hover\:bg-gray-50:hover,
+.dark .hover\:bg-gray-100:hover {
+  background-color: var(--color-slate-800) !important;
 }
