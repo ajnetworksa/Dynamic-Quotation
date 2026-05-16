@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers } from 'lucide-react';
+import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers, StickyNote } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import QuoteDiffViewer from './QuoteDiffViewer';
 
@@ -18,6 +18,7 @@ interface Quote {
   followup_note?: string;
   author_username?: string;
   author_name?: string;
+  quote_note?: string;
 }
 
 const STATUS_BADGE: Record<string, string> = {
@@ -54,6 +55,10 @@ export default function Tracking() {
   const [followupQuoteId, setFollowupQuoteId] = useState<string | null>(null);
   const [followupDate, setFollowupDate] = useState('');
   const [followupNote, setFollowupNote] = useState('');
+
+  // Quote-level internal note
+  const [noteQuoteId, setNoteQuoteId] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState('');
 
   // Version Diff
   const [diffBaseId, setDiffBaseId] = useState<string | null>(null);
@@ -209,6 +214,19 @@ export default function Tracking() {
       setFollowupQuoteId(null);
       fetchQuotes();
     } catch (e) { }
+  };
+
+  const saveNote = async () => {
+    if (!noteQuoteId) return;
+    try {
+      await fetch(`/api/quotes/${noteQuoteId}/note`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quote_note: noteText })
+      });
+      setQuotes(prev => prev.map(q => q.quote_id === noteQuoteId ? { ...q, quote_note: noteText } : q));
+      setNoteQuoteId(null);
+    } catch (e) { alert('Failed to save note.'); }
   };
 
   const exportCSV = () => {
@@ -549,6 +567,18 @@ export default function Tracking() {
                         <Bell size={18} />
                       </button>
                       <button
+                        onClick={() => {
+                          setNoteQuoteId(quote.quote_id);
+                          setNoteText(quote.quote_note || '');
+                        }}
+                        className={`p-1.5 rounded-lg transition-colors ${
+                          quote.quote_note ? 'text-amber-600 hover:bg-amber-50 bg-amber-50/50' : 'text-gray-400 hover:bg-gray-50'
+                        }`}
+                        title={quote.quote_note ? `Note: ${quote.quote_note.slice(0, 60)}…` : 'Add internal note'}
+                      >
+                        <StickyNote size={18} />
+                      </button>
+                      <button
                         onClick={() => handleRecall(quote.quote_id)}
                         className="flex items-center gap-1 px-3 py-1.5 text-sm bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"
                         title="Open in Form"
@@ -836,6 +866,30 @@ export default function Tracking() {
           </div>
         )
       }
+
+      {/* Internal Note Modal */}
+      {noteQuoteId && (
+        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-gray-900 mb-1 flex items-center gap-2">
+              <StickyNote className="text-amber-500" /> Internal Note
+            </h3>
+            <p className="text-xs text-gray-400 mb-4">🔒 Private — never shown on PDF or printed documents.</p>
+            <textarea
+              autoFocus
+              value={noteText}
+              onChange={e => setNoteText(e.target.value)}
+              rows={5}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-amber-400 resize-none"
+              placeholder="e.g. Customer wants fiber cable, awaiting stock confirmation..."
+            />
+            <div className="flex justify-end gap-3 mt-4">
+              <button className="px-4 py-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-700" onClick={() => setNoteQuoteId(null)}>Cancel</button>
+              <button className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors" onClick={saveNote}>Save Note</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quote Diff Viewer Modal */}
       {diffBaseId && (

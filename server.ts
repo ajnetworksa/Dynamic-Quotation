@@ -27,6 +27,9 @@ import multer from 'multer';
 import OpenAI from 'openai';
 import fs from 'fs';
 import { z, ZodSchema } from 'zod';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
 // import { GoogleGenerativeAI } from "@google/generative-ai"; // Switched to OpenRouter for better stability
 
 // ── FILE LOGGING FOR BACKEND DEBUGGING ────────────────────────────────────────
@@ -308,9 +311,11 @@ addColumnIfNotExists('products', 'description_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'expiry_date', 'TEXT');
 addColumnIfNotExists('quotes', 'followup_date', 'TEXT');
 addColumnIfNotExists('quotes', 'followup_note', 'TEXT');
+addColumnIfNotExists('quotes', 'quote_note', 'TEXT');
 addColumnIfNotExists('quotes', 'markup', 'REAL DEFAULT 8');
 addColumnIfNotExists('quote_items', 'original_price', 'REAL');
 addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
+addColumnIfNotExists('quote_items', 'internal_note', 'TEXT');
 addColumnIfNotExists('system_logs', 'type', 'TEXT DEFAULT "Unknown"');
 addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
 addColumnIfNotExists('users', 'name', 'TEXT');
@@ -523,6 +528,11 @@ const QuoteItemSchema = z.object({
   net_price:      z.number().nonnegative().default(0),
   original_price: z.number().nonnegative().nullable().optional(),
   manual_price:   z.number().nonnegative().nullable().optional(),
+  internal_note:  z.string().max(2000).nullable().optional(),
+});
+
+const QuoteNoteSchema = z.object({
+  quote_note: z.string().max(5000).nullable().optional(),
 });
 
 const QuoteSchema = z.object({
@@ -1340,9 +1350,9 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
 
-      const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price, internal_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       for (const item of items) {
-        insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price, item.original_price ?? null, item.manual_price ?? null);
+        insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price, item.original_price ?? null, item.manual_price ?? null, item.internal_note ?? null);
       }
     })();
     res.json({ success: true, version: finalVersion });
@@ -1372,6 +1382,25 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
       db.prepare('DELETE FROM activity_log WHERE quote_id = ?').run(req.params.quote_id);
       db.prepare('DELETE FROM quotes WHERE quote_id = ?').run(req.params.quote_id);
     })();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Quote Note (internal, not printed) ───────────────────────────────────────
+app.patch('/api/quotes/:quote_id/note', requireAuth, validate(QuoteNoteSchema), (req, res) => {
+  try {
+    const currentUser = (req as any).user;
+    const quoteId = req.params.quote_id;
+    const { quote_note } = req.body;
+    const existing = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quoteId) as any;
+    if (!existing) return res.status(404).json({ error: 'Quote not found' });
+    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+    if (!canSeeAll && existing.author_id !== currentUser.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    db.prepare('UPDATE quotes SET quote_note = ? WHERE quote_id = ?').run(quote_note ?? null, quoteId);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -2004,6 +2033,88 @@ app.delete('/api/admin/logs', requireAuth, requirePermission('canManageSettings'
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ── SYSTEM UPDATE ENDPOINTS ────────────────────────────────────────────────
+app.get('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { stdout } = await execAsync('git remote get-url origin');
+    res.json({ url: stdout.trim() });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to get remote URL' });
+  }
+});
+
+app.post('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) => {
+  const { url } = req.body;
+  if (!url || !url.startsWith('http')) {
+    return res.status(400).json({ error: 'Invalid repository URL' });
+  }
+  try {
+    await execAsync(`git remote set-url origin ${url}`);
+    res.json({ success: true, message: 'Remote URL updated successfully' });
+  } catch (error: any) {
+    res.status(500).json({ error: `Failed to update remote URL: ${error.message}` });
+  }
+});
+
+app.get('/api/system/update-status', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    // 1. Fetch latest from remote
+    await execAsync('git fetch origin main');
+    
+    // 2. Get local and remote hashes
+    const { stdout: localHash } = await execAsync('git rev-parse HEAD');
+    const { stdout: remoteHash } = await execAsync('git rev-parse origin/main');
+    
+    // 3. Get last 5 commit messages from remote to show what's new
+    const { stdout: changelog } = await execAsync('git log HEAD..origin/main --oneline -n 5');
+
+    res.json({
+      current: localHash.trim(),
+      latest: remoteHash.trim(),
+      hasUpdate: localHash.trim() !== remoteHash.trim(),
+      changelog: changelog.trim()
+    });
+  } catch (error: any) {
+    console.error('Update check failed:', error);
+    res.status(500).json({ error: 'Failed to check for updates. Make sure git is installed and configured.' });
+  }
+});
+
+app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    console.log('🚀 Starting system update...');
+    
+    // 1. Pull latest changes
+    const { stdout: pullOutput } = await execAsync('git pull origin main');
+    console.log('Git Pull Output:', pullOutput);
+
+    // 2. Run npm install if package.json changed
+    if (pullOutput.includes('package.json')) {
+      console.log('📦 Dependencies changed, running npm install...');
+      await execAsync('npm install');
+    }
+
+    // 3. Always run build to ensure the UI is updated (since we use Vite)
+    console.log('🛠 Building frontend...');
+    await execAsync('npm run build');
+
+    res.json({ 
+      success: true, 
+      message: 'System updated and rebuilt successfully. Restarting now...' 
+    });
+
+    // 4. Graceful exit to let PM2/tsx restart the server
+    setTimeout(() => {
+      console.log('👋 Restarting server...');
+      process.exit(0);
+    }, 2000);
+
+  } catch (error: any) {
+    console.error('Update failed:', error);
+    res.status(500).json({ error: `Update failed: ${error.message}` });
   }
 });
 
