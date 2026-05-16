@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
@@ -64,6 +64,7 @@ interface QuoteItem {
   net_price: number;
   manual_price?: number;
   costShift?: 'up' | 'down';
+  internal_note?: string;
 }
 
 interface CustomField {
@@ -162,6 +163,8 @@ export default function QuoteForm() {
   const [addCustomerModal, setAddCustomerModal] = useState<{ name: string; mobile: string; address: string; contact: string; email: string; isSaving?: boolean } | null>(null);
   // Rows currently being translated (shows inline indicator)
   const [translatingRows, setTranslatingRows] = useState<Set<number>>(new Set());
+  // Which row has its private note expanded (null = none)
+  const [expandedNoteIndex, setExpandedNoteIndex] = useState<number | null>(null);
 
   const [subject, setSubject] = useState('');
   const [subjectAr, setSubjectAr] = useState('');
@@ -1030,6 +1033,7 @@ export default function QuoteForm() {
           manual_price: manual_price,
           unit_price: unit_price,
           net_price: Math.round(unit_price * (item.qty || 1) * 100) / 100,
+          internal_note: item.internal_note || '',
           costShift
         };
       }));
@@ -2456,7 +2460,7 @@ export default function QuoteForm() {
                 */}
                   <div
                     ref={headerRef}
-                    className="grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[48px_1fr_64px_64px_110px_110px]"
+                    className="grid grid-cols-[48px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[48px_1fr_64px_64px_110px_110px]"
                     style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
                   >
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">ITEM</div>
@@ -2466,7 +2470,8 @@ export default function QuoteForm() {
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">QTY</div>
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">UNIT</div>
                     <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
-                    <div className="pt-0 pb-3 px-2 h-full">NET PRICE</div>
+                    <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">NET PRICE</div>
+                    <div className="print:hidden h-full" />
                   </div>
                   {items.map((item, index) => (
                     <div
@@ -2480,7 +2485,7 @@ export default function QuoteForm() {
                     >
                       <div
                         ref={el => rowRefs.current[index] = el}
-                        className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
+                        className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
                           ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
                           ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
@@ -2594,6 +2599,19 @@ export default function QuoteForm() {
                                 </select>
                               </div>
                             </div>
+                            {/* Private note — screen only, hidden from print */}
+                            {expandedNoteIndex === index && (
+                              <div className="print:hidden mt-1 pt-1 border-t border-dashed border-amber-300">
+                                <textarea
+                                  autoFocus
+                                  className="w-full text-xs bg-amber-50 outline-none resize-none text-amber-900 placeholder:text-amber-400 rounded px-1.5 py-1"
+                                  placeholder="Private note (not printed)…"
+                                  value={item.internal_note || ''}
+                                  onChange={e => updateItem(index, 'internal_note', e.target.value)}
+                                  rows={Math.max(1, (item.internal_note || '').split('\n').length)}
+                                />
+                              </div>
+                            )}
                           </div>
                           <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
                           <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
@@ -2651,15 +2669,26 @@ export default function QuoteForm() {
                             step="0.01"
                           />
                         </div>
-                        <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                        <div className={`px-2 py-0.5 border-r border-gray-300 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
                           <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
-                      </div>
-                      {/* Controls */}
-                      <div className="w-9 shrink-0 print:hidden xl:hidden flex flex-col items-center justify-center gap-1 transition-opacity">
-                        <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-1" title="Remove Item">
-                          <Trash2 size={16} />
-                        </button>
+                        {/* Controls — always visible, note + trash, inside grid */}
+                        <div className="print:hidden flex flex-col items-center justify-start pt-1 gap-1">
+                          <button
+                            onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
+                            className={`p-0.5 rounded transition-colors ${
+                              expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
+                              : item.internal_note ? 'text-amber-500 hover:text-amber-700'
+                              : 'text-gray-400 hover:text-amber-500'
+                            }`}
+                            title={item.internal_note ? 'Edit private note' : 'Add private note'}
+                          >
+                            <StickyNote size={14} />
+                          </button>
+                          <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}

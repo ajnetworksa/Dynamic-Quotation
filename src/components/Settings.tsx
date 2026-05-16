@@ -78,6 +78,14 @@ export default function Settings() {
   // Developer mode
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
   const [devModeStatus, setDevModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // System Update
+  const [updateStatus, setUpdateStatus] = useState<{ current: string; latest: string; hasUpdate: boolean; changelog: string } | null>(null);
+  const [checkUpdateStatus, setCheckUpdateStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [performUpdateStatus, setPerformUpdateStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [remoteUrl, setRemoteUrl] = useState<string>('');
+  const [remoteUrlStatus, setRemoteUrlStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => {
@@ -187,6 +195,13 @@ export default function Settings() {
     fetch('/api/settings/quotePrefix')
       .then(res => res.json())
       .then(data => { if (data.value) setQuotePrefix(data.value); })
+      .catch(console.error);
+
+    fetch('/api/system/remote-url', {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+      .then(res => res.json())
+      .then(data => { if (data.url) setRemoteUrl(data.url); })
       .catch(console.error);
 
     if (user.role === 'admin') {
@@ -604,6 +619,68 @@ export default function Settings() {
     } catch (error) {
       console.error('Download error:', error);
       alert('Error downloading backup');
+    }
+  };
+
+  const handleCheckUpdate = async () => {
+    setCheckUpdateStatus('loading');
+    try {
+      const res = await fetch('/api/system/update-status', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUpdateStatus(data);
+        setCheckUpdateStatus('success');
+      } else {
+        setCheckUpdateStatus('error');
+      }
+    } catch {
+      setCheckUpdateStatus('error');
+    }
+  };
+
+  const handlePerformUpdate = async () => {
+    if (!confirm('Are you sure you want to update the system? The server will restart and you will be logged out.')) return;
+    setPerformUpdateStatus('loading');
+    try {
+      const res = await fetch('/api/system/update', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        setPerformUpdateStatus('success');
+        alert('Update successful! The system is restarting. Please wait a few seconds and then reload the page.');
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.reload();
+      } else {
+        setPerformUpdateStatus('error');
+      }
+    } catch {
+      setPerformUpdateStatus('error');
+    }
+  };
+
+  const handleUpdateRemoteUrl = async () => {
+    setRemoteUrlStatus('loading');
+    try {
+      const res = await fetch('/api/system/remote-url', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ url: remoteUrl })
+      });
+      if (res.ok) {
+        setRemoteUrlStatus('success');
+        setTimeout(() => setRemoteUrlStatus('idle'), 3000);
+      } else {
+        setRemoteUrlStatus('error');
+      }
+    } catch {
+      setRemoteUrlStatus('error');
     }
   };
 
@@ -1572,6 +1649,103 @@ export default function Settings() {
         </div>
       </div>
       
+      {/* System Update Section */}
+      {user.role === 'admin' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+            <RefreshCw className={`text-indigo-600 ${checkUpdateStatus === 'loading' ? 'animate-spin' : ''}`} />
+            <h2 className="text-xl font-semibold text-gray-800">System Updates</h2>
+          </div>
+          <div className="p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex-1 mr-8">
+                <p className="text-sm text-gray-600 mb-1">Check for the latest version of the AJ Quotation System from GitHub.</p>
+                <div className="flex items-center gap-2 text-xs font-mono text-gray-400 mb-4">
+                  <span>Current Revision:</span>
+                  <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{APP_VERSION}</span>
+                </div>
+                
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">GitHub Repository URL</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={remoteUrl}
+                      onChange={(e) => setRemoteUrl(e.target.value)}
+                      placeholder="https://github.com/user/repo.git"
+                      className="flex-1 px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-mono"
+                    />
+                    <button
+                      onClick={handleUpdateRemoteUrl}
+                      disabled={remoteUrlStatus === 'loading'}
+                      className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                    >
+                      {remoteUrlStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save URL'}
+                    </button>
+                  </div>
+                  {remoteUrlStatus === 'success' && <p className="text-[10px] text-emerald-600 font-bold">✓ Repository URL updated</p>}
+                  {remoteUrlStatus === 'error' && <p className="text-[10px] text-red-600 font-bold">✗ Failed to update URL</p>}
+                </div>
+              </div>
+              <button
+                onClick={handleCheckUpdate}
+                disabled={checkUpdateStatus === 'loading'}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 h-fit"
+              >
+                {checkUpdateStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                Check for Updates
+              </button>
+            </div>
+
+            {updateStatus && (
+              <div className="mt-6 p-4 rounded-lg bg-gray-50 border border-gray-200">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    {updateStatus.hasUpdate ? (
+                      <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                        <AlertTriangle size={20} />
+                      </div>
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                        <CheckCircle2 size={20} />
+                      </div>
+                    )}
+                    <div>
+                      <p className="font-bold text-gray-800">
+                        {updateStatus.hasUpdate ? 'Update Available!' : 'System Up to Date'}
+                      </p>
+                      <p className="text-xs text-gray-500 font-mono">
+                        Remote: {updateStatus.latest.substring(0, 7)} | Local: {updateStatus.current.substring(0, 7)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {updateStatus.hasUpdate && (
+                    <button
+                      onClick={handlePerformUpdate}
+                      disabled={performUpdateStatus === 'loading'}
+                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50"
+                    >
+                      {performUpdateStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                      Update Now
+                    </button>
+                  )}
+                </div>
+
+                {updateStatus.hasUpdate && updateStatus.changelog && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">What's New:</p>
+                    <div className="bg-gray-100 p-3 rounded border border-gray-200 text-xs font-mono text-gray-700 whitespace-pre-wrap">
+                      {updateStatus.changelog}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* App Version Footer */}
       <div className="pt-8 pb-12 text-center">
         <div className="inline-flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-xs font-mono border border-gray-200">
