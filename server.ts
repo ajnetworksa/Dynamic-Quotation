@@ -2143,17 +2143,27 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
   try {
     console.log('🚀 Starting system update...');
     
-    // 1. Pull latest changes
-    const { stdout: pullOutput } = await execAsync('git pull origin main');
-    console.log('Git Pull Output:', pullOutput);
+    // 1. Fetch latest changes from remote
+    console.log('Fetching latest commits from remote origin/main...');
+    await execAsync('git fetch origin main');
 
-    // 2. Run npm install if package.json changed
-    if (pullOutput.includes('package.json')) {
+    // 2. Check if package.json has changes compared to HEAD
+    const { stdout: diffOutput } = await execAsync('git diff --name-only HEAD origin/main');
+    const packageJsonChanged = diffOutput.includes('package.json');
+    console.log(`Package.json changed: ${packageJsonChanged}`);
+
+    // 3. Robust pull by hard resetting to origin/main (discards local modifications on server)
+    console.log('Resetting local branch to match origin/main...');
+    const { stdout: resetOutput } = await execAsync('git reset --hard origin/main');
+    console.log('Git Reset Output:', resetOutput);
+
+    // 4. Run npm install if package.json changed
+    if (packageJsonChanged) {
       console.log('📦 Dependencies changed, running npm install...');
       await execAsync('npm install');
     }
 
-    // 3. Always run build to ensure the UI is updated (since we use Vite)
+    // 5. Always run build to ensure the UI is updated (since we use Vite)
     console.log('🛠 Building frontend...');
     await execAsync('npm run build');
 
@@ -2162,7 +2172,7 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
       message: 'System updated and rebuilt successfully. Restarting now...' 
     });
 
-    // 4. Graceful exit to let PM2/tsx restart the server
+    // 6. Graceful exit to let PM2/tsx restart the server
     setTimeout(() => {
       console.log('👋 Restarting server...');
       process.exit(0);
