@@ -85,6 +85,7 @@ export default function Settings() {
   const [performUpdateStatus, setPerformUpdateStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [remoteUrl, setRemoteUrl] = useState<string>('');
   const [remoteUrlStatus, setRemoteUrlStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
@@ -643,11 +644,13 @@ export default function Settings() {
   const handlePerformUpdate = async () => {
     if (!confirm('Are you sure you want to update the system? The server will restart and you will be logged out.')) return;
     setPerformUpdateStatus('loading');
+    setUpdateError(null);
     try {
       const res = await fetch('/api/system/update', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setPerformUpdateStatus('success');
         alert('Update successful! The system is restarting. Please wait a few seconds and then reload the page.');
@@ -656,9 +659,11 @@ export default function Settings() {
         window.location.reload();
       } else {
         setPerformUpdateStatus('error');
+        setUpdateError(data.error || 'An error occurred during the update process.');
       }
-    } catch {
+    } catch (err: any) {
       setPerformUpdateStatus('error');
+      setUpdateError(err.message || 'Network error: Failed to reach update server.');
     }
   };
 
@@ -1731,6 +1736,16 @@ export default function Settings() {
                     </button>
                   )}
                 </div>
+
+                {updateError && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-2 text-sm font-medium">
+                    <XCircle className="shrink-0 mt-0.5" size={16} />
+                    <div className="flex-1">
+                      <p className="font-bold text-red-800">Update Failed</p>
+                      <p className="text-xs font-mono mt-1 whitespace-pre-wrap text-red-600 leading-relaxed bg-red-100/50 p-2 rounded border border-red-200">{updateError}</p>
+                    </div>
+                  </div>
+                )}
 
                 {updateStatus.hasUpdate && updateStatus.changelog && (
                   <div className="space-y-2">
