@@ -26,4 +26,12 @@ This document outlines the planned UI/UX improvements and feature upgrades inspi
 - [ ] **Client Portal**: Secure, unique URLs for customers to view and approve quotes online.
 
 ---
+
+## 🏆 Completed Upgrades (May 17, 2026)
+- [x] **Kanban Feature Access Control**: Permission toggle integrated into the user/group permission matrix to restrict access to the pipeline.
+- [x] **Interactive Product re-assignment**: Clicking any product inside Supplier DB opens a modern modal to change the supplier and update the item code on the fly.
+- [x] **Supplier Product Copy & Move suite**: Checkbox multi-select matching target modals to clone or migrate products across supplier accounts in bulk.
+- [x] **Products & Customers Multi-Select Bulk Delete**: Clean header Master toggle with a sticky Red action panel to safely delete records.
+
+---
 *Created: May 15, 2026*
