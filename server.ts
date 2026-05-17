@@ -162,6 +162,11 @@ db.exec(`
     email TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+  );
+
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     description TEXT NOT NULL,
@@ -322,6 +327,10 @@ addColumnIfNotExists('users', 'name', 'TEXT');
 addColumnIfNotExists('quotes', 'version', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'draft_data', 'TEXT');
 addColumnIfNotExists('activity_log', 'details', 'TEXT'); // stores JSON array of field changes
+addColumnIfNotExists('products', 'item_code', 'TEXT');
+addColumnIfNotExists('products', 'supplier_name', 'TEXT');
+addColumnIfNotExists('quote_items', 'item_code', 'TEXT');
+addColumnIfNotExists('quote_items', 'supplier_name', 'TEXT');
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -488,11 +497,17 @@ const CustomerSchema = z.object({
   email:   z.string().email().nullable().optional().or(z.literal('')),
 });
 
+const SupplierSchema = z.object({
+  name: z.string().min(1).max(200),
+});
+
 const ProductSchema = z.object({
   description:    z.string().min(1).max(500),
   description_ar: z.string().max(500).optional(),
   unit:           z.string().max(50).optional(),
   unit_price:     z.number().nonnegative(),
+  item_code:      z.string().max(100).nullable().optional(),
+  supplier_name:  z.string().max(200).nullable().optional(),
 });
 
 const UserCreateSchema = z.object({
@@ -529,6 +544,8 @@ const QuoteItemSchema = z.object({
   original_price: z.number().nonnegative().nullable().optional(),
   manual_price:   z.number().nonnegative().nullable().optional(),
   internal_note:  z.string().max(2000).nullable().optional(),
+  item_code:      z.string().max(100).nullable().optional(),
+  supplier_name:  z.string().max(200).nullable().optional(),
 });
 
 const QuoteNoteSchema = z.object({
@@ -835,6 +852,45 @@ app.delete('/api/customers/:id', requireAuth, requirePermission('canDeleteData')
   res.json({ success: true });
 });
 
+// ── Suppliers ─────────────────────────────────────────────────────────────────
+app.get('/api/suppliers', requireAuth, (req, res) => {
+  const suppliers = db.prepare('SELECT * FROM suppliers').all();
+  res.json(suppliers);
+});
+
+app.post('/api/suppliers', requireAuth, validate(SupplierSchema), (req, res) => {
+  try {
+    const { name } = req.body;
+    const stmt = db.prepare('INSERT INTO suppliers (name) VALUES (?)');
+    const info = stmt.run(name.trim());
+    res.json({ id: info.lastInsertRowid });
+  } catch (error: any) {
+    console.error('Add supplier error:', error);
+    if (error.message.includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'Supplier already exists' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/suppliers/:id', requireAuth, validate(SupplierSchema), (req, res) => {
+  try {
+    const { name } = req.body;
+    const stmt = db.prepare('UPDATE suppliers SET name = ? WHERE id = ?');
+    stmt.run(name.trim(), req.params.id);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Update supplier error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/suppliers/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
+  const stmt = db.prepare('DELETE FROM suppliers WHERE id = ?');
+  stmt.run(req.params.id);
+  res.json({ success: true });
+});
+
 // ── Products ──────────────────────────────────────────────────────────────────
 app.get('/api/products', requireAuth, (req, res) => {
   const products = db.prepare('SELECT * FROM products').all();
@@ -842,17 +898,17 @@ app.get('/api/products', requireAuth, (req, res) => {
 });
 
 app.post('/api/products', requireAuth, validate(ProductSchema), (req, res) => {
-  const { description, description_ar, unit, unit_price } = req.body;
-  const stmt = db.prepare('INSERT INTO products (description, description_ar, unit, unit_price) VALUES (?, ?, ?, ?)');
-  const info = stmt.run(description, description_ar ?? null, unit ?? null, unit_price);
+  const { description, description_ar, unit, unit_price, item_code, supplier_name } = req.body;
+  const stmt = db.prepare('INSERT INTO products (description, description_ar, unit, unit_price, item_code, supplier_name) VALUES (?, ?, ?, ?, ?, ?)');
+  const info = stmt.run(description, description_ar ?? null, unit ?? null, unit_price, item_code ?? null, supplier_name ?? null);
   res.json({ id: info.lastInsertRowid });
 });
 
 app.put('/api/products/:id', requireAuth, validate(ProductSchema), (req, res) => {
   try {
-    const { description, description_ar, unit, unit_price } = req.body;
-    const stmt = db.prepare('UPDATE products SET description = ?, description_ar = ?, unit = ?, unit_price = ? WHERE id = ?');
-    stmt.run(description, description_ar ?? null, unit ?? null, unit_price, req.params.id);
+    const { description, description_ar, unit, unit_price, item_code, supplier_name } = req.body;
+    const stmt = db.prepare('UPDATE products SET description = ?, description_ar = ?, unit = ?, unit_price = ?, item_code = ?, supplier_name = ? WHERE id = ?');
+    stmt.run(description, description_ar ?? null, unit ?? null, unit_price, item_code ?? null, supplier_name ?? null, req.params.id);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Update product error:', error);
@@ -1350,9 +1406,9 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
 
-      const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price, internal_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price, internal_note, item_code, supplier_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       for (const item of items) {
-        insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price, item.original_price ?? null, item.manual_price ?? null, item.internal_note ?? null);
+        insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price, item.original_price ?? null, item.manual_price ?? null, item.internal_note ?? null, item.item_code ?? null, item.supplier_name ?? null);
       }
     })();
     res.json({ success: true, version: finalVersion });

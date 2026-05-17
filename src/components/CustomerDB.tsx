@@ -214,7 +214,11 @@ export default function CustomerDB() {
             )}
 
             {currentItems.map((customer) => (
-              <tr key={customer.id} className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors">
+              <tr 
+                key={customer.id} 
+                className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer"
+                onDoubleClick={() => startEdit(customer)}
+              >
                 <td className="p-4 text-gray-500">{customer.id}</td>
                 {(['name', 'address', 'contact', 'mobile', 'email'] as const).map(field => (
                   <td key={field} className="p-4">

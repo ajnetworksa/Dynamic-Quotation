@@ -24,6 +24,7 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Safe UUID/ID generator for non-HTTPS or older environments
 const generateId = () => {
@@ -50,6 +51,8 @@ interface Product {
   description_ar?: string;
   unit: string;
   unit_price: number;
+  item_code?: string;
+  supplier_name?: string;
 }
 
 interface QuoteItem {
@@ -65,6 +68,8 @@ interface QuoteItem {
   manual_price?: number;
   costShift?: 'up' | 'down';
   internal_note?: string;
+  item_code?: string;
+  supplier_name?: string;
 }
 
 interface CustomField {
@@ -137,6 +142,7 @@ export default function QuoteForm() {
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
 
   const [quoteId, setQuoteId] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -159,7 +165,7 @@ export default function QuoteForm() {
   // Measured position of the active description textarea — updated by useEffect so it's always fresh
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   // Standalone modal for adding a new product (outside textarea focus chain)
-  const [addProductModal, setAddProductModal] = useState<{ rowIndex: number; description: string; unit: string; price: string; isSaving?: boolean } | null>(null);
+  const [addProductModal, setAddProductModal] = useState<{ rowIndex: number; description: string; unit: string; price: string; item_code: string; supplier_name: string; isSaving?: boolean } | null>(null);
   const [addCustomerModal, setAddCustomerModal] = useState<{ name: string; mobile: string; address: string; contact: string; email: string; isSaving?: boolean } | null>(null);
   // Rows currently being translated (shows inline indicator)
   const [translatingRows, setTranslatingRows] = useState<Set<number>>(new Set());
@@ -177,9 +183,9 @@ export default function QuoteForm() {
   const [showConflictModal, setShowConflictModal] = useState(false);
   const [authorName, setAuthorName] = useState('');
   const [authorId, setAuthorId] = useState<number | null>(null);
-  const [usersList, setUsersList] = useState<{id: number, username: string, name: string}[]>([]);
-  const [groupsList, setGroupsList] = useState<{id: number, name: string, members: number[]}[]>([]);
-  const [sharedWith, setSharedWith] = useState<{users: number[], groups: number[], canEditUsers: number[], canEditGroups: number[]}>({users: [], groups: [], canEditUsers: [], canEditGroups: []});
+  const [usersList, setUsersList] = useState<{ id: number, username: string, name: string }[]>([]);
+  const [groupsList, setGroupsList] = useState<{ id: number, name: string, members: number[] }[]>([]);
+  const [sharedWith, setSharedWith] = useState<{ users: number[], groups: number[], canEditUsers: number[], canEditGroups: number[] }>({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
   const [showSharePanel, setShowSharePanel] = useState(false);
   const [workflowVisibility, setWorkflowVisibility] = useState({
     invoice: true,
@@ -360,16 +366,17 @@ export default function QuoteForm() {
 
       const dbCustomers = await fetchCustomers();
       const dbProducts = await fetchProducts();
+      await fetchSuppliers();
       fetchLogo();
       if (user.role === 'admin' || user.permissions?.canChangeAuthor || user.permissions?.canShareQuote) {
         fetch('/api/users')
           .then(res => res.json())
           .then(data => { if (Array.isArray(data)) setUsersList(data); })
-          .catch(() => {});
+          .catch(() => { });
         fetch('/api/permission-groups')
           .then(res => res.json())
           .then(data => { if (Array.isArray(data)) setGroupsList(data.map((g: any) => ({ id: g.id, name: g.name, members: Array.isArray(g.members) ? g.members : [] }))); })
-          .catch(() => {});
+          .catch(() => { });
       }
       loadTemplates();
       if (recallQuoteId) {
@@ -390,6 +397,7 @@ export default function QuoteForm() {
     if (location.pathname === '/quote' && document.visibilityState === 'visible') {
       fetchCustomers();
       fetchProducts();
+      fetchSuppliers();
     }
   }, [location.pathname]);
 
@@ -400,6 +408,7 @@ export default function QuoteForm() {
       if (document.visibilityState === 'visible') {
         fetchCustomersRef.current();
         fetchProductsRef.current();
+        fetchSuppliersRef.current();
       }
     };
 
@@ -454,11 +463,24 @@ export default function QuoteForm() {
     } catch { return []; }
   };
 
+  const fetchSuppliers = async () => {
+    if (document.visibilityState !== 'visible' && Date.now() - lastFetchRef.current < FETCH_THROTTLE) return suppliers;
+    try {
+      const res = await fetch(`/api/suppliers?_t=${Date.now()}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (Array.isArray(data)) setSuppliers(data);
+      return Array.isArray(data) ? data : [];
+    } catch { return []; }
+  };
+
   // Keep a ref to always-latest fetch functions so focus/interval never get stale closures
   const fetchCustomersRef = useRef(fetchCustomers);
   const fetchProductsRef = useRef(fetchProducts);
+  const fetchSuppliersRef = useRef(fetchSuppliers);
   useEffect(() => { fetchCustomersRef.current = fetchCustomers; });
   useEffect(() => { fetchProductsRef.current = fetchProducts; });
+  useEffect(() => { fetchSuppliersRef.current = fetchSuppliers; });
 
   // Track textarea position for the fixed-position product dropdown
   useEffect(() => {
@@ -1118,7 +1140,9 @@ export default function QuoteForm() {
           unit: product.unit,
           unit_price: newUnitPrice,
           manual_price: undefined,
-          net_price: newItems[index].qty * newUnitPrice
+          net_price: newItems[index].qty * newUnitPrice,
+          item_code: product.item_code,
+          supplier_name: product.supplier_name
         };
         return newItems;
       });
@@ -1332,7 +1356,9 @@ export default function QuoteForm() {
         unit_price: item.unit_price,
         net_price: item.net_price,
         original_price: item.original_price, // Added base price tracking
-        manual_price: item.manual_price      // Added manual price tracking
+        manual_price: item.manual_price,      // Added manual price tracking
+        item_code: item.item_code,
+        supplier_name: item.supplier_name
       })),
       version,
       force
@@ -1987,24 +2013,23 @@ export default function QuoteForm() {
   const handleExportExcel = async () => {
     // Create quote info sheet
     const quoteInfo = [
-      [type.toUpperCase()],
-      ['Quote ID', quoteId],
-      ['Date', date],
-      ['Valid For', '30 Days'],
-      // [''],
-      ['CUSTOMER INFO'],
-      ['Customer', selectedCustomer?.name || ''],
-      ['Mobile', selectedCustomer?.mobile || ''],
-      ['Address', selectedCustomer?.address || ''],
-      ['Contact', selectedCustomer?.contact || ''],
-      ['E-mail', selectedCustomer?.email || ''],
-      ['Subject', subject, subjectAr],
-      ['']
+      [], // 1
+      [type.toUpperCase()], // 2
+      ['Quote ID:', quoteId], // 3
+      ['Date:', date], // 4
+      ['Valid For:', '', 'صالحة لـ'], // 5
+      [], // 6
+      ['CUSTOMER INFO'], // 7
+      ['Customer Name:', selectedCustomer?.name || '', '', '', '', 'Mobile:', selectedCustomer?.mobile || ''], // 8
+      ['Address:', selectedCustomer?.address || ''], // 9
+      ['Contact:', selectedCustomer?.contact || '', '', '', '', 'E-mail:', selectedCustomer?.email || ''], // 10
+      ['Subject:', subject], // 11
+      ['', subjectAr], // 12
+      [] // 13
     ];
 
-    // Create items sheet data
     const itemsData = [
-      ['ITEM', 'DESCRIPTION', 'DESCRIPTION (ARABIC)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'MANUAL', 'BASE PRICE', 'BASE TOTAL', 'M.U. %'],
+      ['ITEM', 'DESCRIPTION (EN)', 'DESCRIPTION (AR)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'ITEM CODE', 'SUPPLIER NAME', '', markup.toString(), 'Manual', 'BASE', 'TOTAL'], // 14
       ...items.map((item, index) => {
         const rule = getItemRule(item);
         let displayBase = 0;
@@ -2023,24 +2048,29 @@ export default function QuoteForm() {
           displayTotal = displayBase * item.qty;
         }
 
+        const manualVal = item.manual_price !== undefined ? item.manual_price : item.unit_price;
+
         return [
           index + 1,
           item.description,
           item.description_ar || '',
           item.qty,
           item.unit,
-          `SAR ${item.unit_price.toFixed(2)}`,
-          `SAR ${item.net_price.toFixed(2)}`,
-          item.manual_price !== undefined ? `SAR ${item.manual_price.toFixed(2)}` : '-',
-          rule === 'EXCL' ? '-' : `SAR ${displayBase.toFixed(2)}`,
-          rule === 'EXCL' ? '-' : `SAR ${displayTotal.toFixed(2)}`,
-          index === 0 ? `${markup}%` : ''
+          item.unit_price,
+          item.net_price,
+          item.item_code || '',
+          item.supplier_name || '',
+          '',
+          '', // column K is empty for rows
+          manualVal,
+          displayBase,
+          displayTotal
         ];
       }),
-      ['', '', '', '', '', 'SUBTOTAL', `SAR ${subtotal.toFixed(2)}`, '', 'B.TOTAL', `SAR ${baseTotal.toFixed(2)}`],
-      ['', '', '', '', '', 'DISCOUNT', `SAR ${discount.toFixed(2)}`],
-      ['', '', '', '', '', 'VAT (15%)', `SAR ${tax.toFixed(2)}`],
-      ['', '', '', '', '', 'TOTAL PACKAGE', `SAR ${grandTotal.toFixed(2)}`, '', 'TTL PROFIT', `SAR ${markupProfit.toFixed(2)}`],
+      ['', '', '', '', '', 'SUBTOTAL', subtotal, '', '', '', '', '', 'B.TOTAL', baseTotal],
+      ['', '', '', '', '', 'DISCOUNT', discount],
+      ['', '', '', '', '', 'VAT (15%)', tax],
+      ['', '', '', '', '', 'TOTAL PACKAGE', grandTotal, '', '', '', '', '', 'TTL PROFIT', markupProfit],
       [''],
       ['TERMS & CONDITIONS'],
       ...(showNote ? [[noteHeader, note, noteAr]] : []),
@@ -2063,77 +2093,131 @@ export default function QuoteForm() {
       { key: 'C', width: 45 },
       { key: 'D', width: 6 },
       { key: 'E', width: 8 },
-      { key: 'F', width: 15 },
+      { key: 'F', width: 12 },
       { key: 'G', width: 15 },
-      { key: 'H', width: 12 },
-      { key: 'I', width: 15 },
-      { key: 'J', width: 15 },
-      { key: 'K', width: 10 },
+      { key: 'H', width: 20 },
+      { key: 'I', width: 25 },
+      { key: 'J', width: 4 }, // Gap
+      { key: 'K', width: 8 },
+      { key: 'L', width: 12 },
+      { key: 'M', width: 12 },
+      { key: 'N', width: 15 },
     ];
 
     const allData = [...quoteInfo, ...itemsData];
     allData.forEach(rowData => {
-      const row = ws.addRow(rowData);
-      row.eachCell(cell => {
+      ws.addRow(rowData);
+    });
+
+    // Formatting based on the image
+    ws.mergeCells('A2:D2');
+    ws.getCell('A2').font = { size: 16, bold: true, color: { argb: 'FF1E3A8A' } };
+
+    ws.mergeCells('A7:I7'); // CUSTOMER INFO
+    ws.mergeCells('B8:E8'); // Customer Name
+    ws.mergeCells('G8:I8'); // Mobile
+    ws.mergeCells('B9:I9'); // Address
+    ws.mergeCells('B10:E10'); // Contact
+    ws.mergeCells('G10:I10'); // E-mail
+    ws.mergeCells('B11:I11'); // Subject
+    ws.mergeCells('B12:I12'); // Subject Arabic
+
+    // Apply borders and fonts for CUSTOMER INFO block
+    ws.getCell('A7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }; // gray-100
+    for (let r = 7; r <= 12; r++) {
+      for (let c = 1; c <= 9; c++) {
+        const cell = ws.getCell(r, c);
+        cell.font = { name: 'Arial', size: 10, bold: c === 1 || c === 6 || r === 7 };
         cell.border = {
-          top: { style: 'thin' },
-          left: { style: 'thin' },
-          bottom: { style: 'thin' },
-          right: { style: 'thin' }
+          top: { style: r === 7 ? 'medium' : 'thin' },
+          left: { style: c === 1 ? 'medium' : 'thin' },
+          bottom: { style: r === 12 ? 'medium' : 'thin' },
+          right: { style: c === 9 ? 'medium' : 'thin' }
         };
-        cell.alignment = { vertical: 'middle', wrapText: true };
-        cell.font = { name: 'Arial', size: 10 };
-      });
-    });
+        cell.alignment = { vertical: 'middle', wrapText: true, horizontal: (r === 12 && c === 2) ? 'right' : 'left' };
+      }
+    }
 
-    // Apply bold to headers and specific cells
-    ws.eachRow((row, rowNumber) => {
-      const firstCellVal = row.getCell(1).value?.toString();
-      if (rowNumber === 1 || firstCellVal === 'CUSTOMER INFO' || firstCellVal === 'TERMS & CONDITIONS' || firstCellVal === 'ITEM' || firstCellVal === 'DESCRIPTION') {
-        row.eachCell(cell => {
-          if (cell.value) {
-            cell.font = { name: 'Arial', size: 10, bold: true };
+    const startRow = 14;
+    const headerRow = ws.getRow(startRow);
+    // Green background for A-I
+    for (let c = 1; c <= 9; c++) {
+      headerRow.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF166534' } }; // dark green
+      headerRow.getCell(c).font = { name: 'Arial', size: 10, color: { argb: 'FFFFFFFF' }, bold: true };
+      headerRow.getCell(c).border = { top: { style: 'medium' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      headerRow.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+    // Yellow for K (markup %)
+    headerRow.getCell(11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
+    headerRow.getCell(11).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF000000' } };
+    headerRow.getCell(11).alignment = { horizontal: 'center', vertical: 'middle' };
+
+    // White bold for L, M, N
+    for (let c = 12; c <= 14; c++) {
+      headerRow.getCell(c).font = { name: 'Arial', size: 10, bold: true };
+      headerRow.getCell(c).border = { top: { style: 'medium' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      headerRow.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+
+    // Items and Totals styling
+    for (let i = 0; i < items.length + 4; i++) {
+      const r = startRow + 1 + i;
+      const row = ws.getRow(r);
+      const isItem = i < items.length;
+
+      if (isItem) {
+        // Items alternate color
+        const bgColor = i % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF'; // slate-50 / white
+        for (let c = 1; c <= 9; c++) {
+          row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
+          row.getCell(c).border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' }, top: { style: 'thin' } };
+          row.getCell(c).font = { name: 'Arial', size: 10 };
+          if (c === 2 || c === 3 || c === 8 || c === 9) {
+            row.getCell(c).alignment = { wrapText: true, vertical: 'middle' };
+            if (c === 3) row.getCell(c).alignment.horizontal = 'right'; // RTL for Arabic description
+          } else {
+            row.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
+            if (c === 6 || c === 7) {
+              row.getCell(c).numFmt = '#,##0.00';
+            }
           }
-        });
-      }
-
-      // STYLIZE ROW: headers
-      if (firstCellVal === 'ITEM') {
-        row.eachCell(cell => {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
-          cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF1E293B' } };
-          cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-        });
-      }
-
-      // STYLIZE SUBTOTAL, DISCOUNT, VAT, TOTAL PACKAGE
-      const col6Val = row.getCell(6).value?.toString();
-      const col9Val = row.getCell(9).value?.toString();
-      
-      if (col6Val === 'SUBTOTAL' || col6Val === 'DISCOUNT' || col6Val === 'VAT (15%)' || col6Val === 'TOTAL PACKAGE') {
-        row.getCell(6).font = { name: 'Arial', size: 10, bold: true };
-        row.getCell(7).font = { name: 'Arial', size: 10, bold: true };
-        row.getCell(9).font = { name: 'Arial', size: 10, bold: true };
-        row.getCell(10).font = { name: 'Arial', size: 10, bold: true };
-        
-        if (col6Val === 'TOTAL PACKAGE') {
-           row.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } }; // green
-           row.getCell(7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } }; 
         }
-        if (col9Val === 'TTL PROFIT') {
-           row.getCell(9).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } }; // yellow
-           row.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } }; 
+
+        for (let c = 12; c <= 14; c++) {
+          row.getCell(c).border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' }, top: { style: 'thin' } };
+          row.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
+          row.getCell(c).font = { name: 'Arial', size: 10 };
+          row.getCell(c).numFmt = '#,##0.00';
+        }
+      } else {
+        // Totals rows
+        for (let c = 6; c <= 7; c++) {
+          row.getCell(c).font = { name: 'Arial', size: 10, bold: true };
+          if (c === 7) row.getCell(c).numFmt = '#,##0.00';
+        }
+        if (i === items.length) { // SUBTOTAL & B.TOTAL
+          row.getCell(13).font = { name: 'Arial', size: 10, bold: true };
+          row.getCell(14).font = { name: 'Arial', size: 10, bold: true };
+          row.getCell(14).numFmt = '#,##0.00';
+        }
+        if (i === items.length + 3) { // TOTAL PACKAGE & TTL PROFIT
+          row.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } };
+          row.getCell(7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } };
+          row.getCell(13).font = { name: 'Arial', size: 10, bold: true };
+          row.getCell(14).font = { name: 'Arial', size: 10, bold: true };
+          row.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } };
+          row.getCell(14).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } };
+          row.getCell(14).numFmt = '#,##0.00';
         }
       }
-    });
+    }
 
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
     // ── EXCEL FILENAME ──────────────────────────────────────────────────────────
-    // Same naming convention as the PDF export above.
     const excelCustomerName = (selectedCustomer?.name || 'Unknown')
-      .replace(/[^a-zA-Z0-9_\-.\s]/g, '') // strip filename-unsafe characters
+      .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
       .trim();
     saveAs(blob, `${excelCustomerName}-${quoteId}.xlsx`);
   };
@@ -2148,11 +2232,10 @@ export default function QuoteForm() {
           <div>
             <h2 className="text-xl font-bold text-gray-800 dark:text-white">Document Editor</h2>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                status === 'Draft' ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400' :
-                status === 'Invoiced' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' :
-                'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
-              }`}>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${status === 'Draft' ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400' :
+                  status === 'Invoiced' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' :
+                    'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
+                }`}>
                 {status}
               </span>
               <span className="text-xs text-gray-400 font-mono">v{version}</span>
@@ -2162,9 +2245,6 @@ export default function QuoteForm() {
         <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
           <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors">
             <RefreshCw size={18} /> Clear
-          </button>
-          <button onClick={recordQuote} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">
-            <Save size={18} /> Record
           </button>
           <button onClick={handleTranslateAll} className="flex items-center gap-2 px-4 py-2 text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 border border-indigo-200 dark:border-indigo-800 rounded-lg transition-colors" title="Translate all empty Arabic fields">
             <Languages size={18} /> Translate
@@ -2213,17 +2293,19 @@ export default function QuoteForm() {
               </div>
             </div>
           )}
-          {(user.role === 'admin' || user.permissions?.canEmailQuote) && workflowVisibility.email && (
-            <button onClick={handleSendEmail} disabled={isSending} className="flex items-center gap-2 px-4 py-2 text-white bg-sky-500 hover:bg-sky-600 rounded-lg transition-colors disabled:opacity-50">
-              {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />} Email
-            </button>
-          )}
+          <button onClick={recordQuote} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">
+            <Save size={18} /> Record
+          </button>
           {(user.role === 'admin' || user.permissions?.canPrintQuote) && workflowVisibility.print && (
-            <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors">
+            <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors">
               <Printer size={18} /> Print
             </button>
           )}
-
+          {(user.role === 'admin' || user.permissions?.canEmailQuote) && workflowVisibility.email && (
+            <button onClick={handleSendEmail} disabled={isSending} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors disabled:opacity-50">
+              {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />} Email
+            </button>
+          )}
           <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
             <FileSpreadsheet size={18} /> Export Excel
           </button>
@@ -2473,225 +2555,232 @@ export default function QuoteForm() {
                     <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">NET PRICE</div>
                     <div className="print:hidden h-full" />
                   </div>
-                  {items.map((item, index) => (
-                    <div
-                      key={item.id}
-                      data-row-index={index}
-                      className="flex items-stretch print:block"
-                      onPointerDown={rowReorderMode === 'drag' ? (e) => onRowBodyPointerDown(e, index) : undefined}
-                      onPointerMove={rowReorderMode === 'drag' ? onRowBodyPointerMove : undefined}
-                      onPointerUp={rowReorderMode === 'drag' ? onRowBodyPointerUp : undefined}
-                      onPointerCancel={rowReorderMode === 'drag' ? pointerCancelDrag : undefined}
-                    >
-                      <div
-                        ref={el => rowRefs.current[index] = el}
-                        className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
+                  <AnimatePresence>
+                    {items.map((item, index) => (
+                      <motion.div
+                        key={item.id}
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.2 }}
+                        data-row-index={index}
+                        className="flex items-stretch print:block"
+                        onPointerDown={rowReorderMode === 'drag' ? (e) => onRowBodyPointerDown(e, index) : undefined}
+                        onPointerMove={rowReorderMode === 'drag' ? onRowBodyPointerMove : undefined}
+                        onPointerUp={rowReorderMode === 'drag' ? onRowBodyPointerUp : undefined}
+                        onPointerCancel={rowReorderMode === 'drag' ? pointerCancelDrag : undefined}
+                      >
+                        <div
+                          ref={el => rowRefs.current[index] = el}
+                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
                           ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
                           ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
                         `}
-                        style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
-                        <div
-                          className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1 group/grip cursor-grab active:cursor-grabbing touch-none select-none print:cursor-auto"
-                          onPointerDown={(e) => onGripPointerDown(e, index)}
-                          onPointerMove={onGripPointerMove}
-                          onPointerUp={onGripPointerUp}
-                          onPointerCancel={pointerCancelDrag}
-                        >
-                          <span className="group-hover/grip:hidden font-medium text-gray-500 print:block">{index + 1}</span>
-                          <div className="hidden group-hover/grip:flex print:hidden items-center justify-center text-gray-400 h-[24px]">
-                            <GripVertical size={16} />
+                          style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
+                          <div
+                            className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1 group/grip cursor-grab active:cursor-grabbing touch-none select-none print:cursor-auto"
+                            onPointerDown={(e) => onGripPointerDown(e, index)}
+                            onPointerMove={onGripPointerMove}
+                            onPointerUp={onGripPointerUp}
+                            onPointerCancel={pointerCancelDrag}
+                          >
+                            <span className="group-hover/grip:hidden font-medium text-gray-500 print:block">{index + 1}</span>
+                            <div className="hidden group-hover/grip:flex print:hidden items-center justify-center text-gray-400 h-[24px]">
+                              <GripVertical size={16} />
+                            </div>
+                            {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
+                              <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
+                            )}
                           </div>
-                          {(item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price)) && (
-                            <span className="print:hidden mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold" title={item.unit_price === 0 ? 'Price is 0!' : `Below DB price (${item.original_price})`}>!</span>
-                          )}
-                        </div>
-                        <div className="p-0 border-r border-gray-300 h-full flex relative group">
-                          <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
-                            <textarea
-                              ref={el => { descriptionRefs.current[index] = el; }}
-                              className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
-                              value={item.description}
-                              placeholder="Type to search product..."
-                              onChange={e => updateItem(index, 'description', e.target.value)}
-                              onFocus={() => {
-                                if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-                                setFocusedDescriptionIndex(index);
-                              }}
-                              onBlur={() => {
-                                blurTimeoutRef.current = setTimeout(() => setFocusedDescriptionIndex(null), 200);
-                                handleProductAutoTranslate(index, item.description, item.description_ar || '');
-                              }}
-                              rows={item.description.split('\n').length || 1}
-                            />
+                          <div className="p-0 border-r border-gray-300 h-full flex relative group">
+                            <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                              <textarea
+                                ref={el => { descriptionRefs.current[index] = el; }}
+                                className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
+                                value={item.description}
+                                placeholder="Type to search product..."
+                                onChange={e => updateItem(index, 'description', e.target.value)}
+                                onFocus={() => {
+                                  if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+                                  setFocusedDescriptionIndex(index);
+                                }}
+                                onBlur={() => {
+                                  blurTimeoutRef.current = setTimeout(() => setFocusedDescriptionIndex(null), 200);
+                                  handleProductAutoTranslate(index, item.description, item.description_ar || '');
+                                }}
+                                rows={item.description.split('\n').length || 1}
+                              />
 
-                            {/* ── Product search dropdown — fixed-position via useEffect ── */}
-                            {focusedDescriptionIndex === index && item.description.length > 1 && dropdownPos && (() => {
-                              const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-                              const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-                              const exactMatch = products.some(p => p.description.toLowerCase() === item.description.trim().toLowerCase());
-                              const matched = searchTerms.length === 0 ? [] : products.filter(p => {
-                                const desc = p.description.toLowerCase();
-                                const normDesc = normalize(desc);
-                                return searchTerms.every(term => {
-                                  const nTerm = normalize(term);
-                                  return desc.includes(term) || (nTerm && normDesc.includes(nTerm));
+                              {/* ── Product search dropdown — fixed-position via useEffect ── */}
+                              {focusedDescriptionIndex === index && item.description.length > 1 && dropdownPos && (() => {
+                                const searchTerms = item.description.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+                                const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+                                const exactMatch = products.some(p => p.description.toLowerCase() === item.description.trim().toLowerCase());
+                                const matched = searchTerms.length === 0 ? [] : products.filter(p => {
+                                  const desc = p.description.toLowerCase();
+                                  const normDesc = normalize(desc);
+                                  return searchTerms.every(term => {
+                                    const nTerm = normalize(term);
+                                    return desc.includes(term) || (nTerm && normDesc.includes(nTerm));
+                                  });
                                 });
-                              });
-                              return (
-                                <div
-                                  className="product-dropdown print:hidden"
-                                  style={{ position: 'fixed', top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }}
-                                >
-                                  <div className="bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden">
-                                    <div className="max-h-52 overflow-y-auto">
-                                      {matched.length === 0 && !exactMatch && (
-                                        <div className="px-3 py-2.5 text-xs text-gray-400 italic">No matching products found</div>
-                                      )}
-                                      {matched.map(p => (
+                                return (
+                                  <div
+                                    className="product-dropdown print:hidden"
+                                    style={{ position: 'fixed', top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }}
+                                  >
+                                    <div className="bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden">
+                                      <div className="max-h-52 overflow-y-auto">
+                                        {matched.length === 0 && !exactMatch && (
+                                          <div className="px-3 py-2.5 text-xs text-gray-400 italic">No matching products found</div>
+                                        )}
+                                        {matched.map(p => (
+                                          <div
+                                            key={p.id}
+                                            className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                            onMouseDown={e => e.preventDefault()}
+                                            onClick={() => {
+                                              handleProductSelect(index, p.id.toString());
+                                              if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+                                              setFocusedDescriptionIndex(null);
+                                              handleProductAutoTranslate(index, p.description, '');
+                                            }}
+                                          >
+                                            <div className="font-medium text-gray-800">{p.description}</div>
+                                            {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
+                                            <div className="text-xs text-gray-400 mt-0.5">
+                                              {[p.item_code, p.supplier_name, p.unit, `${p.unit_price.toFixed(2)}`].filter(Boolean).join(' · ')}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                      {/* Add to Product DB — opens a proper modal, no focus issues */}
+                                      {!exactMatch && (
                                         <div
-                                          key={p.id}
-                                          className="px-3 py-2 text-sm hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                          className="px-3 py-2.5 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer border-t border-indigo-100 bg-white"
                                           onMouseDown={e => e.preventDefault()}
                                           onClick={() => {
-                                            handleProductSelect(index, p.id.toString());
+                                            setAddProductModal({ rowIndex: index, description: item.description.trim(), unit: 'Pc', price: '0', item_code: '', supplier_name: '' });
                                             if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
                                             setFocusedDescriptionIndex(null);
-                                            handleProductAutoTranslate(index, p.description, '');
                                           }}
                                         >
-                                          <div className="font-medium text-gray-800">{p.description}</div>
-                                          {p.description_ar && <div className="text-xs text-gray-500 text-right" dir="rtl">{p.description_ar}</div>}
-                                          <div className="text-xs text-gray-400 mt-0.5">{p.unit} · {p.unit_price.toFixed(2)}</div>
+                                          <Plus size={14} />
+                                          Add "{item.description.trim()}" to Product DB
                                         </div>
-                                      ))}
+                                      )}
                                     </div>
-                                    {/* Add to Product DB — opens a proper modal, no focus issues */}
-                                    {!exactMatch && (
-                                      <div
-                                        className="px-3 py-2.5 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer border-t border-indigo-100 bg-white"
-                                        onMouseDown={e => e.preventDefault()}
-                                        onClick={() => {
-                                          setAddProductModal({ rowIndex: index, description: item.description.trim(), unit: 'Pc', price: '0' });
-                                          if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-                                          setFocusedDescriptionIndex(null);
-                                        }}
-                                      >
-                                        <Plus size={14} />
-                                        Add "{item.description.trim()}" to Product DB
-                                      </div>
-                                    )}
                                   </div>
+                                );
+                              })()}
+                              <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
+                                <div className="relative flex items-center">
+                                  <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
+                                  <select
+                                    className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                                    onChange={(e) => handleProductSelect(index, e.target.value)}
+                                    value=""
+                                    title="Select from Product DB"
+                                  >
+                                    <option value="">+</option>
+                                    {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
+                                  </select>
                                 </div>
-                              );
-                            })()}
-                            <div className="absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 print:hidden">
-                              <div className="relative flex items-center">
-                                <ChevronDown size={14} className="text-gray-400 pointer-events-none" />
-                                <select
-                                  className="absolute inset-0 w-full opacity-0 cursor-pointer"
-                                  onChange={(e) => handleProductSelect(index, e.target.value)}
-                                  value=""
-                                  title="Select from Product DB"
-                                >
-                                  <option value="">+</option>
-                                  {products.map(p => <option key={p.id} value={p.id}>{p.description}</option>)}
-                                </select>
                               </div>
+                              {/* Private note — screen only, hidden from print */}
+                              {expandedNoteIndex === index && (
+                                <div className="print:hidden mt-1 pt-1 border-t border-dashed border-amber-300">
+                                  <textarea
+                                    autoFocus
+                                    className="w-full text-xs bg-amber-50 outline-none resize-none text-amber-900 placeholder:text-amber-400 rounded px-1.5 py-1"
+                                    placeholder="Private note (not printed)…"
+                                    value={item.internal_note || ''}
+                                    onChange={e => updateItem(index, 'internal_note', e.target.value)}
+                                    rows={Math.max(1, (item.internal_note || '').split('\n').length)}
+                                  />
+                                </div>
+                              )}
                             </div>
-                            {/* Private note — screen only, hidden from print */}
-                            {expandedNoteIndex === index && (
-                              <div className="print:hidden mt-1 pt-1 border-t border-dashed border-amber-300">
-                                <textarea
-                                  autoFocus
-                                  className="w-full text-xs bg-amber-50 outline-none resize-none text-amber-900 placeholder:text-amber-400 rounded px-1.5 py-1"
-                                  placeholder="Private note (not printed)…"
-                                  value={item.internal_note || ''}
-                                  onChange={e => updateItem(index, 'internal_note', e.target.value)}
-                                  rows={Math.max(1, (item.internal_note || '').split('\n').length)}
-                                />
-                              </div>
-                            )}
+                            <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
+                            <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                              {translatingRows.has(index) && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-white/70 rounded z-10 print:hidden pointer-events-none">
+                                  <span className="text-[10px] text-indigo-500 font-semibold animate-pulse">Translating…</span>
+                                </div>
+                              )}
+                              <textarea
+                                dir="rtl"
+                                className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[40px]"
+                                value={item.description_ar || ''}
+                                onChange={e => updateItem(index, 'description_ar', e.target.value)}
+                                placeholder="الوصف بالعربية..."
+                                rows={(item.description_ar || '').split('\n').length || 1}
+                              />
+                            </div>
                           </div>
-                          <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
-                          <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
-                            {translatingRows.has(index) && (
-                              <div className="absolute inset-0 flex items-center justify-center bg-white/70 rounded z-10 print:hidden pointer-events-none">
-                                <span className="text-[10px] text-indigo-500 font-semibold animate-pulse">Translating…</span>
-                              </div>
-                            )}
-                            <textarea
-                              dir="rtl"
-                              className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[40px]"
-                              value={item.description_ar || ''}
-                              onChange={e => updateItem(index, 'description_ar', e.target.value)}
-                              placeholder="الوصف بالعربية..."
-                              rows={(item.description_ar || '').split('\n').length || 1}
+                          <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
+                            <input
+                              type="number"
+                              className="w-full text-center text-base outline-none bg-transparent"
+                              value={item.qty || ''}
+                              onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
+                              min="1"
                             />
                           </div>
+                          <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
+                            <input
+                              type="text"
+                              list="unit-suggestions"
+                              className="w-full text-center text-base outline-none bg-transparent"
+                              value={item.unit}
+                              onChange={e => updateItem(index, 'unit', e.target.value)}
+                            />
+                          </div>
+                          <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5 font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                            <input
+                              type="text"
+                              className="w-full text-center text-base font-mono outline-none bg-transparent"
+                              value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
+                              onFocus={(e) => {
+                                e.target.type = 'number';
+                                e.target.value = item.unit_price ? item.unit_price.toString() : '';
+                              }}
+                              onBlur={(e) => {
+                                e.target.type = 'text';
+                                e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+                              }}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
+                              }}
+                              min="0"
+                              step="0.01"
+                            />
+                          </div>
+                          <div className={`px-2 py-0.5 border-r border-gray-300 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                            <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </div>
+                          {/* Controls — always visible, note + trash, inside grid */}
+                          <div className="print:hidden flex flex-col items-center justify-start pt-1 gap-1">
+                            <button
+                              onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
+                              className={`p-0.5 rounded transition-colors ${expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
+                                  : item.internal_note ? 'text-amber-500 hover:text-amber-700'
+                                    : 'text-gray-400 hover:text-amber-500'
+                                }`}
+                              title={item.internal_note ? 'Edit private note' : 'Add private note'}
+                            >
+                              <StickyNote size={14} />
+                            </button>
+                            <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
-                          <input
-                            type="number"
-                            className="w-full text-center text-base outline-none bg-transparent"
-                            value={item.qty || ''}
-                            onChange={e => updateItem(index, 'qty', parseFloat(e.target.value) || 0)}
-                            min="1"
-                          />
-                        </div>
-                        <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
-                          <input
-                            type="text"
-                            list="unit-suggestions"
-                            className="w-full text-center text-base outline-none bg-transparent"
-                            value={item.unit}
-                            onChange={e => updateItem(index, 'unit', e.target.value)}
-                          />
-                        </div>
-                        <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5 font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
-                          <input
-                            type="text"
-                            className="w-full text-center text-base font-mono outline-none bg-transparent"
-                            value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
-                            onFocus={(e) => {
-                              e.target.type = 'number';
-                              e.target.value = item.unit_price ? item.unit_price.toString() : '';
-                            }}
-                            onBlur={(e) => {
-                              e.target.type = 'text';
-                              e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
-                            }}
-                            onChange={e => {
-                              const val = parseFloat(e.target.value);
-                              updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
-                            }}
-                            min="0"
-                            step="0.01"
-                          />
-                        </div>
-                        <div className={`px-2 py-0.5 border-r border-gray-300 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
-                          <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                        </div>
-                        {/* Controls — always visible, note + trash, inside grid */}
-                        <div className="print:hidden flex flex-col items-center justify-start pt-1 gap-1">
-                          <button
-                            onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
-                            className={`p-0.5 rounded transition-colors ${
-                              expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
-                              : item.internal_note ? 'text-amber-500 hover:text-amber-700'
-                              : 'text-gray-400 hover:text-amber-500'
-                            }`}
-                            title={item.internal_note ? 'Edit private note' : 'Add private note'}
-                          >
-                            <StickyNote size={14} />
-                          </button>
-                          <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
                 </div>{/* /border box */}
                 <div className="p-2 print:hidden flex items-center gap-4">
                   <button onClick={addItem} className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
@@ -3060,11 +3149,10 @@ export default function QuoteForm() {
             <div className="mt-4 print:hidden border-t border-gray-100 pt-4">
               <button
                 onClick={() => setShowSharePanel(p => !p)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
-                  (sharedWith.users.length + sharedWith.groups.length) > 0
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${(sharedWith.users.length + sharedWith.groups.length) > 0
                     ? 'bg-indigo-600 text-white border-indigo-600'
                     : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50'
-                }`}
+                  }`}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8z" /></svg>
                 Share With{(sharedWith.users.length + sharedWith.groups.length) > 0 ? ` (${sharedWith.users.length + sharedWith.groups.length})` : ''}
@@ -3083,22 +3171,19 @@ export default function QuoteForm() {
                           const checked = sharedWith.groups.includes(g.id);
                           const canEdit = sharedWith.canEditGroups.includes(g.id);
                           return (
-                            <div key={g.id} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all ${
-                              checked ? 'bg-white border-indigo-300' : 'bg-white border-gray-200'
-                            }`}>
+                            <div key={g.id} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all ${checked ? 'bg-white border-indigo-300' : 'bg-white border-gray-200'
+                              }`}>
                               <button
                                 onClick={() => setSharedWith(prev => ({
                                   ...prev,
                                   groups: checked ? prev.groups.filter(id => id !== g.id) : [...prev.groups, g.id],
                                   canEditGroups: checked ? prev.canEditGroups.filter(id => id !== g.id) : prev.canEditGroups,
                                 }))}
-                                className={`flex items-center gap-2 text-xs font-semibold transition-colors ${
-                                  checked ? 'text-indigo-700' : 'text-gray-400 hover:text-gray-700'
-                                }`}
+                                className={`flex items-center gap-2 text-xs font-semibold transition-colors ${checked ? 'text-indigo-700' : 'text-gray-400 hover:text-gray-700'
+                                  }`}
                               >
-                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
-                                  checked ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'
-                                }`}>
+                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${checked ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'
+                                  }`}>
                                   {checked && <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={3}><polyline points="20 6 9 17 4 12" /></svg>}
                                 </div>
                                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8z" /></svg>
@@ -3113,11 +3198,10 @@ export default function QuoteForm() {
                                       : [...prev.canEditGroups, g.id]
                                   }))}
                                   title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
-                                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${
-                                    canEdit
+                                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
                                       ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
                                       : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
-                                  }`}
+                                    }`}
                                 >
                                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z" /></svg>
                                   {canEdit ? 'Can Edit' : 'View Only'}
@@ -3139,27 +3223,23 @@ export default function QuoteForm() {
                           const checked = sharedWith.users.includes(u.id);
                           const canEdit = sharedWith.canEditUsers.includes(u.id);
                           return (
-                            <div key={u.id} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all ${
-                              checked ? 'bg-white border-green-300' : 'bg-white border-gray-200'
-                            }`}>
+                            <div key={u.id} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-all ${checked ? 'bg-white border-green-300' : 'bg-white border-gray-200'
+                              }`}>
                               <button
                                 onClick={() => setSharedWith(prev => ({
                                   ...prev,
                                   users: checked ? prev.users.filter(id => id !== u.id) : [...prev.users, u.id],
                                   canEditUsers: checked ? prev.canEditUsers.filter(id => id !== u.id) : prev.canEditUsers,
                                 }))}
-                                className={`flex items-center gap-2 text-xs font-semibold transition-colors ${
-                                  checked ? 'text-green-800' : 'text-gray-400 hover:text-gray-700'
-                                }`}
+                                className={`flex items-center gap-2 text-xs font-semibold transition-colors ${checked ? 'text-green-800' : 'text-gray-400 hover:text-gray-700'
+                                  }`}
                               >
-                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
-                                  checked ? 'bg-green-600 border-green-600' : 'border-gray-300'
-                                }`}>
+                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${checked ? 'bg-green-600 border-green-600' : 'border-gray-300'
+                                  }`}>
                                   {checked && <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={3}><polyline points="20 6 9 17 4 12" /></svg>}
                                 </div>
-                                <span className={`w-5 h-5 rounded-full text-[9px] font-bold flex items-center justify-center ${
-                                  checked ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'
-                                }`}>
+                                <span className={`w-5 h-5 rounded-full text-[9px] font-bold flex items-center justify-center ${checked ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-600'
+                                  }`}>
                                   {(u.name || u.username).charAt(0).toUpperCase()}
                                 </span>
                                 {u.name || u.username}
@@ -3173,11 +3253,10 @@ export default function QuoteForm() {
                                       : [...prev.canEditUsers, u.id]
                                   }))}
                                   title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
-                                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${
-                                    canEdit
+                                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
                                       ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
                                       : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
-                                  }`}
+                                    }`}
                                 >
                                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z" /></svg>
                                   {canEdit ? 'Can Edit' : 'View Only'}
@@ -3496,6 +3575,30 @@ export default function QuoteForm() {
               </div>
               <div className="flex gap-3">
                 <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Item Code</label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={addProductModal.item_code}
+                    onChange={e => setAddProductModal(m => m ? { ...m, item_code: e.target.value } : m)}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Supplier Name</label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                    value={addProductModal.supplier_name}
+                    onChange={e => setAddProductModal(m => m ? { ...m, supplier_name: e.target.value } : m)}
+                  >
+                    <option value="">-- Select Supplier --</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.name}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Unit</label>
                   <input
                     type="text"
@@ -3547,7 +3650,9 @@ export default function QuoteForm() {
                         description: description.trim(),
                         description_ar,
                         unit: unit || 'Pc',
-                        unit_price
+                        unit_price,
+                        item_code: addProductModal.item_code,
+                        supplier_name: addProductModal.supplier_name
                       }),
                     });
                     if (res.ok) {
@@ -3719,4 +3824,4 @@ export default function QuoteForm() {
 
     </div>
   );
-};
+}

@@ -3,8 +3,10 @@ import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertT
 
 interface Product {
   id: number;
+  item_code?: string;
   description: string;
   description_ar?: string;
+  supplier_name?: string;
   unit: string;
   unit_price: number;
 }
@@ -23,7 +25,19 @@ export default function ProductDB() {
   const [isSyncing, setIsSyncing] = useState(false);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
-  useEffect(() => { fetchProducts(); }, []);
+  const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
+
+  useEffect(() => { 
+    fetchProducts(); 
+    fetchSuppliers();
+  }, []);
+
+  const fetchSuppliers = async () => {
+    try {
+      const res = await fetch('/api/suppliers');
+      if (res.ok) setSuppliers(await res.json());
+    } catch (e) {}
+  };
 
   const fetchProducts = async () => {
     try {
@@ -108,6 +122,8 @@ export default function ProductDB() {
       return (
         desc.includes(token) || 
         descAr.includes(token) ||
+        (p.item_code?.toLowerCase() || '').includes(token) ||
+        (p.supplier_name?.toLowerCase() || '').includes(token) ||
         (nToken && (normDesc.includes(nToken) || normDescAr.includes(nToken))) ||
         p.unit?.toLowerCase().includes(token) ||
         String(p.unit_price).includes(token)
@@ -175,104 +191,56 @@ export default function ProductDB() {
           <thead>
             <tr className="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider">
               <th className="p-4 border-b">ID</th>
+              <th className="p-4 border-b">Item Code</th>
               <th className="p-4 border-b">Description</th>
               <th className="p-4 border-b text-right">الوصف</th>
+              <th className="p-4 border-b">Supplier</th>
               <th className="p-4 border-b">Unit</th>
               <th className="p-4 border-b">Unit Price</th>
               <th className="p-4 border-b text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {isAdding && (
-              <tr className="bg-indigo-50">
-                <td className="p-4 text-gray-500">New</td>
+
+            {currentItems.map((product) => (
+              <tr 
+                key={product.id} 
+                className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer"
+                onDoubleClick={() => startEdit(product)}
+              >
+                <td className="p-4 text-gray-500">{product.id}</td>
                 <td className="p-4">
-                  <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Product description"
-                    value={editForm.description || ''} 
-                    onChange={e => setEditForm({ ...editForm, description: e.target.value })} 
-                    onBlur={e => handleAutoTranslate(e.target.value)}
-                  />
+                  <span className="text-gray-600">{product.item_code}</span>
                 </td>
                 <td className="p-4">
-                  <input type="text" dir="rtl" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-right" placeholder="وصف المنتج"
-                    value={editForm.description_ar || ''} onChange={e => setEditForm({ ...editForm, description_ar: e.target.value })} />
+                  <span className="font-medium text-gray-900">{product.description}</span>
                 </td>
                 <td className="p-4">
-                  <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Unit"
-                    value={editForm.unit || ''} onChange={e => setEditForm({ ...editForm, unit: e.target.value })} />
+                  <span className="font-medium text-gray-900 text-right block" dir="rtl">{product.description_ar || ''}</span>
                 </td>
                 <td className="p-4">
-                  <input type="number" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="0.00"
-                    value={editForm.unit_price || ''} onChange={e => setEditForm({ ...editForm, unit_price: parseFloat(e.target.value) })} />
+                  <span className="text-gray-600">{product.supplier_name}</span>
+                </td>
+                <td className="p-4">
+                  <span className="text-gray-600">{product.unit}</span>
+                </td>
+                <td className="p-4">
+                  <span className="text-gray-900 font-mono">{product.unit_price.toFixed(2)}</span>
                 </td>
                 <td className="p-4 text-right">
                   <div className="flex justify-end gap-2">
-                    <button onClick={handleAdd} className="p-2 text-green-600 hover:bg-green-50 rounded"><Save size={18} /></button>
-                    <button onClick={() => setIsAdding(false)} className="p-2 text-red-600 hover:bg-red-50 rounded"><X size={18} /></button>
+                    <button onClick={() => startEdit(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={18} /></button>
+                    {(user.role === 'admin' || user.permissions?.canDeleteData) && (
+                      <button onClick={() => handleDelete(product.id)} className="p-2 text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
+                    )}
                   </div>
-                </td>
-              </tr>
-            )}
-
-            {currentItems.map((product) => (
-              <tr key={product.id} className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors">
-                <td className="p-4 text-gray-500">{product.id}</td>
-                <td className="p-4">
-                  {isEditing === product.id ? (
-                    <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={editForm.description || ''} 
-                      onChange={e => setEditForm({ ...editForm, description: e.target.value })} 
-                      onBlur={e => handleAutoTranslate(e.target.value)}
-                    />
-                  ) : (
-                    <span className="font-medium text-gray-900">{product.description}</span>
-                  )}
-                </td>
-                <td className="p-4">
-                  {isEditing === product.id ? (
-                    <input type="text" dir="rtl" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-right"
-                      value={editForm.description_ar || ''} onChange={e => setEditForm({ ...editForm, description_ar: e.target.value })} />
-                  ) : (
-                    <span className="font-medium text-gray-900 text-right block" dir="rtl">{product.description_ar || ''}</span>
-                  )}
-                </td>
-                <td className="p-4">
-                  {isEditing === product.id ? (
-                    <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={editForm.unit || ''} onChange={e => setEditForm({ ...editForm, unit: e.target.value })} />
-                  ) : (
-                    <span className="text-gray-600">{product.unit}</span>
-                  )}
-                </td>
-                <td className="p-4">
-                  {isEditing === product.id ? (
-                    <input type="number" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={editForm.unit_price || ''} onChange={e => setEditForm({ ...editForm, unit_price: parseFloat(e.target.value) })} />
-                  ) : (
-                    <span className="text-gray-900 font-mono">{product.unit_price.toFixed(2)}</span>
-                  )}
-                </td>
-                <td className="p-4 text-right">
-                  {isEditing === product.id ? (
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => handleUpdate(product.id)} className="p-2 text-green-600 hover:bg-green-50 rounded"><Save size={18} /></button>
-                      <button onClick={() => setIsEditing(null)} className="p-2 text-gray-600 hover:bg-gray-100 rounded"><X size={18} /></button>
-                    </div>
-                  ) : (
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => startEdit(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={18} /></button>
-                      {(user.role === 'admin' || user.permissions?.canDeleteData) && (
-                        <button onClick={() => handleDelete(product.id)} className="p-2 text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
-                      )}
-                    </div>
-                  )}
                 </td>
               </tr>
             ))}
 
             {filtered.length === 0 && !isAdding && (
               <tr>
-                <td colSpan={6} className="p-8 text-center text-gray-400">
+                <td colSpan={8} className="p-8 text-center text-gray-400">
                   {search ? `No products match "${search}"` : 'No products found. Add one to get started.'}
                 </td>
               </tr>
@@ -497,6 +465,110 @@ export default function ProductDB() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* ── Product Modal (Add / Edit) ────────────────────────────────────────────── */}
+      {(isAdding || isEditing !== null) && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            {/* Header */}
+            <div className={`px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r ${isAdding ? 'from-indigo-600 to-purple-600' : 'from-blue-600 to-cyan-600'}`}>
+              <div className="flex items-center gap-2">
+                {isAdding ? <Plus size={18} className="text-white" /> : <Edit2 size={18} className="text-white" />}
+                <h2 className="text-white font-bold text-base">{isAdding ? 'Add to Product DB' : 'Edit Product'}</h2>
+              </div>
+              <button onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); }} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name</label>
+                <input
+                  type="text"
+                  autoFocus
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={editForm.description || ''}
+                  onChange={e => setEditForm(m => ({ ...m, description: e.target.value }))}
+                  onBlur={e => handleAutoTranslate(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name (Arabic)</label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right"
+                  value={editForm.description_ar || ''}
+                  onChange={e => setEditForm(m => ({ ...m, description_ar: e.target.value }))}
+                />
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Item Code</label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={editForm.item_code || ''}
+                    onChange={e => setEditForm(m => ({ ...m, item_code: e.target.value }))}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Supplier Name</label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                    value={editForm.supplier_name || ''}
+                    onChange={e => setEditForm(m => ({ ...m, supplier_name: e.target.value }))}
+                  >
+                    <option value="">-- Select Supplier --</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.name}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit</label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={editForm.unit || ''}
+                    onChange={e => setEditForm(m => ({ ...m, unit: e.target.value }))}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit Price</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={editForm.unit_price === undefined ? '' : editForm.unit_price}
+                    onChange={e => setEditForm(m => ({ ...m, unit_price: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
+              </div>
+            </div>
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end bg-gray-50">
+              <button
+                className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg text-sm hover:bg-gray-100 transition-colors"
+                onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); }}
+              >Cancel</button>
+              <button
+                className={`px-5 py-2 text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${isAdding ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                onClick={async () => {
+                  if (isAdding) {
+                    await handleAdd();
+                  } else if (isEditing !== null) {
+                    await handleUpdate(isEditing);
+                  }
+                }}
+              >
+                {isAdding ? 'Save & Add' : 'Save Changes'}
+              </button>
+            </div>
           </div>
         </div>
       )}

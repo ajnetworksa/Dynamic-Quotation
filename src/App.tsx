@@ -8,18 +8,20 @@ import {
   Settings as SettingsIcon, LogOut, Shield,
   LayoutDashboard, KeyRound, X, ChevronDown,
   User, CheckCircle2, Lock, Eye, EyeOff,
-  Moon, Sun, Kanban
+  Moon, Sun, Kanban, Truck
 } from 'lucide-react';
 import KanbanBoard from './components/KanbanBoard';
 import QuoteForm from './components/QuoteForm';
 import Dashboard from './components/Dashboard';
 import ProductDB from './components/ProductDB';
 import CustomerDB from './components/CustomerDB';
+import SupplierDB from './components/SupplierDB';
 import Tracking from './components/Tracking';
 import Settings from './components/Settings';
 import Login from './components/Login';
 import UsersDB from './components/UsersDB';
 import AIAssistant from './components/AIAssistant';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Global fetch interceptor for auth token
 const originalFetch = window.fetch;
@@ -513,8 +515,8 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
   const location = useLocation();
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col">
+      <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
             <div className="flex items-center gap-2">
@@ -529,6 +531,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 <NavItem to="/quote" icon={FileText} label="Docs" />
                 <NavItem to="/products" icon={Database} label="Product DB" />
                 <NavItem to="/customers" icon={Users} label="Customer DB" />
+                <NavItem to="/suppliers" icon={Truck} label="Supplier DB" />
                 <NavItem to="/tracking" icon={History} label="Tracking" />
                 <NavItem to="/kanban" icon={Kanban} label="Kanban" />
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
@@ -559,20 +562,31 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
         <div style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
           <QuoteForm />
         </div>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/products" element={<ProductDB />} />
-          <Route path="/customers" element={<CustomerDB />} />
-          <Route path="/tracking" element={<Tracking />} />
-          <Route path="/kanban" element={<KanbanBoard />} />
-          <Route path="/quote" element={null} />
-          {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
-            <Route path="/users" element={<UsersDB />} />
-          )}
-          {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
-            <Route path="/settings" element={<Settings />} />
-          )}
-        </Routes>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.2 }}
+          >
+            <Routes location={location}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/products" element={<ProductDB />} />
+              <Route path="/customers" element={<CustomerDB />} />
+              <Route path="/suppliers" element={<SupplierDB />} />
+              <Route path="/tracking" element={<Tracking />} />
+              <Route path="/kanban" element={<KanbanBoard />} />
+              <Route path="/quote" element={null} />
+              {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
+                <Route path="/users" element={<UsersDB />} />
+              )}
+              {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
+                <Route path="/settings" element={<Settings />} />
+              )}
+            </Routes>
+          </motion.div>
+        </AnimatePresence>
       </main>
       <AIAssistant />
     </div>

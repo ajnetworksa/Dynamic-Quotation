@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award, Repeat2 } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 interface Quote {
     id: number;
@@ -149,8 +150,15 @@ export default function Dashboard() {
                     { label: 'This Month (Docs)', value: stats.monthCount, icon: <BarChart2 size={22} />, color: 'bg-violet-100 text-violet-600', hide: false },
                     { label: 'Pending / Draft', value: stats.pendingCount, icon: <Clock size={22} />, color: 'bg-amber-100 text-amber-600', hide: false },
                     { label: 'Lost Deals', value: stats.rejectedCount, icon: <XCircle size={22} />, color: 'bg-red-100 text-red-600', hide: false },
-                ].filter(c => !c.hide).map((card) => (
-                    <div key={card.label} className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex flex-col gap-3">
+                ].filter(c => !c.hide).map((card, idx) => (
+                    <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                        whileHover={{ y: -5, boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)" }}
+                        key={card.label} 
+                        className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex flex-col gap-3 transition-shadow duration-300 cursor-default"
+                    >
                         <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${card.color}`}>
                             {card.icon}
                         </div>
@@ -158,7 +166,7 @@ export default function Dashboard() {
                             <p className="text-xs font-medium text-gray-500 leading-tight">{card.label}</p>
                             <p className="text-lg font-bold text-gray-900 mt-0.5 leading-tight">{card.value}</p>
                         </div>
-                    </div>
+                    </motion.div>
                 ))}
             </div>
 
@@ -224,12 +232,18 @@ export default function Dashboard() {
                         <button onClick={() => navigate('/tracking')} className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">View All</button>
                     </div>
                     <div className="divide-y divide-gray-100">
-                        {getRecentQuotes().map((quote) => (
-                            <div key={quote.id} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
+                        {getRecentQuotes().map((quote, idx) => (
+                            <motion.div 
+                                initial={{ opacity: 0, x: -20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ delay: idx * 0.05 }}
+                                key={quote.id} 
+                                className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between group"
+                            >
                                 <div>
                                     <div className="flex gap-2 items-center flex-wrap">
                                         <span
-                                            className="font-bold text-indigo-900 cursor-pointer hover:underline"
+                                            className="font-bold text-indigo-900 cursor-pointer group-hover:text-indigo-600 transition-colors"
                                             onClick={() => handleRecall(quote.quote_id)}
                                         >
                                             {quote.quote_id}
@@ -239,22 +253,22 @@ export default function Dashboard() {
                                         </span>
                                         <span className="text-xs text-gray-400">({quote.type || 'Quotation'})</span>
                                     </div>
-                                    <div className="text-sm font-medium text-gray-900 mt-1">{quote.customer_name}</div>
+                                    <div className="text-sm font-medium text-gray-900 mt-1 group-hover:text-indigo-700 transition-colors">{quote.customer_name}</div>
                                     <div className="text-xs text-gray-500 truncate max-w-xs" title={quote.subject}>{quote.subject}</div>
                                 </div>
                                 <div className="text-right flex flex-col items-end ml-4">
                                     {canViewRevenue && (
-                                        <div className="font-mono font-bold text-gray-900 whitespace-nowrap">SAR {quote.grand_total?.toLocaleString()}</div>
+                                        <div className="font-mono font-bold text-gray-900 whitespace-nowrap group-hover:text-indigo-700 transition-colors">SAR {quote.grand_total?.toLocaleString()}</div>
                                     )}
                                     <div className="text-xs text-gray-400 mt-1">{quote.date}</div>
                                     <button
                                         onClick={() => handleRecall(quote.quote_id)}
-                                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1"
+                                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-2 group-hover:translate-x-0"
                                     >
                                         Open <Send size={11} />
                                     </button>
                                 </div>
-                            </div>
+                            </motion.div>
                         ))}
                         {quotes.length === 0 && (
                             <div className="p-12 text-center text-gray-400">No activity yet. Create your first quote.</div>
