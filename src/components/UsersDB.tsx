@@ -24,6 +24,7 @@ interface Permissions {
   canChangeAuthor?: boolean;
   canShareQuote?: boolean;
   canEditSharedQuote?: boolean;
+  canUseKanban?: boolean;
 }
 
 interface AppUser {
@@ -48,6 +49,7 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
   { key: 'canDatabaseMaintenance', label: 'DB Maintenance', icon: <Database size={14} />, description: 'Perform database cleanup and administrative tasks.' },
   { key: 'canOverridePrice', label: 'Price Analysis', icon: <Bot size={14} />, description: 'View cost base and apply manual price overrides in the analysis sidebar.' },
   { key: 'canViewRevenue', label: 'View Revenue', icon: <Users size={14} />, description: 'View total revenue and profit summaries on the dashboard.' },
+  { key: 'canUseKanban', label: 'Use Kanban Board', icon: <Layers size={14} />, description: 'Access the interactive Kanban board for quotation stages.' },
   { key: 'canUseRFQ', label: 'Import from RFQ', icon: <FileSearch size={14} />, description: 'Upload PDF/Images to automatically parse items using AI.' },
   { key: 'canUseAI', label: 'AI Data Assistant', icon: <Bot size={14} />, description: 'Access the AI Data Assistant for natural language querying.' },
   { key: 'canViewAllQuotes', label: 'View All Quotes', icon: <Eye size={14} />, description: 'View and edit quotations created by other team members.' },

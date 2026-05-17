@@ -533,7 +533,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 <NavItem to="/customers" icon={Users} label="Customer DB" />
                 <NavItem to="/suppliers" icon={Truck} label="Supplier DB" />
                 <NavItem to="/tracking" icon={History} label="Tracking" />
-                <NavItem to="/kanban" icon={Kanban} label="Kanban" />
+                {(user?.role === 'admin' || user?.permissions?.canUseKanban) && (
+                  <NavItem to="/kanban" icon={Kanban} label="Kanban" />
+                )}
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                   <NavItem to="/users" icon={Shield} label="Users" />
                 )}
@@ -576,7 +578,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               <Route path="/customers" element={<CustomerDB />} />
               <Route path="/suppliers" element={<SupplierDB />} />
               <Route path="/tracking" element={<Tracking />} />
-              <Route path="/kanban" element={<KanbanBoard />} />
+              {(user?.role === 'admin' || user?.permissions?.canUseKanban) && (
+                <Route path="/kanban" element={<KanbanBoard />} />
+              )}
               <Route path="/quote" element={null} />
               {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                 <Route path="/users" element={<UsersDB />} />

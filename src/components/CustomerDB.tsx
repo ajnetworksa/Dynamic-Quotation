@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Search, UserPlus } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface Customer {
@@ -20,6 +20,7 @@ export default function CustomerDB() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [stats, setStats] = useState<Record<number, { total_won: number, quote_count: number }>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const navigate = useNavigate();
 
@@ -101,6 +102,22 @@ export default function CustomerDB() {
     setEditForm(customer);
   };
 
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
+  const toggleSelectAll = () => {
+    if (selectedIds.size === currentItems.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(currentItems.map(c => c.id)));
+  };
+  const handleBulkDelete = async () => {
+    if (!confirm(`Delete ${selectedIds.size} selected customer(s)? This cannot be undone.`)) return;
+    for (const id of selectedIds) {
+      await fetch(`/api/customers/${id}`, { method: 'DELETE' });
+    }
+    setSelectedIds(new Set());
+    fetchCustomers();
+  };
+
   const tokens = search.toLowerCase().split(/\s+/).filter(t => t.length > 0);
   const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
 
@@ -131,6 +148,21 @@ export default function CustomerDB() {
   return (
     <>
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+      {/* Bulk Action Bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between px-6 py-3 bg-red-50 border-b border-red-200">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold text-red-700">{selectedIds.size} customer{selectedIds.size !== 1 && 's'} selected</span>
+            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-red-400 hover:text-red-600 underline">Clear</button>
+          </div>
+          {(user.role === 'admin' || user.permissions?.canDeleteData) && (
+            <button onClick={handleBulkDelete}
+              className="flex items-center gap-2 px-4 py-1.5 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 transition-colors">
+              <Trash2 size={15} /> Delete {selectedIds.size} Selected
+            </button>
+          )}
+        </div>
+      )}
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
@@ -170,6 +202,11 @@ export default function CustomerDB() {
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider">
+              <th className="p-4 border-b w-10">
+                <button onClick={toggleSelectAll} className={selectedIds.size === currentItems.length && currentItems.length > 0 ? 'text-indigo-600' : 'text-gray-300 hover:text-indigo-400'}>
+                  {selectedIds.size === currentItems.length && currentItems.length > 0 ? <CheckSquare size={16} /> : <Square size={16} />}
+                </button>
+              </th>
               <th className="p-4 border-b">ID</th>
               <th className="p-4 border-b">Name</th>
               <th className="p-4 border-b">Address</th>
@@ -184,9 +221,15 @@ export default function CustomerDB() {
             {currentItems.map((customer) => (
               <tr 
                 key={customer.id} 
-                className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer"
+                className={`hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer ${selectedIds.has(customer.id) ? 'bg-indigo-50 even:bg-indigo-50' : ''}`}
                 onDoubleClick={() => startEdit(customer)}
               >
+                <td className="p-4">
+                  <button onClick={e => { e.stopPropagation(); toggleSelect(customer.id); }}
+                    className={selectedIds.has(customer.id) ? 'text-indigo-600' : 'text-gray-300 hover:text-indigo-400'}>
+                    {selectedIds.has(customer.id) ? <CheckSquare size={16} /> : <Square size={16} />}
+                  </button>
+                </td>
                 <td className="p-4 text-gray-500">{customer.id}</td>
                 {(['name', 'address', 'contact', 'mobile', 'email'] as const).map(field => (
                   <td key={field} className="p-4">

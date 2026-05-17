@@ -22,6 +22,10 @@ A professional, dual-language (English/Arabic) quotation and invoice management 
 - **Group-Based RBAC**: Assign users to permission groups for bulk access management.
 - **Security**: Password hashing (Bcrypt), secure sessions, role-based access control (RBAC), and persistent ownership validation.
 - **Export Consistency**: Cross-browser fix for stamp aspect-ratio distortion in generated PDF documents.
+- **Kanban Feature Access**: Granular permission control to toggle Kanban pipeline access per user or permission group.
+- **Interactive Product Assignment**: Modern Indigo-themed pop-up modal to modify product Item Codes or re-link them to active suppliers instantly.
+- **Supplier DB Copy/Move Suite**: Checkbox-driven product multi-selection with support for copying (duplicating) or moving (reassigning) items to other suppliers.
+- **Bulk Table Operations**: Selected row checkboxes in Product and Customer databases with a sleek glassmorphic Red bulk deletion action bar.
 
 ---
 

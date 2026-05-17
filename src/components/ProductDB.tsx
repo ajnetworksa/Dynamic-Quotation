@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2, CheckSquare, Square } from 'lucide-react';
 
 interface Product {
   id: number;
@@ -23,6 +23,7 @@ export default function ProductDB() {
   const [showPriceSync, setShowPriceSync] = useState(false);
   const [syncData, setSyncData] = useState<{ id?: number; description: string; current_price: number; new_price: number; match_type: 'exact' | 'fuzzy' | 'none' }[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
@@ -85,6 +86,22 @@ export default function ProductDB() {
     setEditForm(product);
   };
 
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
+  const toggleSelectAll = () => {
+    if (selectedIds.size === currentItems.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(currentItems.map(p => p.id)));
+  };
+  const handleBulkDelete = async () => {
+    if (!confirm(`Delete ${selectedIds.size} selected product(s)? This cannot be undone.`)) return;
+    for (const id of selectedIds) {
+      await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    }
+    setSelectedIds(new Set());
+    fetchProducts();
+  };
+
   const handleAutoTranslate = async (text: string) => {
     if (!text || text === lastTranslatedDesc) return;
     try {
@@ -139,6 +156,21 @@ export default function ProductDB() {
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+      {/* Bulk Action Bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between px-6 py-3 bg-red-50 border-b border-red-200">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold text-red-700">{selectedIds.size} product{selectedIds.size !== 1 && 's'} selected</span>
+            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-red-400 hover:text-red-600 underline">Clear</button>
+          </div>
+          {(user.role === 'admin' || user.permissions?.canDeleteData) && (
+            <button onClick={handleBulkDelete}
+              className="flex items-center gap-2 px-4 py-1.5 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 transition-colors">
+              <Trash2 size={15} /> Delete {selectedIds.size} Selected
+            </button>
+          )}
+        </div>
+      )}
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
@@ -190,6 +222,11 @@ export default function ProductDB() {
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider">
+              <th className="p-4 border-b w-10">
+                <button onClick={toggleSelectAll} className={selectedIds.size === currentItems.length && currentItems.length > 0 ? 'text-indigo-600' : 'text-gray-300 hover:text-indigo-400'}>
+                  {selectedIds.size === currentItems.length && currentItems.length > 0 ? <CheckSquare size={16} /> : <Square size={16} />}
+                </button>
+              </th>
               <th className="p-4 border-b">ID</th>
               <th className="p-4 border-b">Item Code</th>
               <th className="p-4 border-b">Description</th>
@@ -205,28 +242,22 @@ export default function ProductDB() {
             {currentItems.map((product) => (
               <tr 
                 key={product.id} 
-                className="hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer"
+                className={`hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer ${selectedIds.has(product.id) ? 'bg-indigo-50 even:bg-indigo-50' : ''}`}
                 onDoubleClick={() => startEdit(product)}
               >
+                <td className="p-4">
+                  <button onClick={e => { e.stopPropagation(); toggleSelect(product.id); }}
+                    className={selectedIds.has(product.id) ? 'text-indigo-600' : 'text-gray-300 hover:text-indigo-400'}>
+                    {selectedIds.has(product.id) ? <CheckSquare size={16} /> : <Square size={16} />}
+                  </button>
+                </td>
                 <td className="p-4 text-gray-500">{product.id}</td>
-                <td className="p-4">
-                  <span className="text-gray-600">{product.item_code}</span>
-                </td>
-                <td className="p-4">
-                  <span className="font-medium text-gray-900">{product.description}</span>
-                </td>
-                <td className="p-4">
-                  <span className="font-medium text-gray-900 text-right block" dir="rtl">{product.description_ar || ''}</span>
-                </td>
-                <td className="p-4">
-                  <span className="text-gray-600">{product.supplier_name}</span>
-                </td>
-                <td className="p-4">
-                  <span className="text-gray-600">{product.unit}</span>
-                </td>
-                <td className="p-4">
-                  <span className="text-gray-900 font-mono">{product.unit_price.toFixed(2)}</span>
-                </td>
+                <td className="p-4"><span className="text-gray-600">{product.item_code}</span></td>
+                <td className="p-4"><span className="font-medium text-gray-900">{product.description}</span></td>
+                <td className="p-4"><span className="font-medium text-gray-900 text-right block" dir="rtl">{product.description_ar || ''}</span></td>
+                <td className="p-4"><span className="text-gray-600">{product.supplier_name}</span></td>
+                <td className="p-4"><span className="text-gray-600">{product.unit}</span></td>
+                <td className="p-4"><span className="text-gray-900 font-mono">{product.unit_price.toFixed(2)}</span></td>
                 <td className="p-4 text-right">
                   <div className="flex justify-end gap-2">
                     <button onClick={() => startEdit(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={18} /></button>
@@ -240,7 +271,7 @@ export default function ProductDB() {
 
             {filtered.length === 0 && !isAdding && (
               <tr>
-                <td colSpan={8} className="p-8 text-center text-gray-400">
+                <td colSpan={9} className="p-8 text-center text-gray-400">
                   {search ? `No products match "${search}"` : 'No products found. Add one to get started.'}
                 </td>
               </tr>
