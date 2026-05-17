@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Search, UserPlus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface Customer {
@@ -129,6 +129,7 @@ export default function CustomerDB() {
   const currentItems = filtered.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
   return (
+    <>
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -180,39 +181,6 @@ export default function CustomerDB() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {isAdding && (
-              <tr className="bg-indigo-50">
-                <td className="p-4 text-gray-500">New</td>
-                {(['name', 'address', 'contact', 'mobile'] as const).map(field => (
-                  <td key={field} className="p-4">
-                    <input
-                      type="text"
-                      className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      placeholder={field.charAt(0).toUpperCase() + field.slice(1)}
-                      value={(editForm as any)[field] || ''}
-                      onChange={e => setEditForm({ ...editForm, [field]: e.target.value })}
-                    />
-                  </td>
-                ))}
-                <td className="p-4">
-                  <input
-                    type="email"
-                    className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="Email"
-                    value={editForm.email || ''}
-                    onChange={e => setEditForm({ ...editForm, email: e.target.value })}
-                  />
-                </td>
-                <td className="p-4"></td>
-                <td className="p-4 text-right">
-                  <div className="flex justify-end gap-2">
-                    <button onClick={handleAdd} className="p-2 text-green-600 hover:bg-green-50 rounded"><Save size={18} /></button>
-                    <button onClick={() => setIsAdding(false)} className="p-2 text-red-600 hover:bg-red-50 rounded"><X size={18} /></button>
-                  </div>
-                </td>
-              </tr>
-            )}
-
             {currentItems.map((customer) => (
               <tr 
                 key={customer.id} 
@@ -222,18 +190,9 @@ export default function CustomerDB() {
                 <td className="p-4 text-gray-500">{customer.id}</td>
                 {(['name', 'address', 'contact', 'mobile', 'email'] as const).map(field => (
                   <td key={field} className="p-4">
-                    {isEditing === customer.id ? (
-                      <input
-                        type={field === 'email' ? 'email' : 'text'}
-                        className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                        value={(editForm as any)[field] || ''}
-                        onChange={e => setEditForm({ ...editForm, [field]: e.target.value })}
-                      />
-                    ) : (
-                      <span className={field === 'name' ? 'font-medium text-gray-900' : 'text-gray-600'}>
-                        {(customer as any)[field]}
-                      </span>
-                    )}
+                    <span className={field === 'name' ? 'font-medium text-gray-900' : 'text-gray-600'}>
+                      {(customer as any)[field]}
+                    </span>
                   </td>
                 ))}
                 <td className="p-4">
@@ -246,19 +205,12 @@ export default function CustomerDB() {
                   </div>
                 </td>
                 <td className="p-4 text-right">
-                  {isEditing === customer.id ? (
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => handleUpdate(customer.id)} className="p-2 text-green-600 hover:bg-green-50 rounded"><Save size={18} /></button>
-                      <button onClick={() => setIsEditing(null)} className="p-2 text-gray-600 hover:bg-gray-100 rounded"><X size={18} /></button>
-                    </div>
-                  ) : (
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => startEdit(customer)} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={18} /></button>
-                      {(user.role === 'admin' || user.permissions?.canDeleteData) && (
-                        <button onClick={() => handleDelete(customer.id)} className="p-2 text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
-                      )}
-                    </div>
-                  )}
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => startEdit(customer)} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={18} /></button>
+                    {(user.role === 'admin' || user.permissions?.canDeleteData) && (
+                      <button onClick={() => handleDelete(customer.id)} className="p-2 text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -314,5 +266,97 @@ export default function CustomerDB() {
         </div>
       </div>
     </div>
+
+      {/* Modal for Add / Edit Customer */}
+      {(isAdding || isEditing !== null) && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="bg-emerald-600 px-4 py-3 flex items-center justify-between text-white">
+              <div className="flex items-center gap-2 font-medium">
+                <UserPlus size={18} />
+                {isEditing !== null ? 'Edit Customer DB' : 'Add to Customer DB'}
+              </div>
+              <button 
+                onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); }}
+                className="hover:bg-white/20 p-1 rounded transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="p-4 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 200px)' }}>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
+                  <input
+                    type="text"
+                    className="w-full p-2 border border-emerald-500 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow"
+                    value={editForm.name || ''}
+                    onChange={e => setEditForm({ ...editForm, name: e.target.value })}
+                  />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Mobile</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+                      value={editForm.mobile || ''}
+                      onChange={e => setEditForm({ ...editForm, mobile: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Contact Person</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+                      value={editForm.contact || ''}
+                      onChange={e => setEditForm({ ...editForm, contact: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Email</label>
+                  <input
+                    type="email"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+                    value={editForm.email || ''}
+                    onChange={e => setEditForm({ ...editForm, email: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Address</label>
+                  <textarea
+                    rows={3}
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none resize-y"
+                    value={editForm.address || ''}
+                    onChange={e => setEditForm({ ...editForm, address: e.target.value })}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 rounded-b-xl">
+              <button
+                onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); }}
+                className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => isEditing !== null ? handleUpdate(isEditing) : handleAdd()}
+                disabled={!editForm.name}
+                className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isEditing !== null ? 'Save Changes' : 'Save & Select'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
