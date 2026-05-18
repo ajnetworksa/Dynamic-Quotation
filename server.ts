@@ -565,7 +565,7 @@ const QuoteSchema = z.object({
   vat_rate:          z.number().min(0).max(100).optional().default(15),
   markup:            z.number().min(0).max(500).optional().default(8),
   expiry_date:       z.string().nullable().optional(),
-  status:            z.enum(['Draft','Sent','Approved','Rejected','Invoiced','Cancelled']).optional().default('Draft'),
+  status:            z.enum(['Draft','Sent','Accepted','Rejected','Invoiced','Cancelled']).optional().default('Draft'),
   type:              z.enum(['Quotation','Tax Invoice','Proforma']).optional().default('Quotation'),
   revision_of:       z.string().nullable().optional(),
   note_header:       z.string().max(100).optional(),
@@ -603,7 +603,7 @@ const QuoteSchema = z.object({
 
 const BulkStatusSchema = z.object({
   ids:    z.array(z.string().min(1)).min(1).max(500),
-  status: z.enum(['Draft','Sent','Approved','Rejected','Invoiced','Cancelled']),
+  status: z.enum(['Draft','Sent','Accepted','Rejected','Invoiced','Cancelled']),
 });
 
 const FollowupSchema = z.object({
