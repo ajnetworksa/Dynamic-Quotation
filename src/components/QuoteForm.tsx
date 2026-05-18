@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
@@ -193,7 +193,9 @@ export default function QuoteForm() {
     email: true,
     print: true,
     preparedBy: true,
-    shareWith: true
+    shareWith: true,
+    internalNotes: true,
+    bottomNote: true
   });
 
   // Global markup percentage added for automated pricing.
@@ -1669,6 +1671,10 @@ export default function QuoteForm() {
   const handleExportPDF = async () => {
     if (!printRef.current) return;
 
+    const prevNoteIndex = expandedNoteIndex;
+    setExpandedNoteIndex(null);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
     try {
       // Store original values and styles to use in onclone
       const originalElements = printRef.current.querySelectorAll('input, textarea, select');
@@ -1755,8 +1761,8 @@ export default function QuoteForm() {
             if (!el.dataset.pdfRoot) el.style.padding = '0';
           });
 
-          clonedDoc.querySelectorAll('.min-w-\\[1200px\\]').forEach((el: any) => {
-            el.classList.remove('min-w-[1200px]');
+          clonedDoc.querySelectorAll('.min-w-\\[1350px\\]').forEach((el: any) => {
+            el.classList.remove('min-w-[1350px]');
             el.style.minWidth = '0';
           });
 
@@ -1773,9 +1779,9 @@ export default function QuoteForm() {
           }
 
           // Apply the exact grid template for the table
-          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[50px_1fr_80px_80px_100px_120px"]');
+          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[48px_1fr_64px_64px_110px_110px]"]');
           gridRows.forEach((el: any) => {
-            el.style.gridTemplateColumns = '50px 1fr 80px 80px 100px 120px';
+            el.style.gridTemplateColumns = '48px 1fr 64px 64px 110px 110px';
             el.style.width = '100%';
             el.style.margin = '0 auto';
             el.style.display = 'grid';
@@ -1855,11 +1861,17 @@ export default function QuoteForm() {
     } catch (error) {
       console.error('Error generating PDF:', error);
       alert('Failed to generate PDF');
+    } finally {
+      setExpandedNoteIndex(prevNoteIndex);
     }
   };
 
   const handleExportPDFWithStamp = async () => {
     if (!printRef.current) return;
+
+    const prevNoteIndex = expandedNoteIndex;
+    setExpandedNoteIndex(null);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
     try {
       const originalElements = printRef.current.querySelectorAll('input, textarea, select');
@@ -1937,6 +1949,11 @@ export default function QuoteForm() {
             el.style.border = 'none';
           });
 
+          clonedDoc.querySelectorAll('.min-w-\\[1350px\\]').forEach((el: any) => {
+            el.classList.remove('min-w-[1350px]');
+            el.style.minWidth = '0';
+          });
+
           clonedDoc.querySelectorAll('.print\\:overflow-visible').forEach((el: any) => {
             el.style.overflow = 'visible';
           });
@@ -1948,9 +1965,9 @@ export default function QuoteForm() {
             (tableOverflowContainer as HTMLElement).style.width = '100%';
           }
 
-          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[50px_1fr_80px_80px_100px_120px"]');
+          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[48px_1fr_64px_64px_110px_110px]"]');
           gridRows.forEach((el: any) => {
-            el.style.gridTemplateColumns = '50px 1fr 80px 80px 100px 120px';
+            el.style.gridTemplateColumns = '48px 1fr 64px 64px 110px 110px';
             el.style.width = '100%';
             el.style.margin = '0 auto';
             el.style.display = 'grid';
@@ -2007,6 +2024,8 @@ export default function QuoteForm() {
     } catch (error) {
       console.error('Error generating PDF with Stamp:', error);
       alert('Failed to generate PDF with Stamp');
+    } finally {
+      setExpandedNoteIndex(prevNoteIndex);
     }
   };
 
@@ -2534,7 +2553,7 @@ export default function QuoteForm() {
           {/* ── ITEMS TABLE ─────────────────────────────────────────────────── */}
           <div className="w-full min-w-0 mb-6">
             <div className="overflow-x-auto overflow-y-visible print:overflow-visible">
-              <div className="min-w-[1350px] print:min-w-0">
+              <div className="min-w-[1350px] print:min-w-0 pr-10 xl:pr-0 print:pr-0">
                 <div className="border-2" style={{ borderColor: '#1f2937' }}>
                   {/* ── TABLE HEADER ROW ──────────────────────────────────────────
                     backgroundColor: '#dcfce7' = light green — change to recolor.
@@ -2542,7 +2561,7 @@ export default function QuoteForm() {
                 */}
                   <div
                     ref={headerRef}
-                    className="grid grid-cols-[48px_1fr_64px_64px_110px_110px_36px] border-b-2 font-bold text-base text-center print:grid-cols-[48px_1fr_64px_64px_110px_110px]"
+                    className="grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[48px_1fr_64px_64px_110px_110px]"
                     style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
                   >
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">ITEM</div>
@@ -2552,8 +2571,7 @@ export default function QuoteForm() {
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">QTY</div>
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">UNIT</div>
                     <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
-                    <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">NET PRICE</div>
-                    <div className="print:hidden h-full" />
+                    <div className="pt-0 pb-3 px-2 h-full">NET PRICE</div>
                   </div>
                   <AnimatePresence>
                     {items.map((item, index) => (
@@ -2564,7 +2582,7 @@ export default function QuoteForm() {
                         exit={{ opacity: 0, height: 0 }}
                         transition={{ duration: 0.2 }}
                         data-row-index={index}
-                        className="flex items-stretch print:block"
+                        className="flex items-stretch print:block relative"
                         onPointerDown={rowReorderMode === 'drag' ? (e) => onRowBodyPointerDown(e, index) : undefined}
                         onPointerMove={rowReorderMode === 'drag' ? onRowBodyPointerMove : undefined}
                         onPointerUp={rowReorderMode === 'drag' ? onRowBodyPointerUp : undefined}
@@ -2572,7 +2590,7 @@ export default function QuoteForm() {
                       >
                         <div
                           ref={el => rowRefs.current[index] = el}
-                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px_36px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
+                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
                           ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
                           ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
@@ -2688,19 +2706,7 @@ export default function QuoteForm() {
                                   </select>
                                 </div>
                               </div>
-                              {/* Private note — screen only, hidden from print */}
-                              {expandedNoteIndex === index && (
-                                <div className="print:hidden mt-1 pt-1 border-t border-dashed border-amber-300">
-                                  <textarea
-                                    autoFocus
-                                    className="w-full text-xs bg-amber-50 outline-none resize-none text-amber-900 placeholder:text-amber-400 rounded px-1.5 py-1"
-                                    placeholder="Private note (not printed)…"
-                                    value={item.internal_note || ''}
-                                    onChange={e => updateItem(index, 'internal_note', e.target.value)}
-                                    rows={Math.max(1, (item.internal_note || '').split('\n').length)}
-                                  />
-                                </div>
-                              )}
+
                             </div>
                             <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
                             <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
@@ -2758,26 +2764,50 @@ export default function QuoteForm() {
                               step="0.01"
                             />
                           </div>
-                          <div className={`px-2 py-0.5 border-r border-gray-300 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                          <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
                             <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
-                          {/* Controls — always visible, note + trash, inside grid */}
-                          <div className="print:hidden flex flex-col items-center justify-start pt-1 gap-1">
-                            <button
-                              onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
-                              className={`p-0.5 rounded transition-colors ${expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
-                                  : item.internal_note ? 'text-amber-500 hover:text-amber-700'
-                                    : 'text-gray-400 hover:text-amber-500'
-                                }`}
-                              title={item.internal_note ? 'Edit private note' : 'Add private note'}
-                            >
-                              <StickyNote size={14} />
-                            </button>
+                        </div>
+
+                        {/* Controls — always visible, note + trash, outside grid */}
+                        <div className="absolute -right-9 top-0 bottom-0 w-8 print:hidden flex flex-col items-center justify-start pt-1 gap-1 xl:hidden" data-html2canvas-ignore="true">
+                            {workflowVisibility.internalNotes !== false && (
+                              <div className="relative flex flex-col items-center">
+                                <button
+                                  onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
+                                  className={`p-0.5 rounded transition-colors ${expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
+                                      : item.internal_note ? 'text-amber-500 hover:text-amber-700'
+                                        : 'text-gray-400 hover:text-amber-500'
+                                    }`}
+                                  title={item.internal_note ? 'Edit private note' : 'Add private note'}
+                                >
+                                  <StickyNote size={14} />
+                                </button>
+                                
+                                {expandedNoteIndex === index && (
+                                  <div className="absolute right-full mr-3 top-0 w-64 bg-amber-50 border border-amber-300 rounded-lg shadow-xl p-2 z-[9999]">
+                                    <div className="flex justify-between items-center mb-2 border-b border-amber-200 pb-1">
+                                      <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Internal Note</span>
+                                      <button onClick={() => setExpandedNoteIndex(null)} className="text-amber-500 hover:text-amber-700">
+                                        <X size={14} />
+                                      </button>
+                                    </div>
+                                    <textarea
+                                      autoFocus
+                                      className="w-full text-sm bg-transparent outline-none resize-none text-amber-900 placeholder:text-amber-400"
+                                      placeholder="Type private note..."
+                                      value={item.internal_note || ''}
+                                      onChange={e => updateItem(index, 'internal_note', e.target.value)}
+                                      rows={Math.max(3, (item.internal_note || '').split('\n').length)}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
                               <Trash2 size={14} />
                             </button>
                           </div>
-                        </div>
                       </motion.div>
                     ))}
                   </AnimatePresence>
@@ -2810,37 +2840,41 @@ export default function QuoteForm() {
           <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
             {/* Terms & Conditions */}
             <div className="flex-1 space-y-2 [&_input]:text-[inherit] [&_textarea]:text-[inherit]" style={{ fontSize: `${termsFontSize}px` }}>
-              {showNote && (
-                <div className="flex flex-col md:flex-row gap-2 group relative">
-                  <span className="font-bold w-40 shrink-0">
-                    <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={noteHeader} onChange={(e) => setNoteHeader(e.target.value)} />
-                  </span>
-                  <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="relative group/note flex flex-col justify-center">
-                      <textarea
-                        className="w-full outline-none bg-transparent resize-none overflow-hidden"
-                        value={note}
-                        onChange={e => setNote(e.target.value)}
-                        onBlur={() => handleAutoTranslate(note, noteAr, setNoteAr)}
-                        rows={note.split('\n').length || 2}
-                      />
+              {workflowVisibility.bottomNote !== false && (
+                <>
+                  {showNote && (
+                    <div className="flex flex-col md:flex-row gap-2 group relative">
+                      <span className="font-bold w-40 shrink-0">
+                        <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={noteHeader} onChange={(e) => setNoteHeader(e.target.value)} />
+                      </span>
+                      <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="relative group/note flex flex-col justify-center">
+                          <textarea
+                            className="w-full outline-none bg-transparent resize-none overflow-hidden"
+                            value={note}
+                            onChange={e => setNote(e.target.value)}
+                            onBlur={() => handleAutoTranslate(note, noteAr, setNoteAr)}
+                            rows={note.split('\n').length || 2}
+                          />
+                        </div>
+                        <textarea
+                          dir="rtl"
+                          className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
+                          value={noteAr}
+                          onChange={e => setNoteAr(e.target.value)}
+                          rows={noteAr.split('\n').length || 2}
+                        />
+                      </div>
+                      <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-1" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Hide Note" />
                     </div>
-                    <textarea
-                      dir="rtl"
-                      className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
-                      value={noteAr}
-                      onChange={e => setNoteAr(e.target.value)}
-                      rows={noteAr.split('\n').length || 2}
-                    />
-                  </div>
-                  <input type="checkbox" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-1" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Hide Note" />
-                </div>
-              )}
-              {!showNote && (
-                <div className="flex gap-2 print:hidden items-center text-gray-400 italic">
-                  <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Show Note" />
-                  <span>Show Note Section</span>
-                </div>
+                  )}
+                  {!showNote && (
+                    <div className="flex gap-2 print:hidden items-center text-gray-400 italic">
+                      <input type="checkbox" className="cursor-pointer h-4 w-4" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Show Note" />
+                      <span>Show Note Section</span>
+                    </div>
+                  )}
+                </>
               )}
 
               <div className="flex flex-col gap-y-0.5 mt-4">
@@ -3292,18 +3326,52 @@ export default function QuoteForm() {
         </div>
 
         {/* ── ROW CONTROLS COLUMN (outside the form, aligned to each row) ─── */}
-        <div className="shrink-0 print:hidden hidden xl:flex flex-col pt-8">
+        <div className="shrink-0 print:hidden hidden xl:flex flex-col pt-8" data-html2canvas-ignore="true">
           {/* Spacer matching formTopHeight + headerHeight to align with first row */}
           <div style={{ height: formTopHeight + headerHeight }}></div>
           {items.map((item, index) => (
             <div
               key={`ctrl-${item.id}`}
-              className="flex flex-col items-center justify-center gap-1"
+              className="flex flex-col items-center justify-start gap-1 pt-1"
               style={{ height: rowHeights[index] || 40 }}
             >
-              <div className="flex flex-col gap-2 transition-opacity">
-                <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-1" title="Remove Item">
-                  <Trash2 size={16} />
+              <div className="flex flex-col items-center gap-1.5 transition-opacity">
+                {workflowVisibility.internalNotes !== false && (
+                  <div className="relative flex flex-col items-center">
+                    <button
+                      onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
+                      className={`p-0.5 rounded transition-colors ${expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
+                          : item.internal_note ? 'text-amber-500 hover:text-amber-700'
+                            : 'text-gray-400 hover:text-amber-500'
+                        }`}
+                      title={item.internal_note ? 'Edit private note' : 'Add private note'}
+                    >
+                      <StickyNote size={14} />
+                    </button>
+                    
+                    {expandedNoteIndex === index && (
+                      <div className="absolute right-full mr-3 top-0 w-64 bg-amber-50 border border-amber-300 rounded-lg shadow-xl p-2 z-[9999]">
+                        <div className="flex justify-between items-center mb-2 border-b border-amber-200 pb-1">
+                          <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Internal Note</span>
+                          <button onClick={() => setExpandedNoteIndex(null)} className="text-amber-500 hover:text-amber-700">
+                            <X size={14} />
+                          </button>
+                        </div>
+                        <textarea
+                          autoFocus
+                          className="w-full text-sm bg-transparent outline-none resize-none text-amber-900 placeholder:text-amber-400"
+                          placeholder="Type private note..."
+                          value={item.internal_note || ''}
+                          onChange={e => updateItem(index, 'internal_note', e.target.value)}
+                          rows={Math.max(3, (item.internal_note || '').split('\n').length)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
+                  <Trash2 size={14} />
                 </button>
               </div>
             </div>

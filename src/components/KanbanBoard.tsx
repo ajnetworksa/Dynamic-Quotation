@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const STATUSES = ['Draft', 'Sent', 'Approved', 'Invoiced'] as const;
+const STATUSES = ['Draft', 'Sent', 'Accepted', 'Invoiced'] as const;
 type Status = typeof STATUSES[number];
 
 interface Quote {
@@ -92,7 +92,7 @@ export default function KanbanBoard() {
                 <span className={`w-2.5 h-2.5 rounded-full ${
                   status === 'Draft' ? 'bg-gray-400' :
                   status === 'Sent' ? 'bg-blue-500' :
-                  status === 'Approved' ? 'bg-green-500' :
+                  status === 'Accepted' ? 'bg-green-500' :
                   'bg-purple-600'
                 }`} />
                 <h2 className="font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider text-xs">{status}</h2>

@@ -67,7 +67,9 @@ export default function Settings() {
     print: true,
     preparedBy: true,
     showFeatureAccess: true,
-    inspectionProtection: true
+    inspectionProtection: true,
+    internalNotes: true,
+    bottomNote: true
   });
   const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
@@ -1508,6 +1510,8 @@ export default function Settings() {
               { id: 'preparedBy', label: 'Prepared By', desc: 'Show "Prepared By" on documents' },
               { id: 'shareWith', label: 'Share With', desc: 'Show "Share With" panel on quotes' },
               { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
+              { id: 'internalNotes', label: 'Internal Notes', desc: 'Enable private internal notes on quote items' },
+              { id: 'bottomNote', label: 'Bottom Note Section', desc: 'Show terms/conditions note section at page bottom' },
             ].map((btn) => (
               <div
                 key={btn.id}
