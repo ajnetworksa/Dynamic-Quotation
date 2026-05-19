@@ -13,17 +13,25 @@ This document outlines the planned UI/UX improvements and feature upgrades inspi
     - [ ] Selectable and searchable text.
     - [ ] Better multi-page table handling.
     - [ ] Reduced file sizes.
+- [ ] **Page-Break Optimizer**: Add smart height calculations to prevent row clipping during `html2canvas` exports.
 - [ ] **Digital Signatures**: Add a signature pad component for clients to sign quotes digitally.
 
 ## 🤖 AI & Productivity Features
 - [ ] **AI Description Enhancer**: Integrate Gemini/OpenAI to professionalize item descriptions automatically.
 - [ ] **Smart Templates**: Drag-and-drop customization for "Terms & Conditions" using `@dnd-kit`.
 - [ ] **Multi-language Expansion**: Improve the "Translate All" logic with more context-aware AI translations.
+- [ ] **Version Control Diff Viewer**: Side-by-side visual revision comparator highlighting changes between quote versions.
+
+## 📊 Analytics & Automation
+- [ ] **Automated Reminders**: Email/WhatsApp follow-ups for quotes remaining in "Sent" status after X days.
+- [ ] **Interactive Dashboard Analytics**: Financial dashboard displaying conversion rates, sales lifecycles, and revenue pipelines.
+- [ ] **Multicurrency Engine**: Real-time currency conversions with a live exchange rate API.
 
 ## 🔐 Security & Infrastructure
 - [ ] **Passkey Support**: Implement biometric/Passkey login (inspired by Torqvoice).
 - [ ] **Audit Trail**: Detailed logging of quote modifications (Who changed what and when).
 - [ ] **Client Portal**: Secure, unique URLs for customers to view and approve quotes online.
+- [ ] **Payment Gateway Integration**: Direct Stripe or local payment links on the client portal for instant invoice settlement.
 
 ---
 
