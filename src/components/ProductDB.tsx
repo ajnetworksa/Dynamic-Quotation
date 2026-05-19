@@ -27,6 +27,9 @@ export default function ProductDB() {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
+  const [showAddSupplier, setShowAddSupplier] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [isSavingSupplier, setIsSavingSupplier] = useState(false);
 
   useEffect(() => { 
     fetchProducts(); 
@@ -38,6 +41,32 @@ export default function ProductDB() {
       const res = await fetch('/api/suppliers');
       if (res.ok) setSuppliers(await res.json());
     } catch (e) {}
+  };
+
+  const handleAddNewSupplier = async () => {
+    const name = newSupplierName.trim();
+    if (!name) return;
+    setIsSavingSupplier(true);
+    try {
+      const res = await fetch('/api/suppliers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        await fetchSuppliers();
+        setEditForm(m => ({ ...m, supplier_name: name }));
+        setNewSupplierName('');
+        setShowAddSupplier(false);
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Failed to add supplier');
+      }
+    } catch (e) {
+      alert('Network error');
+    } finally {
+      setIsSavingSupplier(false);
+    }
   };
 
   const fetchProducts = async () => {
@@ -60,6 +89,8 @@ export default function ProductDB() {
     });
     setIsAdding(false);
     setEditForm({});
+    setShowAddSupplier(false);
+    setNewSupplierName('');
     fetchProducts();
   };
 
@@ -509,7 +540,7 @@ export default function ProductDB() {
                 {isAdding ? <Plus size={18} className="text-white" /> : <Edit2 size={18} className="text-white" />}
                 <h2 className="text-white font-bold text-base">{isAdding ? 'Add to Product DB' : 'Edit Product'}</h2>
               </div>
-              <button onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); }} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
+              <button onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); setShowAddSupplier(false); setNewSupplierName(''); }} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
             </div>
             {/* Body */}
             <div className="p-6 space-y-4">
@@ -545,17 +576,57 @@ export default function ProductDB() {
                   />
                 </div>
                 <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Supplier Name</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-500">Supplier Name</label>
+                    {!showAddSupplier && (
+                      <button
+                        type="button"
+                        onClick={() => { setShowAddSupplier(true); setNewSupplierName(''); }}
+                        className="flex items-center gap-0.5 text-[10px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
+                      >
+                        <Plus size={11} /> New
+                      </button>
+                    )}
+                  </div>
                   <select
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
                     value={editForm.supplier_name || ''}
                     onChange={e => setEditForm(m => ({ ...m, supplier_name: e.target.value }))}
+                    disabled={showAddSupplier}
                   >
                     <option value="">-- Select Supplier --</option>
                     {suppliers.map(s => (
                       <option key={s.id} value={s.name}>{s.name}</option>
                     ))}
                   </select>
+                  {showAddSupplier && (
+                    <div className="mt-2 flex gap-1.5 items-center p-2 bg-indigo-50 border border-indigo-200 rounded-lg">
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="New supplier name…"
+                        value={newSupplierName}
+                        onChange={e => setNewSupplierName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleAddNewSupplier(); if (e.key === 'Escape') { setShowAddSupplier(false); setNewSupplierName(''); } }}
+                        className="flex-1 px-2 py-1.5 border border-indigo-300 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none min-w-0"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddNewSupplier}
+                        disabled={!newSupplierName.trim() || isSavingSupplier}
+                        className="px-2 py-1.5 bg-indigo-600 text-white rounded text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                      >
+                        {isSavingSupplier ? '…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setShowAddSupplier(false); setNewSupplierName(''); }}
+                        className="p-1.5 text-gray-400 hover:text-gray-600 rounded transition-colors shrink-0"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex gap-3">
@@ -570,14 +641,15 @@ export default function ProductDB() {
                 </div>
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Unit Price</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={editForm.unit_price === undefined ? '' : editForm.unit_price}
-                    onChange={e => setEditForm(m => ({ ...m, unit_price: parseFloat(e.target.value) || 0 }))}
-                  />
+                   <input
+                     type="number"
+                     min="0"
+                     step="0.01"
+                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                     value={editForm.unit_price === undefined ? '' : editForm.unit_price}
+                     onChange={e => setEditForm(m => ({ ...m, unit_price: e.target.value === '' ? undefined : parseFloat(e.target.value) }))}
+                     onBlur={e => { if (e.target.value === '') setEditForm(m => ({ ...m, unit_price: 0 })); }}
+                   />
                 </div>
               </div>
             </div>
@@ -585,7 +657,7 @@ export default function ProductDB() {
             <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end bg-gray-50">
               <button
                 className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg text-sm hover:bg-gray-100 transition-colors"
-                onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); }}
+                onClick={() => { setIsAdding(false); setIsEditing(null); setEditForm({}); setShowAddSupplier(false); setNewSupplierName(''); }}
               >Cancel</button>
               <button
                 className={`px-5 py-2 text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${isAdding ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'}`}
