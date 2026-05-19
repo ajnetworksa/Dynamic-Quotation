@@ -327,3 +327,138 @@
 .dark .hover\:bg-gray-100:hover {
   background-color: var(--color-slate-800) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   QUOTE DOCUMENT — Always render as white paper, immune to ALL dark modes.
+   The printable container uses data-pdf-root="true" (QuoteForm.tsx).
+
+   Two sources of dark mode are handled:
+     1. App dark mode  → .dark class on <html> (controlled by the moon toggle)
+     2. Browser/OS dark mode → prefers-color-scheme: dark media query
+
+   color-scheme: light  tells the browser NEVER to auto-darken form elements
+   (inputs, textareas, date pickers, selects) inside the quote — this is the
+   key fix for the browser-native dark mode problem.
+───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Always force light color-scheme on the quote (fixes browser dark mode) ── */
+[data-pdf-root] {
+  color-scheme: light;
+}
+
+/* ── App dark mode (.dark class) overrides ─────────────────────────────────── */
+.dark [data-pdf-root],
+.dark [data-pdf-root] * {
+  color: inherit;
+}
+
+.dark [data-pdf-root] {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+
+.dark [data-pdf-root] .text-gray-900,
+.dark [data-pdf-root] .text-gray-800,
+.dark [data-pdf-root] .text-gray-700 {
+  color: #111827 !important;
+}
+
+.dark [data-pdf-root] .text-gray-600,
+.dark [data-pdf-root] .text-gray-500 {
+  color: #4b5563 !important;
+}
+
+.dark [data-pdf-root] .text-gray-400 {
+  color: #9ca3af !important;
+}
+
+.dark [data-pdf-root] .bg-white {
+  background-color: #ffffff !important;
+}
+
+.dark [data-pdf-root] .bg-gray-100 {
+  background-color: #f3f4f6 !important;
+}
+
+.dark [data-pdf-root] .bg-gray-50 {
+  background-color: #f9fafb !important;
+}
+
+.dark [data-pdf-root] .border-gray-200 {
+  border-color: #e5e7eb !important;
+}
+
+.dark [data-pdf-root] .border-gray-300 {
+  border-color: #d1d5db !important;
+}
+
+.dark [data-pdf-root] .border-gray-800 {
+  border-color: #1f2937 !important;
+}
+
+.dark [data-pdf-root] input,
+.dark [data-pdf-root] textarea,
+.dark [data-pdf-root] select {
+  background-color: transparent !important;
+  color: #111827 !important;
+}
+
+.dark [data-pdf-root] .hover\:bg-gray-50:hover,
+.dark [data-pdf-root] .hover\:bg-gray-100:hover {
+  background-color: #f9fafb !important;
+}
+
+/* ── OS/Browser dark mode (prefers-color-scheme) overrides ─────────────────── */
+/* Covers users whose browser is in dark mode but the app's .dark class is off  */
+@media (prefers-color-scheme: dark) {
+  [data-pdf-root] {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  [data-pdf-root] .text-gray-900,
+  [data-pdf-root] .text-gray-800,
+  [data-pdf-root] .text-gray-700 {
+    color: #111827 !important;
+  }
+
+  [data-pdf-root] .text-gray-600,
+  [data-pdf-root] .text-gray-500 {
+    color: #4b5563 !important;
+  }
+
+  [data-pdf-root] .text-gray-400 {
+    color: #9ca3af !important;
+  }
+
+  [data-pdf-root] .bg-white {
+    background-color: #ffffff !important;
+  }
+
+  [data-pdf-root] .bg-gray-100 {
+    background-color: #f3f4f6 !important;
+  }
+
+  [data-pdf-root] .bg-gray-50 {
+    background-color: #f9fafb !important;
+  }
+
+  [data-pdf-root] .border-gray-200 {
+    border-color: #e5e7eb !important;
+  }
+
+  [data-pdf-root] .border-gray-300 {
+    border-color: #d1d5db !important;
+  }
+
+  [data-pdf-root] .border-gray-800 {
+    border-color: #1f2937 !important;
+  }
+
+  [data-pdf-root] input,
+  [data-pdf-root] textarea,
+  [data-pdf-root] select {
+    background-color: transparent !important;
+    color: #111827 !important;
+  }
+}
