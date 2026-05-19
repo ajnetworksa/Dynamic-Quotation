@@ -3385,7 +3385,7 @@ export default function QuoteForm() {
           if (!canOverride) return null;
 
           return (
-            <div className="w-[305px] shrink-0 print:hidden hidden xl:flex flex-col pt-8">
+            <div className="w-[305px] shrink-0 print:hidden hidden xl:flex flex-col pt-8" data-light-panel="true">
               {/* Spacer to align with table headers */}
               <div style={{ height: formTopHeight }} className="flex flex-col justify-end">
                 <div className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded-lg shadow-sm z-10 box-border">
