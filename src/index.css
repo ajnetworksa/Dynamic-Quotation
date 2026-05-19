@@ -462,3 +462,114 @@
     color: #111827 !important;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ANALYSIS / MARKUP SIDEBAR — Always render in light mode.
+   Targets the sidebar panel with data-light-panel="true" (QuoteForm.tsx).
+   Applies to both app dark mode (.dark) and browser/OS dark mode.
+───────────────────────────────────────────────────────────────────────────── */
+
+/* Always force light color-scheme on the sidebar (fixes browser dark mode on inputs) */
+[data-light-panel] {
+  color-scheme: light;
+}
+
+/* ── App dark mode (.dark class) ── */
+.dark [data-light-panel] {
+  background-color: transparent !important;
+  color: #111827 !important;
+}
+
+.dark [data-light-panel] .bg-white {
+  background-color: #ffffff !important;
+}
+
+.dark [data-light-panel] .bg-gray-50 {
+  background-color: #f9fafb !important;
+}
+
+.dark [data-light-panel] .bg-gray-100 {
+  background-color: #f3f4f6 !important;
+}
+
+.dark [data-light-panel] .text-gray-900,
+.dark [data-light-panel] .text-gray-800,
+.dark [data-light-panel] .text-gray-700 {
+  color: #111827 !important;
+}
+
+.dark [data-light-panel] .text-gray-600,
+.dark [data-light-panel] .text-gray-500 {
+  color: #4b5563 !important;
+}
+
+.dark [data-light-panel] .text-gray-400 {
+  color: #9ca3af !important;
+}
+
+.dark [data-light-panel] .border-gray-200 {
+  border-color: #e5e7eb !important;
+}
+
+.dark [data-light-panel] .border-gray-800 {
+  border-color: #1f2937 !important;
+}
+
+.dark [data-light-panel] input,
+.dark [data-light-panel] textarea {
+  background-color: transparent !important;
+  color: #111827 !important;
+}
+
+.dark [data-light-panel] .hover\:bg-gray-50:hover {
+  background-color: #f9fafb !important;
+}
+
+/* ── OS/Browser dark mode (prefers-color-scheme) ── */
+@media (prefers-color-scheme: dark) {
+  [data-light-panel] {
+    color: #111827 !important;
+  }
+
+  [data-light-panel] .bg-white {
+    background-color: #ffffff !important;
+  }
+
+  [data-light-panel] .bg-gray-50 {
+    background-color: #f9fafb !important;
+  }
+
+  [data-light-panel] .bg-gray-100 {
+    background-color: #f3f4f6 !important;
+  }
+
+  [data-light-panel] .text-gray-900,
+  [data-light-panel] .text-gray-800,
+  [data-light-panel] .text-gray-700 {
+    color: #111827 !important;
+  }
+
+  [data-light-panel] .text-gray-600,
+  [data-light-panel] .text-gray-500 {
+    color: #4b5563 !important;
+  }
+
+  [data-light-panel] .text-gray-400 {
+    color: #9ca3af !important;
+  }
+
+  [data-light-panel] .border-gray-200 {
+    border-color: #e5e7eb !important;
+  }
+
+  [data-light-panel] .border-gray-800 {
+    border-color: #1f2937 !important;
+  }
+
+  [data-light-panel] input,
+  [data-light-panel] textarea {
+    background-color: transparent !important;
+    color: #111827 !important;
+  }
+}
+
