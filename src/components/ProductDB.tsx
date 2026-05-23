@@ -153,6 +153,37 @@ export default function ProductDB() {
     }
   };
 
+  useEffect(() => {
+    const desc = editForm.description || '';
+    if (!desc || desc === lastTranslatedDesc) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: desc })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.translation) {
+            setEditForm(prev => {
+              if (prev.description === desc) {
+                return { ...prev, description_ar: data.translation };
+              }
+              return prev;
+            });
+            setLastTranslatedDesc(desc);
+          }
+        }
+      } catch (e) {
+        console.error('Debounced translation failed', e);
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [editForm.description, lastTranslatedDesc]);
+
   const tokens = search.toLowerCase().split(/\s+/).filter(t => t.length > 0);
   const normalize = (s: string) => s ? s.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
 

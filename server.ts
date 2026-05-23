@@ -11,13 +11,15 @@
 //   7. .env is listed in .gitignore — never commit real API keys
 // =============================================================================
 
+import React from 'react';
+import { renderToBuffer } from '@react-pdf/renderer';
+import { QuotePdfDocument } from './src/pdf/quote-document.tsx';
 import express from 'express';
 import http from 'http';
 import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import nodemailer from 'nodemailer';
 import path from 'path';
-import puppeteer from 'puppeteer';
 import bcrypt from 'bcrypt';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -29,6 +31,8 @@ import fs from 'fs';
 import { z, ZodSchema } from 'zod';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import ExcelJS from 'exceljs';
+import AdmZip from 'adm-zip';
 const execAsync = promisify(exec);
 // import { GoogleGenerativeAI } from "@google/generative-ai"; // Switched to OpenRouter for better stability
 
@@ -47,7 +51,7 @@ const originalConsoleError = console.error;
 console.error = (...args) => {
   originalConsoleError(...args);
   try {
-    const message = args.map(arg => 
+    const message = args.map(arg =>
       typeof arg === 'object' ? (arg instanceof Error ? arg.stack || arg.message : JSON.stringify(arg)) : String(arg)
     ).join(' ');
     appendToFileLog(`CONSOLE_ERROR | ${message}`);
@@ -147,7 +151,7 @@ const apiLimiter = rateLimit({
 const BCRYPT_ROUNDS = 12;
 
 // Initialize SQLite Database
-const db = new Database('quotes.db');
+let db = new Database('quotes.db');
 db.pragma('journal_mode = WAL'); // Enable Write-Ahead Logging for better concurrency with multiple tabs
 
 
@@ -490,11 +494,11 @@ const validate = (schema: ZodSchema) =>
 
 // ── ZOD SCHEMAS ───────────────────────────────────────────────────────────────
 const CustomerSchema = z.object({
-  name:    z.string().min(1).max(200),
+  name: z.string().min(1).max(200),
   address: z.string().max(500).nullable().optional(),
   contact: z.string().max(200).nullable().optional(),
-  mobile:  z.string().max(50).nullable().optional(),
-  email:   z.string().email().nullable().optional().or(z.literal('')),
+  mobile: z.string().max(50).nullable().optional(),
+  email: z.string().email().nullable().optional().or(z.literal('')),
 });
 
 const SupplierSchema = z.object({
@@ -502,19 +506,19 @@ const SupplierSchema = z.object({
 });
 
 const ProductSchema = z.object({
-  description:    z.string().min(1).max(500),
+  description: z.string().min(1).max(500),
   description_ar: z.string().max(500).optional(),
-  unit:           z.string().max(50).optional(),
-  unit_price:     z.number().nonnegative(),
-  item_code:      z.string().max(100).nullable().optional(),
-  supplier_name:  z.string().max(200).nullable().optional(),
+  unit: z.string().max(50).optional(),
+  unit_price: z.number().nonnegative(),
+  item_code: z.string().max(100).nullable().optional(),
+  supplier_name: z.string().max(200).nullable().optional(),
 });
 
 const UserCreateSchema = z.object({
-  username:    z.string().min(1).max(128),
-  name:        z.string().max(128).optional(),
-  password:    z.string().min(4).max(128),
-  role:        z.enum(['admin', 'user', 'editor']).default('user'),
+  username: z.string().min(1).max(128),
+  name: z.string().max(128).optional(),
+  password: z.string().min(4).max(128),
+  role: z.enum(['admin', 'user', 'editor']).default('user'),
   permissions: z.record(z.string(), z.boolean()).optional().default({}),
 });
 
@@ -524,28 +528,28 @@ const UserUpdateSchema = UserCreateSchema.extend({
 
 const ChangePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
-  newPassword:     z.string().min(4).max(128),
+  newPassword: z.string().min(4).max(128),
 });
 
 const PermissionGroupSchema = z.object({
-  name:        z.string().min(1).max(100),
+  name: z.string().min(1).max(100),
   description: z.string().max(500).optional().default(''),
   permissions: z.record(z.string(), z.boolean()).optional().default({}),
 });
 
 const QuoteItemSchema = z.object({
-  product_id:     z.number().int().nullable().optional(),
-  description:    z.string().max(1000).optional().default(''),
+  product_id: z.number().int().nullable().optional(),
+  description: z.string().max(1000).optional().default(''),
   description_ar: z.string().max(1000).optional(),
-  qty:            z.number().nonnegative().default(1),
-  unit:           z.string().max(50).optional(),
-  unit_price:     z.number().nonnegative().default(0),
-  net_price:      z.number().nonnegative().default(0),
+  qty: z.number().nonnegative().default(1),
+  unit: z.string().max(50).optional(),
+  unit_price: z.number().nonnegative().default(0),
+  net_price: z.number().nonnegative().default(0),
   original_price: z.number().nonnegative().nullable().optional(),
-  manual_price:   z.number().nonnegative().nullable().optional(),
-  internal_note:  z.string().max(2000).nullable().optional(),
-  item_code:      z.string().max(100).nullable().optional(),
-  supplier_name:  z.string().max(200).nullable().optional(),
+  manual_price: z.number().nonnegative().nullable().optional(),
+  internal_note: z.string().max(2000).nullable().optional(),
+  item_code: z.string().max(100).nullable().optional(),
+  supplier_name: z.string().max(200).nullable().optional(),
 });
 
 const QuoteNoteSchema = z.object({
@@ -553,57 +557,57 @@ const QuoteNoteSchema = z.object({
 });
 
 const QuoteSchema = z.object({
-  quote_id:          z.string().min(1).max(50),
-  date:              z.string().min(1),
-  customer_id:       z.number().int().nullable().optional(),
-  subject:           z.string().max(500).optional(),
-  subject_ar:        z.string().max(500).optional(),
-  discount:          z.number().nonnegative().optional().default(0),
-  subtotal:          z.number().nonnegative(),
-  tax:               z.number().nonnegative(),
-  grand_total:       z.number().nonnegative(),
-  vat_rate:          z.number().min(0).max(100).optional().default(15),
-  markup:            z.number().min(0).max(500).optional().default(8),
-  expiry_date:       z.string().nullable().optional(),
-  status:            z.enum(['Draft','Sent','Accepted','Rejected','Invoiced','Cancelled']).optional().default('Draft'),
-  type:              z.enum(['Quotation','Tax Invoice','Proforma']).optional().default('Quotation'),
-  revision_of:       z.string().nullable().optional(),
-  note_header:       z.string().max(100).optional(),
-  note:              z.string().max(5000).optional(),
-  note_ar:           z.string().max(5000).optional(),
-  payment:           z.string().max(1000).optional(),
-  payment_ar:        z.string().max(1000).optional(),
-  warranty:          z.string().max(1000).optional(),
-  warranty_ar:       z.string().max(1000).optional(),
-  manpower:          z.string().max(1000).optional(),
-  manpower_ar:       z.string().max(1000).optional(),
-  mobilization:      z.string().max(1000).optional(),
-  mobilization_ar:   z.string().max(1000).optional(),
-  duration:          z.string().max(1000).optional(),
-  duration_ar:       z.string().max(1000).optional(),
-  bank_details:      z.string().max(2000).optional(),
-  bank_details_ar:   z.string().max(2000).optional(),
-  footer:            z.string().max(2000).optional(),
-  footer_ar:         z.string().max(2000).optional(),
+  quote_id: z.string().min(1).max(50),
+  date: z.string().min(1),
+  customer_id: z.number().int().nullable().optional(),
+  subject: z.string().max(500).optional(),
+  subject_ar: z.string().max(500).optional(),
+  discount: z.number().nonnegative().optional().default(0),
+  subtotal: z.number().nonnegative(),
+  tax: z.number().nonnegative(),
+  grand_total: z.number().nonnegative(),
+  vat_rate: z.number().min(0).max(100).optional().default(15),
+  markup: z.number().min(0).max(500).optional().default(8),
+  expiry_date: z.string().nullable().optional(),
+  status: z.enum(['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled']).optional().default('Draft'),
+  type: z.enum(['Quotation', 'Tax Invoice', 'Proforma']).optional().default('Quotation'),
+  revision_of: z.string().nullable().optional(),
+  note_header: z.string().max(100).optional(),
+  note: z.string().max(5000).optional(),
+  note_ar: z.string().max(5000).optional(),
+  payment: z.string().max(1000).optional(),
+  payment_ar: z.string().max(1000).optional(),
+  warranty: z.string().max(1000).optional(),
+  warranty_ar: z.string().max(1000).optional(),
+  manpower: z.string().max(1000).optional(),
+  manpower_ar: z.string().max(1000).optional(),
+  mobilization: z.string().max(1000).optional(),
+  mobilization_ar: z.string().max(1000).optional(),
+  duration: z.string().max(1000).optional(),
+  duration_ar: z.string().max(1000).optional(),
+  bank_details: z.string().max(2000).optional(),
+  bank_details_ar: z.string().max(2000).optional(),
+  footer: z.string().max(2000).optional(),
+  footer_ar: z.string().max(2000).optional(),
   custom_field_header: z.string().max(100).optional(),
-  custom_field:      z.string().max(5000).optional(),
-  custom_field_ar:   z.string().max(5000).optional(),
-  items:             z.array(QuoteItemSchema).max(500),
-  version:           z.number().int().optional(),
-  author_name:       z.string().max(100).nullable().optional(),
-  author_id:         z.number().int().nullable().optional(),
-  shared_with:       z.object({
-    users:          z.array(z.number().int()).optional().default([]),
-    groups:         z.array(z.number().int()).optional().default([]),
-    canEditUsers:   z.array(z.number().int()).optional().default([]),
-    canEditGroups:  z.array(z.number().int()).optional().default([]),
+  custom_field: z.string().max(5000).optional(),
+  custom_field_ar: z.string().max(5000).optional(),
+  items: z.array(QuoteItemSchema).max(500),
+  version: z.number().int().optional(),
+  author_name: z.string().max(100).nullable().optional(),
+  author_id: z.number().int().nullable().optional(),
+  shared_with: z.object({
+    users: z.array(z.number().int()).optional().default([]),
+    groups: z.array(z.number().int()).optional().default([]),
+    canEditUsers: z.array(z.number().int()).optional().default([]),
+    canEditGroups: z.array(z.number().int()).optional().default([]),
   }).optional(),
-  force:             z.boolean().optional(),
+  force: z.boolean().optional(),
 });
 
 const BulkStatusSchema = z.object({
-  ids:    z.array(z.string().min(1)).min(1).max(500),
-  status: z.enum(['Draft','Sent','Accepted','Rejected','Invoiced','Cancelled']),
+  ids: z.array(z.string().min(1)).min(1).max(500),
+  status: z.enum(['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled']),
 });
 
 const FollowupSchema = z.object({
@@ -612,7 +616,7 @@ const FollowupSchema = z.object({
 });
 
 const SettingSchema = z.object({
-  key:   z.string().min(1).max(100),
+  key: z.string().min(1).max(100),
   // Express body limits protect against abuse; allow large base64 strings
   value: z.string().max(15000000),
 });
@@ -973,7 +977,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
             try {
               const members = JSON.parse(g.members || '[]');
               if (members.includes(currentUser.id)) return true;
-            } catch {}
+            } catch { }
           }
         }
         return false;
@@ -989,7 +993,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           ORDER BY q.id DESC
         `).all()
       : (() => {
-          const owned = db.prepare(`
+        const owned = db.prepare(`
             SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
             FROM quotes q 
             LEFT JOIN customers c ON q.customer_id = c.id
@@ -998,8 +1002,8 @@ app.get('/api/quotes', requireAuth, (req, res) => {
             ORDER BY q.id DESC
           `).all(currentUser.id) as any[];
 
-          // Also fetch quotes shared with this user
-          const all = db.prepare(`
+        // Also fetch quotes shared with this user
+        const all = db.prepare(`
             SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
             FROM quotes q 
             LEFT JOIN customers c ON q.customer_id = c.id
@@ -1008,15 +1012,15 @@ app.get('/api/quotes', requireAuth, (req, res) => {
             ORDER BY q.id DESC
           `).all(currentUser.id) as any[];
 
-          const sharedQuotes = all.filter(q => isSharedWith(q.shared_with));
-          // Merge, deduplicate by quote_id
-          const seen = new Set(owned.map((q: any) => q.quote_id));
-          const merged = [...owned];
-          for (const q of sharedQuotes) {
-            if (!seen.has(q.quote_id)) { merged.push(q); seen.add(q.quote_id); }
-          }
-          return merged.sort((a: any, b: any) => b.id - a.id);
-        })();
+        const sharedQuotes = all.filter(q => isSharedWith(q.shared_with));
+        // Merge, deduplicate by quote_id
+        const seen = new Set(owned.map((q: any) => q.quote_id));
+        const merged = [...owned];
+        for (const q of sharedQuotes) {
+          if (!seen.has(q.quote_id)) { merged.push(q); seen.add(q.quote_id); }
+        }
+        return merged.sort((a: any, b: any) => b.id - a.id);
+      })();
 
     res.json(quotes);
   } catch (error: any) {
@@ -1062,15 +1066,137 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
       if (!isShared && Array.isArray(sw.groups) && sw.groups.length > 0) {
         const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.groups.map(() => '?').join(',') + ')').all(...sw.groups) as any[];
         for (const g of groups) {
-          try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { isShared = true; break; } } catch {}
+          try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { isShared = true; break; } } catch { }
         }
       }
-    } catch {}
+    } catch { }
     if (!isShared) return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
   }
 
   const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id);
   res.json({ ...quote, items });
+});
+
+app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
+  const currentUser = (req as any).user;
+  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+
+  try {
+    const quote = db.prepare(`
+      SELECT q.*, c.name as customer_name, c.address as customer_address, c.contact as customer_contact, c.mobile as customer_mobile, c.email as customer_email,
+             u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+      FROM quotes q
+      LEFT JOIN customers c ON q.customer_id = c.id
+      LEFT JOIN users u ON q.author_id = u.id
+      WHERE q.quote_id = ?
+    `).get(req.params.quote_id) as any;
+
+    if (!quote) return res.status(404).json({ error: 'Quote not found' });
+
+    // Ownership check — block users who don't own this quote and lack elevated access
+    if (!canSeeAll && quote.author_id !== currentUser.id) {
+      let isShared = false;
+      try {
+        const sw = JSON.parse(quote.shared_with || '{}');
+        if (Array.isArray(sw.users) && sw.users.includes(currentUser.id)) isShared = true;
+        if (!isShared && Array.isArray(sw.groups) && sw.groups.length > 0) {
+          const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.groups.map(() => '?').join(',') + ')').all(...sw.groups) as any[];
+          for (const g of groups) {
+            try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { isShared = true; break; } } catch { }
+          }
+        }
+      } catch { }
+      if (!isShared) return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
+    }
+
+    const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id) as any[];
+
+    // Fetch settings key-value pairs
+    const settingsRows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+    const settingsMap: Record<string, string> = {};
+    for (const s of settingsRows) {
+      settingsMap[s.key] = s.value;
+    }
+
+    // Map SQLite quote structure to standard PdfQuote type
+    const pdfQuote = {
+      number: quote.quote_id,
+      createdAt: quote.date,
+      validUntil: quote.expiry_date || null,
+      currency: "SAR", // standard for legacy app
+      subject: quote.subject || "",
+      subjectAr: quote.subject_ar || "",
+      notes: quote.note || "",
+      notesAr: quote.note_ar || "",
+      payment: quote.payment || "",
+      paymentAr: quote.payment_ar || "",
+      warranty: quote.warranty || "",
+      warrantyAr: quote.warranty_ar || "",
+      manpower: quote.manpower || "",
+      manpowerAr: quote.manpower_ar || "",
+      mobilization: quote.mobilization || "",
+      mobilizationAr: quote.mobilization_ar || "",
+      duration: quote.duration || "",
+      durationAr: quote.duration_ar || "",
+      bankDetails: quote.bank_details || "",
+      bankDetailsAr: quote.bank_details_ar || "",
+      subtotal: quote.subtotal || 0,
+      discountTotal: quote.discount || 0,
+      taxTotal: quote.tax || 0,
+      total: quote.grand_total || 0,
+      customer: {
+        company: quote.customer_name || "",
+        contactName: quote.customer_contact || "",
+        email: quote.customer_email || "",
+        phone: quote.customer_mobile || "",
+        address: quote.customer_address || "",
+        city: "",
+        country: "Saudi Arabia",
+      },
+      lines: items.map((it: any) => ({
+        description: it.description || "",
+        descriptionAr: it.description_ar || "",
+        quantity: it.qty || 0,
+        unit: it.unit || "set",
+        unitPrice: it.unit_price || 0,
+        discount: 0,
+      })),
+    };
+
+    // Load custom themes or settings
+    let brandColor = "#039737"; // default green
+    try {
+      const colors = JSON.parse(settingsMap.themeColors || '{}');
+      if (colors.headerBg) brandColor = colors.headerBg;
+    } catch {}
+
+    const pdfSettings = {
+      companyName: "AJ Network Solutions", // default fallback
+      brandColor,
+      taxLabel: `VAT ${quote.vat_rate || 15}%`,
+      logoUrl: settingsMap.logo || null,
+      footerImageUrl: settingsMap.footerImage || null,
+      bankName: "",
+      bankAccount: "",
+      bankIban: "",
+      bankAccountName: "",
+      footerText: settingsMap.footerText || "Thank you for your business!",
+    };
+
+    const buffer = await renderToBuffer(
+      React.createElement(QuotePdfDocument, {
+        quote: pdfQuote,
+        settings: pdfSettings,
+      })
+    );
+
+    res.contentType("application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${quote.quote_id}.pdf`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error('PDF Generation Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate PDF' });
+  }
 });
 
 app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
@@ -1152,27 +1278,27 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
 
 // ── Autosave ──────────────────────────────────────────────────────────────────
 app.post('/api/quotes/autosave', requireAuth, (req, res) => {
-    const { quote_id, draft_data, grand_total } = req.body;
-    if (!quote_id) return res.status(400).json({ error: 'quote_id is required' });
-    
-    try {
-      const currentUser = (req as any).user;
-      const actor = currentUser?.username || 'system';
-      const timestamp = new Date().toISOString();
-      
-      // Check if the quote exists
-      const existing = db.prepare('SELECT id, author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
-      
-      // Ownership check — block autosave to someone else's quote
-      if (existing) {
-        const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-        if (!canSeeAll && existing.author_id !== currentUser.id) {
-          return res.status(403).json({ error: 'Access denied' });
-        }
-      }
+  const { quote_id, draft_data, grand_total } = req.body;
+  if (!quote_id) return res.status(400).json({ error: 'quote_id is required' });
 
-      if (existing) {
-        db.prepare(`
+  try {
+    const currentUser = (req as any).user;
+    const actor = currentUser?.username || 'system';
+    const timestamp = new Date().toISOString();
+
+    // Check if the quote exists
+    const existing = db.prepare('SELECT id, author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+
+    // Ownership check — block autosave to someone else's quote
+    if (existing) {
+      const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+      if (!canSeeAll && existing.author_id !== currentUser.id) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+    }
+
+    if (existing) {
+      db.prepare(`
           UPDATE quotes 
           SET draft_data = ?, 
               subject = COALESCE(?, subject),
@@ -1181,39 +1307,39 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
               grand_total = COALESCE(?, grand_total)
           WHERE quote_id = ?
         `).run(
-          JSON.stringify(draft_data), 
-          draft_data.subject || null, 
-          draft_data.subjectAr || null,
-          draft_data.selectedCustomerId || null,
-          grand_total || null,
-          quote_id
-        );
-      } else {
-        // Create a shell quote row just for the draft — record author_id so ownership is tracked
-        db.prepare(`
+        JSON.stringify(draft_data),
+        draft_data.subject || null,
+        draft_data.subjectAr || null,
+        draft_data.selectedCustomerId || null,
+        grand_total || null,
+        quote_id
+      );
+    } else {
+      // Create a shell quote row just for the draft — record author_id so ownership is tracked
+      db.prepare(`
           INSERT INTO quotes (quote_id, date, status, type, draft_data, subject, subject_ar, customer_id, grand_total, author_id) 
           VALUES (?, ?, 'Draft', 'Quotation', ?, ?, ?, ?, ?, ?)
         `).run(
-          quote_id, 
-          new Date().toISOString().split('T')[0], 
-          JSON.stringify(draft_data),
-          draft_data.subject || null,
-          draft_data.subjectAr || null,
-          draft_data.selectedCustomerId || null,
-          grand_total || null,
-          (req as any).user?.id || null
-        );
-        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
-          quote_id, 'Draft Created (Autosave)', actor, timestamp
-        );
-      } // ← closes if/else
+        quote_id,
+        new Date().toISOString().split('T')[0],
+        JSON.stringify(draft_data),
+        draft_data.subject || null,
+        draft_data.subjectAr || null,
+        draft_data.selectedCustomerId || null,
+        grand_total || null,
+        (req as any).user?.id || null
+      );
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
+        quote_id, 'Draft Created (Autosave)', actor, timestamp
+      );
+    } // ← closes if/else
 
-      res.json({ success: true }); // ← always reached
-    } catch (error) {
-      console.error('Autosave error:', error);
-      res.status(500).json({ error: 'Failed to autosave' });
-    }
-  });
+    res.json({ success: true }); // ← always reached
+  } catch (error) {
+    console.error('Autosave error:', error);
+    res.status(500).json({ error: 'Failed to autosave' });
+  }
+});
 
 app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
   const {
@@ -1261,10 +1387,10 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           if (!canEditAsShared && canEditGroups.length > 0) {
             const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + canEditGroups.map(() => '?').join(',') + ')').all(...canEditGroups) as any[];
             for (const g of groups) {
-              try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { canEditAsShared = true; break; } } catch {}
+              try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { canEditAsShared = true; break; } } catch { }
             }
           }
-        } catch {}
+        } catch { }
         if (!canEditAsShared) {
           return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
         }
@@ -1281,22 +1407,22 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
         ? ((db.prepare('SELECT name FROM customers WHERE id = ?').get(customer_id) as any)?.name ?? null)
         : null;
 
-      const fmt    = (v: any) => (v === null || v === undefined || v === '') ? '—' : String(v);
+      const fmt = (v: any) => (v === null || v === undefined || v === '') ? '—' : String(v);
       const fmtNum = (v: any) => (v === null || v === undefined) ? '—' : Number(v).toLocaleString();
 
       // ── Header field diff ──────────────────────────────────────────────────
       const checks: { label: string; oldVal: string; newVal: string }[] = [
-        { label: 'Customer',    oldVal: fmt(existing.customer_name),  newVal: fmt(newCustomerName) },
-        { label: 'Subject',     oldVal: fmt(existing.subject),        newVal: fmt(subject) },
-        { label: 'Status',      oldVal: fmt(existing.status),         newVal: fmt(status || 'Draft') },
-        { label: 'Type',        oldVal: fmt(existing.type),           newVal: fmt(type || 'Quotation') },
-        { label: 'Date',        oldVal: fmt(existing.date),           newVal: fmt(date) },
-        { label: 'Expiry Date', oldVal: fmt(existing.expiry_date),    newVal: fmt(expiry_date) },
+        { label: 'Customer', oldVal: fmt(existing.customer_name), newVal: fmt(newCustomerName) },
+        { label: 'Subject', oldVal: fmt(existing.subject), newVal: fmt(subject) },
+        { label: 'Status', oldVal: fmt(existing.status), newVal: fmt(status || 'Draft') },
+        { label: 'Type', oldVal: fmt(existing.type), newVal: fmt(type || 'Quotation') },
+        { label: 'Date', oldVal: fmt(existing.date), newVal: fmt(date) },
+        { label: 'Expiry Date', oldVal: fmt(existing.expiry_date), newVal: fmt(expiry_date) },
         { label: 'Grand Total', oldVal: fmtNum(existing.grand_total), newVal: fmtNum(grand_total) },
-        { label: 'Discount',    oldVal: fmtNum(existing.discount),    newVal: fmtNum(discount ?? 0) },
-        { label: 'Note',        oldVal: fmt(existing.note),           newVal: fmt(note) },
-        { label: 'Payment',     oldVal: fmt(existing.payment),        newVal: fmt(payment) },
-        { label: 'Warranty',    oldVal: fmt(existing.warranty),       newVal: fmt(warranty) },
+        { label: 'Discount', oldVal: fmtNum(existing.discount), newVal: fmtNum(discount ?? 0) },
+        { label: 'Note', oldVal: fmt(existing.note), newVal: fmt(note) },
+        { label: 'Payment', oldVal: fmt(existing.payment), newVal: fmt(payment) },
+        { label: 'Warranty', oldVal: fmt(existing.warranty), newVal: fmt(warranty) },
       ];
 
       const changes = checks
@@ -1310,7 +1436,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       ).all(quote_id) as { description: string; qty: number; unit_price: number }[];
 
       const normDesc = (s: string) => (s || '').trim().toLowerCase();
-      const fmtItem  = (desc: string, qty: number, price: number) =>
+      const fmtItem = (desc: string, qty: number, price: number) =>
         `${desc} × ${Number(qty)} @ SAR ${Number(price).toLocaleString()}`;
 
       // Map keyed by normalised description
@@ -1337,13 +1463,13 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       for (const [key, o] of oldMap.entries()) {
         const n = newMap.get(key);
         if (!n) continue;
-        const qtyChanged   = Number(o.qty)        !== Number(n.qty);
-        const priceChanged = Number(o.unit_price)  !== Number(n.unit_price);
+        const qtyChanged = Number(o.qty) !== Number(n.qty);
+        const priceChanged = Number(o.unit_price) !== Number(n.unit_price);
         if (qtyChanged || priceChanged) {
           changes.push({
             field: `Item Changed: ${o.description}`,
             from: `Qty ${o.qty} @ SAR ${Number(o.unit_price).toLocaleString()}`,
-            to:   `Qty ${n.qty} @ SAR ${Number(n.unit_price).toLocaleString()}`,
+            to: `Qty ${n.qty} @ SAR ${Number(n.unit_price).toLocaleString()}`,
           });
         }
       }
@@ -1468,7 +1594,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
   try {
     const quoteId = req.params.quote_id;
     const currentUser = (req as any).user;
-    
+
     // First, check if they are even allowed to view history
     const canViewHistory = currentUser.role === 'admin' || !!currentUser.permissions?.canViewHistory;
     if (!canViewHistory) {
@@ -1529,7 +1655,7 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
     const parsed = JSON.parse(logEntry.previous_state);
     const oldQuote = parsed.quote;
     const oldItems = parsed.items || [];
-    
+
     if (!oldQuote) return res.status(400).json({ error: 'Invalid previous state structure.' });
 
     db.transaction(() => {
@@ -1537,7 +1663,7 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
       const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id');
       const setClause = quoteCols.map(c => `${c} = ?`).join(', ');
       const values = quoteCols.map(c => oldQuote[c]);
-      
+
       db.prepare(`UPDATE quotes SET ${setClause} WHERE quote_id = ?`).run(...values, quote_id);
 
       // Restore items
@@ -1546,7 +1672,7 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
         const itemCols = Object.keys(oldItems[0]).filter(k => k !== 'id');
         const itemPlaceholders = itemCols.map(() => '?').join(', ');
         const insertStmt = db.prepare(`INSERT INTO quote_items (${itemCols.join(', ')}) VALUES (${itemPlaceholders})`);
-        
+
         for (const item of oldItems) {
           const itemVals = itemCols.map(c => item[c]);
           insertStmt.run(...itemVals);
@@ -1612,11 +1738,41 @@ app.get('/api/customers/stats', requireAuth, (req, res) => {
 // ── Database Export / Import ───────────────────────────────────────────────────
 app.get('/api/db/export', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
   try {
-    const customers = db.prepare('SELECT * FROM customers').all();
-    const products = db.prepare('SELECT * FROM products').all();
-    const quotes = db.prepare('SELECT * FROM quotes').all();
-    const quote_items = db.prepare('SELECT * FROM quote_items').all();
-    res.json({ customers, products, quotes, quote_items });
+    // Force a full checkpoint (TRUNCATE) so WAL file is written back to main quotes.db on disk
+    db.pragma('wal_checkpoint(TRUNCATE)');
+
+    const BUSINESS_TABLES = ['customers', 'suppliers', 'products', 'quotes', 'quote_items'];
+    const EXCLUDED_COLUMNS: Record<string, string[]> = {
+      quotes: ['draft_data', 'shared_with']
+    };
+
+    const data: Record<string, any[]> = {};
+    for (const tableName of BUSINESS_TABLES) {
+      // Check if table exists in DB first
+      const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(tableName);
+      if (!exists) continue;
+
+      let rows = db.prepare(`SELECT * FROM ${tableName}`).all() as any[];
+      const excluded = EXCLUDED_COLUMNS[tableName] || [];
+
+      rows = rows.map(row => {
+        const cleanRow = { ...row };
+        // Delete excluded columns
+        for (const col of excluded) {
+          delete cleanRow[col];
+        }
+        // Truncate any extremely long strings to prevent Excel corruption (limit is 32,767)
+        for (const key of Object.keys(cleanRow)) {
+          if (typeof cleanRow[key] === 'string' && cleanRow[key].length > 30000) {
+            cleanRow[key] = cleanRow[key].substring(0, 30000);
+          }
+        }
+        return cleanRow;
+      });
+
+      data[tableName] = rows;
+    }
+    res.json(data);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1627,7 +1783,7 @@ app.get('/api/db/export', requireAuth, requirePermission('canDatabaseMaintenance
 // We override body-parser just for this endpoint using express.json({ limit })
 // as inline middleware before the handler.
 app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
-  const { customers, products, quotes, quote_items } = req.body;
+  const payload = req.body;
   const importErrors: string[] = [];
 
   const logError = (table: string, rowIndex: number, record: any, err: any) => {
@@ -1639,54 +1795,53 @@ app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenanc
 
   try {
     db.transaction(() => {
-      db.prepare('DELETE FROM quote_items').run();
-      db.prepare('DELETE FROM quotes').run();
-      db.prepare('DELETE FROM products').run();
-      db.prepare('DELETE FROM customers').run();
+      const BUSINESS_TABLES = ['customers', 'suppliers', 'products', 'quotes', 'quote_items'];
+      const validTableNames = new Set(BUSINESS_TABLES);
 
-      const insertCustomer = db.prepare('INSERT INTO customers (id, name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?, ?)');
-      (customers || []).forEach((c: any, i: number) => {
-        try {
-          insertCustomer.run(c.id, c.name ?? null, c.address ?? null, c.contact ?? null, c.mobile ?? null, c.email ?? null);
-        } catch (err: any) { logError('customers', i, c, err); throw err; }
-      });
+      // Clear all incoming tables first
+      for (const tableName of Object.keys(payload)) {
+        if (validTableNames.has(tableName)) {
+          db.prepare(`DELETE FROM ${tableName}`).run();
+        }
+      }
 
-      const insertProduct = db.prepare('INSERT INTO products (id, description, description_ar, unit, unit_price) VALUES (?, ?, ?, ?, ?)');
-      (products || []).forEach((p: any, i: number) => {
-        try {
-          insertProduct.run(p.id, p.description ?? null, p.description_ar ?? null, p.unit ?? null, p.unit_price ?? 0);
-        } catch (err: any) { logError('products', i, p, err); throw err; }
-      });
+      // Loop through all tables and dynamically insert rows
+      for (const tableName of Object.keys(payload)) {
+        if (!validTableNames.has(tableName)) continue;
 
-      const insertQuote = db.prepare(`
-        INSERT INTO quotes (
-          id, quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, updated_at,
-          note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar, 
-          mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, markup
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      (quotes || []).forEach((q: any, i: number) => {
-        try {
-          insertQuote.run(
-            q.id, q.quote_id, q.date ?? null, q.customer_id ?? null, q.subject ?? null, q.subject_ar ?? null,
-            q.discount ?? 0, q.subtotal ?? 0, q.tax ?? 0, q.grand_total ?? 0, q.updated_at ?? null,
-            q.note_header ?? 'NOTE:', q.note ?? null, q.note_ar ?? null, q.payment ?? null, q.payment_ar ?? null,
-            q.warranty ?? null, q.warranty_ar ?? null, q.manpower ?? null, q.manpower_ar ?? null,
-            q.mobilization ?? null, q.mobilization_ar ?? null, q.duration ?? null, q.duration_ar ?? null,
-            q.bank_details ?? null, q.bank_details_ar ?? null, q.footer ?? null, q.footer_ar ?? null,
-            q.custom_field_header ?? 'CUSTOM:', q.custom_field ?? null, q.custom_field_ar ?? null,
-            q.status ?? 'Draft', q.type ?? 'Quotation', q.revision_of ?? null, q.author_id ?? null, q.vat_rate ?? 15, q.markup ?? 8
-          );
-        } catch (err: any) { logError('quotes', i, { id: q.id, quote_id: q.quote_id }, err); throw err; }
-      });
+        const rows = payload[tableName];
+        if (!Array.isArray(rows) || rows.length === 0) continue;
 
-      const insertQuoteItem = db.prepare('INSERT INTO quote_items (id, quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      (quote_items || []).forEach((qi: any, i: number) => {
-        try {
-          insertQuoteItem.run(qi.id, qi.quote_id, qi.product_id ?? null, qi.description ?? null, qi.description_ar ?? null, qi.qty ?? 0, qi.unit ?? null, qi.unit_price ?? 0, qi.net_price ?? 0, qi.original_price ?? null, qi.manual_price ?? null);
-        } catch (err: any) { logError('quote_items', i, { id: qi.id, quote_id: qi.quote_id }, err); throw err; }
-      });
+        // Get actual schema columns for the table
+        const tableInfo = db.pragma(`table_info(${tableName})`) as { name: string }[];
+        const validColumns = new Set(tableInfo.map(c => c.name));
+
+        rows.forEach((row: any, i: number) => {
+          try {
+            // Filter out keys from uploaded row that don't actually exist as columns in the DB
+            const rowKeys = Object.keys(row).filter(k => validColumns.has(k));
+            if (rowKeys.length === 0) return;
+
+            const cols = rowKeys.join(', ');
+            const placeholders = rowKeys.map(() => '?').join(', ');
+            const values = rowKeys.map(k => {
+              const val = row[k];
+              if (val && typeof val === 'object') {
+                if (val.result !== undefined) return val.result;
+                if (val instanceof Date) return val.toISOString();
+                return JSON.stringify(val);
+              }
+              return val === undefined ? null : val;
+            });
+
+            const sql = `INSERT INTO ${tableName} (${cols}) VALUES (${placeholders})`;
+            db.prepare(sql).run(...values);
+          } catch (err: any) {
+            logError(tableName, i, row, err);
+            throw err; // Rolled back via transaction
+          }
+        });
+      }
     })();
 
     res.json({ success: true });
@@ -1697,9 +1852,354 @@ app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenanc
 });
 
 // ── Settings / System ─────────────────────────────────────────────────────────
-app.get('/api/admin/backup', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
-  const file = path.resolve(process.cwd(), 'quotes.db');
-  res.download(file, `AJ_Network_DB_Backup_${new Date().toISOString().split('T')[0]}.db`);
+app.get('/api/admin/backup', requireAuth, requirePermission('canDatabaseMaintenance'), async (req, res) => {
+  const tempBackupFile = path.resolve(process.cwd(), `temp_db_backup_${Date.now()}.db`);
+  try {
+    // Perform non-blocking online hot backup using SQLite Backup API
+    await db.backup(tempBackupFile);
+    
+    res.download(tempBackupFile, `AJ_Network_DB_Backup_${new Date().toISOString().split('T')[0]}.db`, (err) => {
+      try {
+        if (fs.existsSync(tempBackupFile)) {
+          fs.unlinkSync(tempBackupFile);
+        }
+      } catch (cleanupError) {
+        console.error('Failed to cleanup temp backup db file:', cleanupError);
+      }
+      if (err) {
+        console.error('Backup download stream error:', err);
+      }
+    });
+  } catch (error: any) {
+    console.error('Failed to run online hot backup:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/admin/backup-zip', requireAuth, requirePermission('canDatabaseMaintenance'), async (req, res) => {
+  const tempDbBackup = path.resolve(process.cwd(), `temp_zip_db_${Date.now()}.db`);
+  const tempFile = path.resolve(process.cwd(), `temp_backup_${Date.now()}.zip`);
+  
+  try {
+    const BUSINESS_TABLES = ['customers', 'suppliers', 'products', 'quotes', 'quote_items'];
+    const EXCLUDED_COLUMNS: Record<string, string[]> = {
+      quotes: ['draft_data', 'shared_with']
+    };
+
+    // 1. Generate clean Excel workbook on the backend
+    const workbook = new ExcelJS.Workbook();
+    for (const tableName of BUSINESS_TABLES) {
+      const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(tableName);
+      if (!exists) continue;
+
+      let rows = db.prepare(`SELECT * FROM ${tableName}`).all() as any[];
+      const excluded = EXCLUDED_COLUMNS[tableName] || [];
+
+      rows = rows.map(row => {
+        const cleanRow = { ...row };
+        for (const col of excluded) {
+          delete cleanRow[col];
+        }
+        for (const key of Object.keys(cleanRow)) {
+          if (typeof cleanRow[key] === 'string' && cleanRow[key].length > 30000) {
+            cleanRow[key] = cleanRow[key].substring(0, 30000);
+          }
+        }
+        return cleanRow;
+      });
+
+      let sheetName = tableName;
+      if (tableName === 'quote_items') sheetName = 'QuoteItems';
+      else sheetName = tableName.charAt(0).toUpperCase() + tableName.slice(1);
+
+      const ws = workbook.addWorksheet(sheetName);
+      if (rows.length > 0) {
+        ws.columns = Object.keys(rows[0]).map(key => ({ header: key, key }));
+        rows.forEach(row => ws.addRow(row));
+      }
+    }
+    
+    // Write workbook to a buffer
+    const excelBuffer = await workbook.xlsx.writeBuffer() as Buffer;
+
+    // 2. Parse Base64 images helper
+    const parseBase64Image = (dataUrl: string | null) => {
+      if (!dataUrl || !dataUrl.startsWith('data:image/')) return null;
+      const matches = dataUrl.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+      if (!matches || matches.length < 3) return null;
+      const ext = matches[1];
+      const base64Data = matches[2];
+      const buffer = Buffer.from(base64Data, 'base64');
+      return { ext, buffer };
+    };
+
+    // 3. Retrieve settings image values
+    const getSettingVal = (key: string): string | null => {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+      return row ? row.value : null;
+    };
+
+    const logoBase64 = getSettingVal('logo');
+    const footerBase64 = getSettingVal('footerImage');
+    const stampBase64 = getSettingVal('stampImage');
+
+    // 4. Build ZIP file using AdmZip
+    const zip = new AdmZip();
+    const dateStr = new Date().toISOString().split('T')[0];
+
+    // Add SQLite database file via safe hot backup
+    await db.backup(tempDbBackup);
+    zip.addLocalFile(tempDbBackup, '', 'quotes.db');
+
+    // Add clean Excel workbook
+    zip.addFile(`AJ_Network_DB_Backup_${dateStr}.xlsx`, excelBuffer);
+
+    // Add company logo image if it exists
+    const logoParsed = parseBase64Image(logoBase64);
+    if (logoParsed) {
+      zip.addFile(`company_logo.${logoParsed.ext}`, logoParsed.buffer);
+    }
+
+    // Add company footer image if it exists
+    const footerParsed = parseBase64Image(footerBase64);
+    if (footerParsed) {
+      zip.addFile(`company_footer.${footerParsed.ext}`, footerParsed.buffer);
+    }
+
+    // Add company stamp image if it exists
+    const stampParsed = parseBase64Image(stampBase64);
+    if (stampParsed) {
+      zip.addFile(`company_stamp.${stampParsed.ext}`, stampParsed.buffer);
+    }
+
+    zip.writeZip(tempFile);
+
+    // Eager clean up of the temp db backup file once zip is written
+    try {
+      if (fs.existsSync(tempDbBackup)) {
+        fs.unlinkSync(tempDbBackup);
+      }
+    } catch (cleanupDbErr) {
+      console.error('Failed to cleanup temp database copy:', cleanupDbErr);
+    }
+
+    res.download(tempFile, `AJ_Network_Full_Backup_${dateStr}.zip`, (err) => {
+      try {
+        if (fs.existsSync(tempFile)) {
+          fs.unlinkSync(tempFile);
+        }
+      } catch (cleanupError) {
+        console.error('Failed to cleanup temp zip file:', cleanupError);
+      }
+      if (err) {
+        console.error('Zip download stream error:', err);
+      }
+    });
+  } catch (error: any) {
+    // Eager cleanup of temp files if zipped compilation fails
+    try {
+      if (fs.existsSync(tempDbBackup)) fs.unlinkSync(tempDbBackup);
+      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+    } catch {}
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── DATABASE OPTIMIZATION ENDPOINT ───────────────────────────────────────────
+app.post('/api/admin/db/optimize', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
+  try {
+    const dbPath = path.resolve(process.cwd(), 'quotes.db');
+    const oldStats = fs.statSync(dbPath);
+
+    // Run safe sqlite maintenance
+    db.prepare('VACUUM').run();
+    db.pragma('optimize');
+
+    const newStats = fs.statSync(dbPath);
+
+    res.json({
+      success: true,
+      oldSize: oldStats.size,
+      newSize: newStats.size,
+      savedBytes: oldStats.size - newStats.size
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── ZIP RESTORE SYSTEM (DISASTER RECOVERY) ───────────────────────────────────
+app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMaintenance'), upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  const tempZipPath = path.resolve(process.cwd(), `temp_restore_${Date.now()}.zip`);
+  const tempExtractDir = path.resolve(process.cwd(), `temp_extract_${Date.now()}`);
+
+  try {
+    // 1. Save uploaded zip stream to a temp file
+    fs.writeFileSync(tempZipPath, req.file.buffer);
+
+    // 2. Extract ZIP archive
+    const zip = new AdmZip(tempZipPath);
+    fs.mkdirSync(tempExtractDir, { recursive: true });
+    zip.extractAllTo(tempExtractDir, true);
+
+    // 3. Verify standard file structure
+    const extractedDbPath = path.join(tempExtractDir, 'quotes.db');
+    if (!fs.existsSync(extractedDbPath)) {
+      throw new Error('Invalid backup archive: master quotes.db file is missing.');
+    }
+
+    // 4. Safely close database connection before replacing the file
+    db.close();
+
+    // 5. Replace DB file with safe automated fallback recovery
+    const mainDbPath = path.resolve(process.cwd(), 'quotes.db');
+    const fallbackDbPath = path.resolve(process.cwd(), 'quotes.db.bak');
+
+    if (fs.existsSync(mainDbPath)) {
+      fs.copyFileSync(mainDbPath, fallbackDbPath);
+    }
+
+    try {
+      fs.copyFileSync(extractedDbPath, mainDbPath);
+      if (fs.existsSync(fallbackDbPath)) {
+        fs.unlinkSync(fallbackDbPath);
+      }
+    } catch (copyErr) {
+      if (fs.existsSync(fallbackDbPath)) {
+        fs.copyFileSync(fallbackDbPath, mainDbPath);
+        fs.unlinkSync(fallbackDbPath);
+      }
+      throw copyErr;
+    }
+
+    // 6. Re-open connection
+    db = new Database('quotes.db');
+    db.pragma('journal_mode = WAL');
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('ZIP System restore failed:', error);
+    // Safety fallback: ensure database connection is re-opened if crashed
+    try {
+      db = new Database('quotes.db');
+      db.pragma('journal_mode = WAL');
+    } catch (reopenErr) {
+      console.error('Critical: Failed to emergency re-open database connection:', reopenErr);
+    }
+    res.status(500).json({ error: error.message });
+  } finally {
+    try {
+      if (fs.existsSync(tempZipPath)) fs.unlinkSync(tempZipPath);
+      if (fs.existsSync(tempExtractDir)) fs.rmSync(tempExtractDir, { recursive: true, force: true });
+    } catch (cleanupErr) {
+      console.error('Failed to cleanup temp restore files:', cleanupErr);
+    }
+  }
+});
+
+// ── ROLLING BACKUPS DIRECTORY & SCHEDULER ─────────────────────────────────────
+const BACKUP_DIR = path.resolve(process.cwd(), 'backups');
+
+const runAutomatedBackup = async () => {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const backupFile = path.join(BACKUP_DIR, `auto_backup_${dateStr}.db`);
+
+    console.log(`[Scheduler] Initiating daily hot online backup to: ${backupFile}`);
+    await db.backup(backupFile);
+    console.log('[Scheduler] Hot backup complete.');
+
+    // 7-day retention filter
+    const files = fs.readdirSync(BACKUP_DIR);
+    const backupFiles = files
+      .filter(f => f.startsWith('auto_backup_') && f.endsWith('.db'))
+      .map(f => ({
+        name: f,
+        path: path.join(BACKUP_DIR, f),
+        time: fs.statSync(path.join(BACKUP_DIR, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.time - a.time); // newest first
+
+    if (backupFiles.length > 7) {
+      const toDelete = backupFiles.slice(7);
+      toDelete.forEach(file => {
+        try {
+          fs.unlinkSync(file.path);
+          console.log(`[Scheduler] Purged old daily rolling backup: ${file.name}`);
+        } catch (delErr) {
+          console.error(`[Scheduler] Failed to purge backup: ${file.name}`, delErr);
+        }
+      });
+    }
+  } catch (error) {
+    console.error('[Scheduler] Rolling daily backup failed:', error);
+  }
+};
+
+// Start daily backups scheduler
+setTimeout(() => {
+  runAutomatedBackup();
+}, 5000); // 5 seconds after launch to ensure startup completes
+
+// Schedule backup to run every 24 hours
+setInterval(runAutomatedBackup, 24 * 60 * 60 * 1000);
+
+// Endpoints for managing rolling backups
+app.get('/api/admin/backups/list', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      return res.json([]);
+    }
+    const files = fs.readdirSync(BACKUP_DIR);
+    const backups = files
+      .filter(f => f.startsWith('auto_backup_') && f.endsWith('.db'))
+      .map(f => {
+        const stats = fs.statSync(path.join(BACKUP_DIR, f));
+        return {
+          filename: f,
+          size: stats.size,
+          createdAt: stats.mtime.toISOString()
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    res.json(backups);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/admin/backups/trigger-auto', requireAuth, requirePermission('canDatabaseMaintenance'), async (req, res) => {
+  try {
+    await runAutomatedBackup();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/admin/backups/download/:filename', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!filename.startsWith('auto_backup_') || !filename.endsWith('.db') || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid filename' });
+    }
+    const file = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(file)) {
+      return res.status(404).json({ error: 'Backup file not found' });
+    }
+    res.download(file, filename);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get('/api/settings/:key', requireAuth, (req, res) => {
@@ -1806,7 +2306,7 @@ app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) 
   try {
     const base64Data = req.file.buffer.toString('base64');
     const mimeType = req.file.mimetype;
-    
+
     const messages = [
       {
         role: "user",
@@ -1815,11 +2315,11 @@ app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) 
           {
             type: "text",
             text: "You are a professional estimator. Extract line items from this Request for Quotation (RFQ) document. " +
-                  "Return a JSON array ONLY, where each object has: " +
-                  "1. 'description' (string, the name or details of the product/service), " +
-                  "2. 'qty' (number, the requested quantity), " +
-                  "3. 'unit' (string, the unit of measure like 'pcs', 'ls', 'meters'). " +
-                  "Do not include any other markdown formatting or conversational text, just the raw JSON array."
+              "Return a JSON array ONLY, where each object has: " +
+              "1. 'description' (string, the name or details of the product/service), " +
+              "2. 'qty' (number, the requested quantity), " +
+              "3. 'unit' (string, the unit of measure like 'pcs', 'ls', 'meters'). " +
+              "Do not include any other markdown formatting or conversational text, just the raw JSON array."
           },
           {
             type: "image_url",
@@ -1839,7 +2339,7 @@ app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) 
     });
 
     const aiRes = response.choices[0]?.message?.content || '[]';
-    
+
     let cleaned = aiRes.trim();
     // Strip out <think> blocks common in DeepSeek R1 and other reasoning models
     cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
@@ -1869,7 +2369,7 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
 
   try {
     const products = db.prepare('SELECT id, description, unit_price FROM products').all() as any[];
-    
+
     const mimeType = req.file.mimetype;
     const isImage = mimeType.startsWith('image/');
 
@@ -1903,7 +2403,7 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
       messages: messages,
       temperature: 0.1,
     });
-    
+
     let text = response.choices[0]?.message?.content || '[]';
     text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     if (text.toLowerCase().startsWith('```json')) text = text.substring(7);
@@ -1932,7 +2432,7 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
         const iModel = (item.model || '').toLowerCase();
         return iModel && (pDesc.includes(iModel) || iModel.includes(pDesc));
       });
-      
+
       return {
         id: match?.id,
         description: match ? match.description : `[NO MATCH] ${item.model}`,
@@ -1988,13 +2488,13 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
       Table Quote_Items (id INTEGER, quote_id TEXT, product_id INTEGER, description TEXT, qty REAL, unit_price REAL, net_price REAL, original_price REAL, manual_price REAL);
     `;
 
-    const userInstructions = canSeeAll 
+    const userInstructions = canSeeAll
       ? "You are an admin and can view all data."
       : `IMPORTANT: You are user ID ${currentUser.id}. You MUST strictly include "WHERE author_id = ${currentUser.id}" in every query involving the Quotes table to ensure you only see your own data. If joining with Quote_Items, ensure you filter the parent Quote row by author_id.`;
 
     // Phase 1: Generate SQL formulation
     const sqlResponse = await openai.chat.completions.create({
-      model: "openrouter/free", 
+      model: "openrouter/free",
       messages: [
         {
           role: "system",
@@ -2006,7 +2506,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
     });
 
     const query = sqlResponse.choices[0]?.message?.content?.trim() || "";
-    
+
     let cleanedQuery = query.trim();
     // Strip out <think> blocks common in DeepSeek R1 and other reasoning models
     cleanedQuery = cleanedQuery.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
@@ -2018,14 +2518,14 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
 
     // --- Critical Security Guardrails ---
     const forbiddenPatterns = [
-      /users/i, /settings/i, /activity_log/i, 
+      /users/i, /settings/i, /activity_log/i,
       /sqlite_master/i, /sqlite_schema/i, /sqlite_temp/i,
       /pragma/i, /insert\s/i, /update\s/i, /delete\s/i, /drop\s/i, /alter\s/i,
       /;\s*select/i // prevent stacked queries
     ];
 
     if (
-      cleanedQuery === 'INVALID' || 
+      cleanedQuery === 'INVALID' ||
       !cleanedQuery.toUpperCase().startsWith('SELECT') ||
       forbiddenPatterns.some(p => p.test(cleanedQuery)) ||
       (!canSeeAll && !cleanedQuery.includes(`author_id = ${currentUser.id}`))
@@ -2119,11 +2619,11 @@ app.get('/api/system/update-status', requireAuth, requireAdmin, async (req, res)
   try {
     // 1. Fetch latest from remote
     await execAsync('git fetch origin main');
-    
+
     // 2. Get local and remote hashes
     const { stdout: localHash } = await execAsync('git rev-parse HEAD');
     const { stdout: remoteHash } = await execAsync('git rev-parse origin/main');
-    
+
     // 3. Get last 5 commit messages from remote to show what's new
     const { stdout: changelog } = await execAsync('git log HEAD..origin/main --oneline -n 5');
 
@@ -2142,7 +2642,7 @@ app.get('/api/system/update-status', requireAuth, requireAdmin, async (req, res)
 app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
   try {
     console.log('🚀 Starting system update...');
-    
+
     // 1. Fetch latest changes from remote
     console.log('Fetching latest commits from remote origin/main...');
     await execAsync('git fetch origin main');
@@ -2167,9 +2667,9 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
     console.log('🛠 Building frontend...');
     await execAsync('npm run build');
 
-    res.json({ 
-      success: true, 
-      message: 'System updated and rebuilt successfully. Restarting now...' 
+    res.json({
+      success: true,
+      message: 'System updated and rebuilt successfully. Restarting now...'
     });
 
     // 6. Graceful exit to let PM2/tsx restart the server
@@ -2198,7 +2698,7 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { 
+      server: {
         middlewareMode: true,
         hmr: { server: httpServer }
       },

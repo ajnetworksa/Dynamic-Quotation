@@ -1,12 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield } from 'lucide-react';
+import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 const APP_VERSION = '1.3.1';
 
 export default function Settings() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [zipStatus, setZipStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [importStatus, setImportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [optimizeStatus, setOptimizeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [optimizeResult, setOptimizeResult] = useState<{ oldSize: number; newSize: number; savedBytes: number } | null>(null);
+  const [restoreStatus, setRestoreStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [autoBackups, setAutoBackups] = useState<any[]>([]);
+  const [autoBackupsLoading, setAutoBackupsLoading] = useState(false);
   const [logoStatus, setLogoStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [currentLogo, setCurrentLogo] = useState<string | null>(null);
   const [logoSize, setLogoSize] = useState<number>(24); // default 24 (h-24)
@@ -76,6 +82,10 @@ export default function Settings() {
   // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
   const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
   const [rowReorderStatus, setRowReorderStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // PDF Generation Engine
+  const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('server');
+  const [pdfSystemStatus, setPdfSystemStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Developer mode
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
@@ -179,6 +189,11 @@ export default function Settings() {
       .then(data => { if (data.value) setRowReorderMode(data.value as 'click' | 'drag'); })
       .catch(console.error);
 
+    fetch('/api/settings/pdfSystem')
+      .then(res => res.json())
+      .then(data => { if (data.value) setPdfSystem(data.value as 'client' | 'server'); })
+      .catch(console.error);
+
     fetch('/api/settings/workflowVisibility')
       .then(res => res.json())
       .then(data => { if (data.value) setWorkflowVisibility(JSON.parse(data.value)); })
@@ -207,8 +222,9 @@ export default function Settings() {
       .then(data => { if (data.url) setRemoteUrl(data.url); })
       .catch(console.error);
 
-    if (user.role === 'admin') {
+    if (user.role === 'admin' || user.permissions?.canDatabaseMaintenance) {
       fetchLogs();
+      fetchAutoBackups();
     }
   }, []);
 
@@ -284,10 +300,17 @@ export default function Settings() {
         }
       };
 
-      addSheet('Customers', data.customers || []);
-      addSheet('Products', data.products || []);
-      addSheet('Quotes', data.quotes || []);
-      addSheet('QuoteItems', data.quote_items || []);
+      // Dynamically add worksheets for every table returned in the database backup
+      Object.keys(data).forEach(tableName => {
+        let sheetName = tableName;
+        if (tableName === 'quote_items') sheetName = 'QuoteItems';
+        else if (tableName === 'activity_log') sheetName = 'ActivityLog';
+        else if (tableName === 'system_logs') sheetName = 'SystemLogs';
+        else if (tableName === 'permission_groups') sheetName = 'PermissionGroups';
+        else sheetName = tableName.charAt(0).toUpperCase() + tableName.slice(1);
+        
+        addSheet(sheetName, data[tableName] || []);
+      });
 
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -344,17 +367,17 @@ export default function Settings() {
           return rows;
         };
 
-        const customersSheet = workbook.getWorksheet('Customers');
-        if (customersSheet) payload.customers = sheetToJson(customersSheet);
-
-        const productsSheet = workbook.getWorksheet('Products');
-        if (productsSheet) payload.products = sheetToJson(productsSheet);
-
-        const quotesSheet = workbook.getWorksheet('Quotes');
-        if (quotesSheet) payload.quotes = sheetToJson(quotesSheet);
-
-        const quoteItemsSheet = workbook.getWorksheet('QuoteItems');
-        if (quoteItemsSheet) payload.quote_items = sheetToJson(quoteItemsSheet);
+        // Dynamically extract every sheet in the Excel workbook and map back to lowercase database tables
+        workbook.eachSheet((sheet) => {
+          const sheetName = sheet.name;
+          let tableName = sheetName.toLowerCase();
+          if (sheetName === 'QuoteItems') tableName = 'quote_items';
+          else if (sheetName === 'ActivityLog') tableName = 'activity_log';
+          else if (sheetName === 'SystemLogs') tableName = 'system_logs';
+          else if (sheetName === 'PermissionGroups') tableName = 'permission_groups';
+          
+          payload[tableName] = sheetToJson(sheet);
+        });
 
         const res = await fetch('/api/db/import', {
           method: 'POST',
@@ -587,6 +610,21 @@ export default function Settings() {
     setTimeout(() => setRowReorderStatus('idle'), 2000);
   };
 
+  const handlePdfSystemToggle = async (val: 'client' | 'server') => {
+    setPdfSystem(val);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key: 'pdfSystem', value: val })
+      });
+      setPdfSystemStatus('success');
+    } catch {
+      setPdfSystemStatus('error');
+    }
+    setTimeout(() => setPdfSystemStatus('idle'), 2000);
+  };
+
   const handleDevModeToggle = async (val: boolean) => {
     setDeveloperMode(val);
     localStorage.setItem('developerMode', String(val)); // instant effect for open QuoteForm tabs
@@ -622,6 +660,158 @@ export default function Settings() {
     } catch (error) {
       console.error('Download error:', error);
       alert('Error downloading backup');
+    }
+  };
+
+  const handleDownloadZipBackup = async () => {
+    setZipStatus('loading');
+    try {
+      const res = await fetch('/api/admin/backup-zip', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        alert(`Failed to download ZIP backup: ${errorData.error}`);
+        setZipStatus('error');
+        setTimeout(() => setZipStatus('idle'), 5000);
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `AJ_Network_Full_Backup_${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setZipStatus('success');
+      setTimeout(() => setZipStatus('idle'), 3000);
+    } catch (error) {
+      console.error('Download error:', error);
+      setZipStatus('error');
+      setTimeout(() => setZipStatus('idle'), 5000);
+    }
+  };
+
+  const fetchAutoBackups = async () => {
+    setAutoBackupsLoading(true);
+    try {
+      const res = await fetch('/api/admin/backups/list', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAutoBackups(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch automated backups list:', err);
+    } finally {
+      setAutoBackupsLoading(false);
+    }
+  };
+
+  const handleTriggerAutoBackup = async () => {
+    try {
+      const res = await fetch('/api/admin/backups/trigger-auto', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        fetchAutoBackups();
+        alert('Daily backup snapshot created successfully!');
+      } else {
+        alert('Failed to trigger daily backup snapshot.');
+      }
+    } catch (err) {
+      console.error('Error triggering daily backup snapshot:', err);
+    }
+  };
+
+  const handleDownloadAutoBackup = async (filename: string) => {
+    try {
+      const res = await fetch(`/api/admin/backups/download/${filename}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (!res.ok) {
+        alert('Failed to download automated backup file.');
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Error downloading automated backup:', err);
+    }
+  };
+
+  const handleOptimizeDB = async () => {
+    setOptimizeStatus('loading');
+    setOptimizeResult(null);
+    try {
+      const res = await fetch('/api/admin/db/optimize', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setOptimizeResult(data);
+        setOptimizeStatus('success');
+        setTimeout(() => setOptimizeStatus('idle'), 5000);
+      } else {
+        setOptimizeStatus('error');
+        setTimeout(() => setOptimizeStatus('idle'), 5000);
+      }
+    } catch (err) {
+      console.error('Database optimization error:', err);
+      setOptimizeStatus('error');
+      setTimeout(() => setOptimizeStatus('idle'), 5000);
+    }
+  };
+
+  const handleRestoreZip = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm('CRITICAL WARNING: Restoring from a Complete System Archive (ZIP) will completely overwrite your current database and settings. This cannot be undone. Are you sure you want to proceed?')) {
+      e.target.value = '';
+      return;
+    }
+
+    setRestoreStatus('loading');
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/admin/restore-zip', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: formData
+      });
+      if (res.ok) {
+        setRestoreStatus('success');
+        alert('System restored successfully! The page will now reload to apply all restored database changes.');
+        window.location.reload();
+      } else {
+        const errorData = await res.json();
+        alert(`System restore failed: ${errorData.error || 'Unknown error'}`);
+        setRestoreStatus('error');
+        setTimeout(() => setRestoreStatus('idle'), 5000);
+      }
+    } catch (err) {
+      console.error('ZIP restore error:', err);
+      alert('System restore failed due to a network error.');
+      setRestoreStatus('error');
+      setTimeout(() => setRestoreStatus('idle'), 5000);
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -738,6 +928,32 @@ export default function Settings() {
             >
               <Database size={18} /> Download Master File
             </button>
+
+            <h3 className="text-lg font-medium text-purple-900 mt-8 mb-2">Complete System Archive (ZIP Backup)</h3>
+            <p className="text-gray-600 mb-4 text-sm">
+              Download a comprehensive `.zip` package containing your raw database (`quotes.db`), the clean Excel spreadsheet data, and all uploaded company logos, footers, and stamps as actual image files.
+            </p>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={handleDownloadZipBackup}
+                disabled={zipStatus === 'loading'}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-70"
+              >
+                {zipStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                {zipStatus === 'loading' ? 'Archiving...' : 'Download ZIP Backup'}
+              </button>
+
+              {zipStatus === 'success' && (
+                <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                  <CheckCircle2 size={16} /> Archive created successfully
+                </span>
+              )}
+              {zipStatus === 'error' && (
+                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                  <XCircle size={16} /> Failed to create archive
+                </span>
+              )}
+            </div>
           </div>
 
           <hr className="border-gray-200" />
@@ -782,6 +998,141 @@ export default function Settings() {
                 </span>
               )}
             </div>
+          </div>
+
+          <hr className="border-gray-200" />
+
+          {/* ZIP Restore Section */}
+          <div>
+            <h3 className="text-lg font-medium text-purple-900 mb-2 flex items-center gap-2">
+              ZIP Restore System (Complete Disaster Recovery)
+              <AlertTriangle size={18} className="text-purple-500" />
+            </h3>
+            <p className="text-gray-600 mb-4 text-sm">
+              Upload a previously generated system archive `.zip` to restore the complete master database, brand setups, and media assets in a single step.
+              <strong className="text-red-600 block mt-1">Warning: This completely overwrites all current system quotes, supplier lists, and configuration settings.</strong>
+            </p>
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".zip"
+                  onChange={handleRestoreZip}
+                  disabled={restoreStatus === 'loading'}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                />
+                <button
+                  disabled={restoreStatus === 'loading'}
+                  className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
+                >
+                  {restoreStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                  {restoreStatus === 'loading' ? 'Restoring System...' : 'Upload ZIP Backup Archive'}
+                </button>
+              </div>
+              {restoreStatus === 'success' && (
+                <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                  <CheckCircle2 size={16} /> Restore successful! Reloading...
+                </span>
+              )}
+              {restoreStatus === 'error' && (
+                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                  <XCircle size={16} /> Restore failed
+                </span>
+              )}
+            </div>
+          </div>
+
+          <hr className="border-gray-200" />
+
+          {/* Database Maintenance & Compaction */}
+          <div>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">Optimize & Compact Database</h3>
+            <p className="text-gray-600 mb-4 text-sm">
+              Rebuild indices, defragment, and vacuum the underlying SQLite database to reduce file size and speed up system searches.
+            </p>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={handleOptimizeDB}
+                disabled={optimizeStatus === 'loading'}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50"
+              >
+                {optimizeStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                {optimizeStatus === 'loading' ? 'Compacting...' : 'Run Database Compaction'}
+              </button>
+              
+              {optimizeStatus === 'success' && optimizeResult && (
+                <div className="text-sm font-medium text-emerald-600">
+                  <div className="flex items-center gap-1">
+                    <CheckCircle2 size={16} /> Compaction complete!
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5 font-normal">
+                    Saved {(optimizeResult.savedBytes / 1024).toFixed(1)} KB (Old size: {(optimizeResult.oldSize / 1024).toFixed(0)} KB → New size: {(optimizeResult.newSize / 1024).toFixed(0)} KB)
+                  </div>
+                </div>
+              )}
+              {optimizeStatus === 'error' && (
+                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                  <XCircle size={16} /> Optimization failed
+                </span>
+              )}
+            </div>
+          </div>
+
+          <hr className="border-gray-200" />
+
+          {/* Rolling Daily Backups with Retention */}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">Rolling Daily Backups</h3>
+                <p className="text-gray-600 text-sm mt-0.5">
+                  Automatic non-blocking rolling backup snapshots taken daily. The system keeps the last 7 days of backups.
+                </p>
+              </div>
+              <button
+                onClick={handleTriggerAutoBackup}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-lg transition-colors border border-gray-200"
+              >
+                <RefreshCw size={14} /> Trigger Today's Snapshot
+              </button>
+            </div>
+
+            {autoBackupsLoading ? (
+              <div className="flex items-center justify-center py-6 text-gray-400 gap-2">
+                <Loader2 size={20} className="animate-spin" />
+                <span className="text-sm">Loading rolling backups list...</span>
+              </div>
+            ) : autoBackups.length === 0 ? (
+              <div className="text-center py-6 border-2 border-dashed border-gray-100 rounded-xl text-gray-400 text-sm">
+                No rolling daily backups available yet.
+              </div>
+            ) : (
+              <div className="border border-gray-200 rounded-xl overflow-hidden bg-gray-50 divide-y divide-gray-200 max-h-60 overflow-y-auto">
+                {autoBackups.map((bk) => (
+                  <div key={bk.filename} className="flex items-center justify-between p-3 text-sm hover:bg-white transition-colors">
+                    <div className="flex items-center gap-3">
+                      <Database className="text-gray-400" size={18} />
+                      <div>
+                        <div className="font-semibold text-gray-800 font-mono text-xs">{bk.filename}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          Created: {new Date(bk.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <span className="text-xs text-gray-500 font-medium">{(bk.size / 1024).toFixed(0)} KB</span>
+                      <button
+                        onClick={() => handleDownloadAutoBackup(bk.filename)}
+                        className="p-1.5 bg-white text-indigo-600 hover:text-indigo-800 rounded-lg hover:shadow-sm border border-gray-200 transition-all"
+                        title="Download Snapshot"
+                      >
+                        <Download size={15} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1536,6 +1887,61 @@ export default function Settings() {
             {workflowStatus === 'loading' && <Loader2 size={16} className="animate-spin text-indigo-600" />}
             {workflowStatus === 'success' && <span className="text-emerald-600 text-xs font-semibold flex items-center gap-1"><CheckCircle2 size={14} /> Workflow settings updated</span>}
             {workflowStatus === 'error' && <span className="text-red-600 text-xs font-semibold flex items-center gap-1"><XCircle size={14} /> Failed to save settings</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* PDF Generation Engine */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+            <FileText size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">PDF Generation Engine</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Select the PDF generator to use for exporting Quotations</p>
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div
+              onClick={() => handlePdfSystemToggle('client')}
+              className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                pdfSystem === 'client' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Monitor size={18} className={pdfSystem === 'client' ? 'text-indigo-600' : 'text-gray-400'} />
+                  <span className="font-semibold text-gray-800">Legacy Canvas (Client)</span>
+                </div>
+                {pdfSystem === 'client' && <CheckCircle2 size={18} className="text-indigo-600" />}
+              </div>
+              <p className="text-sm text-gray-500">
+                Uses the old html2canvas method. Prints exactly as it appears on screen but may be blurry and not selectable.
+              </p>
+            </div>
+            <div
+              onClick={() => handlePdfSystemToggle('server')}
+              className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                pdfSystem === 'server' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Server size={18} className={pdfSystem === 'server' ? 'text-indigo-600' : 'text-gray-400'} />
+                  <span className="font-semibold text-gray-800">Modern React-PDF (Server)</span>
+                </div>
+                {pdfSystem === 'server' && <CheckCircle2 size={18} className="text-indigo-600" />}
+              </div>
+              <p className="text-sm text-gray-500">
+                Uses @react-pdf/renderer. Generates crystal clear, vector-based PDFs with searchable text and perfect Arabic support.
+              </p>
+            </div>
+          </div>
+          <div className="h-5 mt-3">
+            {pdfSystemStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> System preference saved</span>}
+            {pdfSystemStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save preference</span>}
           </div>
         </div>
       </div>

@@ -170,6 +170,7 @@ export default function QuoteForm() {
   const [addCustomerModal, setAddCustomerModal] = useState<{ name: string; mobile: string; address: string; contact: string; email: string; isSaving?: boolean } | null>(null);
   // Rows currently being translated (shows inline indicator)
   const [translatingRows, setTranslatingRows] = useState<Set<number>>(new Set());
+  const [isGeneratingServerPDF, setIsGeneratingServerPDF] = useState(false);
   // Which row has its private note expanded (null = none)
   const [expandedNoteIndex, setExpandedNoteIndex] = useState<number | null>(null);
 
@@ -1691,6 +1692,35 @@ export default function QuoteForm() {
     window.print();
   };
 
+  const handleServerPDF = async () => {
+    if (!quoteId) return alert('Please save the quote first before exporting.');
+    setIsGeneratingServerPDF(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/quotes/${quoteId}/pdf`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!response.ok) {
+        throw new Error('Failed to generate PDF on server');
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${quoteId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(`PDF Generation error: ${err.message}`);
+    } finally {
+      setIsGeneratingServerPDF(false);
+    }
+  };
+
   // ── PDF EXPORT ────────────────────────────────────────────────────────────
   // Uses html2canvas to take a screenshot of the quote and then embeds it into
   // a jsPDF document at A4 size.
@@ -1817,15 +1847,102 @@ export default function QuoteForm() {
             el.style.width = '100%';
             el.style.margin = '0 auto';
             el.style.display = 'grid';
+            el.style.alignItems = 'stretch';
           });
 
-          // Set A4 minHeight on root container so footer (mt-auto) is pushed to the page bottom
+          // Explicitly align row heights and center numeric/unit columns in cloned document by measuring the live original DOM
+          const clonedRows = clonedDoc.querySelectorAll('div[data-row-index]');
+          clonedRows.forEach((clonedRow: any, rIdx: number) => {
+            const cells = clonedRow.children[0]?.children;
+            if (!cells || cells.length < 6) return;
+
+            const originalRow = printRef.current?.querySelectorAll('div[data-row-index]')[rIdx];
+            const originalCells = originalRow?.children[0]?.children;
+            const originalDescCell = originalCells?.[1] as HTMLElement | null;
+
+            if (originalDescCell) {
+              const h = originalDescCell.offsetHeight || originalDescCell.getBoundingClientRect().height;
+              if (h > 0) {
+                Array.from(cells).forEach((cell: any, cIdx: number) => {
+                  if (cIdx !== 1) {
+                    cell.style.height = `${h}px`;
+                    cell.style.display = 'flex';
+                    cell.style.alignItems = 'center';
+                    cell.style.justifyContent = 'center';
+                  } else {
+                    cell.style.height = `${h}px`;
+                  }
+                });
+              }
+            }
+          });
+
+          // Set A4 minHeight on root container to exactly match the required number of A4 pages
           const pdfRoot = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement | null;
           if (pdfRoot) {
-            const w = pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width;
-            pdfRoot.style.minHeight = `${w * (297 / 210)}px`;
+            const originalRoot = printRef.current;
+            const w = originalRoot ? (originalRoot.offsetWidth || originalRoot.getBoundingClientRect().width) : (pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width);
+            const singlePageHeight = w * (297 / 210);
+
+            if (originalRoot) {
+              // A helper to get the cumulative offsetTop of any element relative to originalRoot
+              const getRelativeTop = (el: HTMLElement) => {
+                let top = 0;
+                let current: HTMLElement | null = el;
+                while (current && current !== originalRoot) {
+                  top += current.offsetTop || 0;
+                  current = current.offsetParent as HTMLElement | null;
+                }
+                return top;
+              };
+
+              // Query all printable rows and blocks that should NOT be split across pages
+              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+              const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+
+              let accumulatedSpacerHeight = 0;
+
+              clonedBreakables.forEach((clonedEl: any, idx: number) => {
+                const originalEl = originalBreakables[idx] as HTMLElement | null;
+                if (!originalEl) return;
+
+                const relativeTop = getRelativeTop(originalEl) + accumulatedSpacerHeight;
+                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
+                const relativeBottom = relativeTop + elementHeight;
+
+                const pageOfTop = Math.floor(relativeTop / singlePageHeight);
+                const pageOfBottom = Math.floor(relativeBottom / singlePageHeight);
+
+                if (pageOfTop !== pageOfBottom && elementHeight < singlePageHeight) {
+                  // Element crosses an A4 page boundary! Push it completely to the next page
+                  const nextPageStart = (pageOfTop + 1) * singlePageHeight;
+                  const spacerHeight = nextPageStart - relativeTop;
+
+                  if (spacerHeight > 0) {
+                    const spacer = clonedDoc.createElement('div');
+                    spacer.style.height = `${spacerHeight}px`;
+                    spacer.style.width = '100%';
+                    spacer.style.backgroundColor = 'transparent';
+                    spacer.className = 'print:block';
+
+                    clonedEl.parentNode?.insertBefore(spacer, clonedEl);
+                    accumulatedSpacerHeight += spacerHeight;
+                  }
+                }
+              });
+            }
+
+            // Set styles to let container calculate its natural height first
             pdfRoot.style.display = 'flex';
             pdfRoot.style.flexDirection = 'column';
+            pdfRoot.style.minHeight = 'auto';
+
+            // Measure natural scroll height and calculate page count
+            const naturalHeight = pdfRoot.scrollHeight;
+            const pageCount = Math.max(1, Math.ceil(naturalHeight / singlePageHeight));
+
+            // Set minHeight to exact multiple of A4 page height so footer is pushed to the bottom of the last page
+            pdfRoot.style.minHeight = `${pageCount * singlePageHeight}px`;
             pdfRoot.style.justifyContent = 'space-between';
           }
         }
@@ -2003,14 +2120,103 @@ export default function QuoteForm() {
             el.style.width = '100%';
             el.style.margin = '0 auto';
             el.style.display = 'grid';
+            el.style.alignItems = 'stretch';
           });
 
+          // Explicitly align row heights and center numeric/unit columns in cloned document by measuring the live original DOM
+          const clonedRows = clonedDoc.querySelectorAll('div[data-row-index]');
+          clonedRows.forEach((clonedRow: any, rIdx: number) => {
+            const cells = clonedRow.children[0]?.children;
+            if (!cells || cells.length < 6) return;
+
+            const originalRow = printRef.current?.querySelectorAll('div[data-row-index]')[rIdx];
+            const originalCells = originalRow?.children[0]?.children;
+            const originalDescCell = originalCells?.[1] as HTMLElement | null;
+
+            if (originalDescCell) {
+              const h = originalDescCell.offsetHeight || originalDescCell.getBoundingClientRect().height;
+              if (h > 0) {
+                Array.from(cells).forEach((cell: any, cIdx: number) => {
+                  if (cIdx !== 1) {
+                    cell.style.height = `${h}px`;
+                    cell.style.display = 'flex';
+                    cell.style.alignItems = 'center';
+                    cell.style.justifyContent = 'center';
+                  } else {
+                    cell.style.height = `${h}px`;
+                  }
+                });
+              }
+            }
+          });
+
+          // Set A4 minHeight on root container to exactly match the required number of A4 pages
           const pdfRoot = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement | null;
           if (pdfRoot) {
-            const w = pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width;
-            pdfRoot.style.minHeight = `${w * (297 / 210)}px`;
+            const originalRoot = printRef.current;
+            const w = originalRoot ? (originalRoot.offsetWidth || originalRoot.getBoundingClientRect().width) : (pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width);
+            const singlePageHeight = w * (297 / 210);
+
+            if (originalRoot) {
+
+              // A helper to get the cumulative offsetTop of any element relative to originalRoot
+              const getRelativeTop = (el: HTMLElement) => {
+                let top = 0;
+                let current: HTMLElement | null = el;
+                while (current && current !== originalRoot) {
+                  top += current.offsetTop || 0;
+                  current = current.offsetParent as HTMLElement | null;
+                }
+                return top;
+              };
+
+              // Query all printable rows and blocks that should NOT be split across pages
+              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+              const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+
+              let accumulatedSpacerHeight = 0;
+
+              clonedBreakables.forEach((clonedEl: any, idx: number) => {
+                const originalEl = originalBreakables[idx] as HTMLElement | null;
+                if (!originalEl) return;
+
+                const relativeTop = getRelativeTop(originalEl) + accumulatedSpacerHeight;
+                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
+                const relativeBottom = relativeTop + elementHeight;
+
+                const pageOfTop = Math.floor(relativeTop / singlePageHeight);
+                const pageOfBottom = Math.floor(relativeBottom / singlePageHeight);
+
+                if (pageOfTop !== pageOfBottom && elementHeight < singlePageHeight) {
+                  // Element crosses an A4 page boundary! Push it completely to the next page
+                  const nextPageStart = (pageOfTop + 1) * singlePageHeight;
+                  const spacerHeight = nextPageStart - relativeTop;
+
+                  if (spacerHeight > 0) {
+                    const spacer = clonedDoc.createElement('div');
+                    spacer.style.height = `${spacerHeight}px`;
+                    spacer.style.width = '100%';
+                    spacer.style.backgroundColor = 'transparent';
+                    spacer.className = 'print:block';
+
+                    clonedEl.parentNode?.insertBefore(spacer, clonedEl);
+                    accumulatedSpacerHeight += spacerHeight;
+                  }
+                }
+              });
+            }
+
+            // Set styles to let container calculate its natural height first
             pdfRoot.style.display = 'flex';
             pdfRoot.style.flexDirection = 'column';
+            pdfRoot.style.minHeight = 'auto';
+
+            // Measure natural scroll height and calculate page count
+            const naturalHeight = pdfRoot.scrollHeight;
+            const pageCount = Math.max(1, Math.ceil(naturalHeight / singlePageHeight));
+
+            // Set minHeight to exact multiple of A4 page height so footer is pushed to the bottom of the last page
+            pdfRoot.style.minHeight = `${pageCount * singlePageHeight}px`;
             pdfRoot.style.justifyContent = 'space-between';
           }
         }
@@ -2284,8 +2490,8 @@ export default function QuoteForm() {
             <h2 className="text-xl font-bold text-gray-800 dark:text-white">Document Editor</h2>
             <div className="flex items-center gap-2 mt-0.5">
               <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${status === 'Draft' ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400' :
-                  status === 'Invoiced' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' :
-                    'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
+                status === 'Invoiced' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' :
+                  'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400'
                 }`}>
                 {status}
               </span>
@@ -2362,6 +2568,9 @@ export default function QuoteForm() {
           </button>
           <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
+          </button>
+          <button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server">
+            {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (Server)
           </button>
           {stampUrl && (
             <button onClick={handleExportPDFWithStamp} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors" title="Export PDF with company stamp">
@@ -2622,7 +2831,7 @@ export default function QuoteForm() {
                       >
                         <div
                           ref={el => rowRefs.current[index] = el}
-                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-start print:grid-cols-[48px_1fr_64px_64px_110px_110px] transition-opacity
+                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-stretch print:items-stretch transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
                           ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
                           ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
@@ -2810,43 +3019,43 @@ export default function QuoteForm() {
 
                         {/* Controls — always visible, note + trash, outside grid */}
                         <div className="absolute -right-9 top-0 bottom-0 w-8 print:hidden flex flex-col items-center justify-start pt-1 gap-1 xl:hidden" data-html2canvas-ignore="true">
-                            {workflowVisibility.internalNotes !== false && (
-                              <div className="relative flex flex-col items-center">
-                                <button
-                                  onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
-                                  className={`p-0.5 rounded transition-colors ${expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
-                                      : item.internal_note ? 'text-amber-500 hover:text-amber-700'
-                                        : 'text-gray-400 hover:text-amber-500'
-                                    }`}
-                                  title={item.internal_note ? 'Edit private note' : 'Add private note'}
-                                >
-                                  <StickyNote size={14} />
-                                </button>
-                                
-                                {expandedNoteIndex === index && (
-                                  <div className="absolute right-full mr-3 top-0 w-64 bg-amber-50 border border-amber-300 rounded-lg shadow-xl p-2 z-[9999]">
-                                    <div className="flex justify-between items-center mb-2 border-b border-amber-200 pb-1">
-                                      <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Internal Note</span>
-                                      <button onClick={() => setExpandedNoteIndex(null)} className="text-amber-500 hover:text-amber-700">
-                                        <X size={14} />
-                                      </button>
-                                    </div>
-                                    <textarea
-                                      autoFocus
-                                      className="w-full text-sm bg-transparent outline-none resize-none text-amber-900 placeholder:text-amber-400"
-                                      placeholder="Type private note..."
-                                      value={item.internal_note || ''}
-                                      onChange={e => updateItem(index, 'internal_note', e.target.value)}
-                                      rows={Math.max(3, (item.internal_note || '').split('\n').length)}
-                                    />
+                          {workflowVisibility.internalNotes !== false && (
+                            <div className="relative flex flex-col items-center">
+                              <button
+                                onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
+                                className={`p-0.5 rounded transition-colors ${expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
+                                  : item.internal_note ? 'text-amber-500 hover:text-amber-700'
+                                    : 'text-gray-400 hover:text-amber-500'
+                                  }`}
+                                title={item.internal_note ? 'Edit private note' : 'Add private note'}
+                              >
+                                <StickyNote size={14} />
+                              </button>
+
+                              {expandedNoteIndex === index && (
+                                <div className="absolute right-full mr-3 top-0 w-64 bg-amber-50 border border-amber-300 rounded-lg shadow-xl p-2 z-[9999]">
+                                  <div className="flex justify-between items-center mb-2 border-b border-amber-200 pb-1">
+                                    <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Internal Note</span>
+                                    <button onClick={() => setExpandedNoteIndex(null)} className="text-amber-500 hover:text-amber-700">
+                                      <X size={14} />
+                                    </button>
                                   </div>
-                                )}
-                              </div>
-                            )}
-                            <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
+                                  <textarea
+                                    autoFocus
+                                    className="w-full text-sm bg-transparent outline-none resize-none text-amber-900 placeholder:text-amber-400"
+                                    placeholder="Type private note..."
+                                    value={item.internal_note || ''}
+                                    onChange={e => updateItem(index, 'internal_note', e.target.value)}
+                                    rows={Math.max(3, (item.internal_note || '').split('\n').length)}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </motion.div>
                     ))}
                   </AnimatePresence>
@@ -2876,7 +3085,7 @@ export default function QuoteForm() {
           </div>
 
           {/* Bottom Section: Terms & Totals */}
-          <div className="flex flex-col md:flex-row justify-between gap-8 mb-4">
+          <div data-pdf-block="totals-notes" className="flex flex-col md:flex-row justify-between gap-8 mb-4">
             {/* Terms & Conditions */}
             <div className="flex-1 space-y-2 [&_input]:text-[inherit] [&_textarea]:text-[inherit]" style={{ fontSize: `${termsFontSize}px` }}>
               {workflowVisibility.bottomNote !== false && (
@@ -3223,8 +3432,8 @@ export default function QuoteForm() {
               <button
                 onClick={() => setShowSharePanel(p => !p)}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${(sharedWith.users.length + sharedWith.groups.length) > 0
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50'
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50'
                   }`}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8z" /></svg>
@@ -3272,8 +3481,8 @@ export default function QuoteForm() {
                                   }))}
                                   title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
                                   className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
-                                      ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
-                                      : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                                    ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
+                                    : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
                                     }`}
                                 >
                                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z" /></svg>
@@ -3327,8 +3536,8 @@ export default function QuoteForm() {
                                   }))}
                                   title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
                                   className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
-                                      ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
-                                      : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                                    ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
+                                    : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
                                     }`}
                                 >
                                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z" /></svg>
@@ -3380,14 +3589,14 @@ export default function QuoteForm() {
                     <button
                       onClick={() => setExpandedNoteIndex(expandedNoteIndex === index ? null : index)}
                       className={`p-0.5 rounded transition-colors ${expandedNoteIndex === index ? 'text-amber-600 bg-amber-100'
-                          : item.internal_note ? 'text-amber-500 hover:text-amber-700'
-                            : 'text-gray-400 hover:text-amber-500'
+                        : item.internal_note ? 'text-amber-500 hover:text-amber-700'
+                          : 'text-gray-400 hover:text-amber-500'
                         }`}
                       title={item.internal_note ? 'Edit private note' : 'Add private note'}
                     >
                       <StickyNote size={14} />
                     </button>
-                    
+
                     {expandedNoteIndex === index && (
                       <div className="absolute right-full mr-3 top-0 w-64 bg-amber-50 border border-amber-300 rounded-lg shadow-xl p-2 z-[9999]">
                         <div className="flex justify-between items-center mb-2 border-b border-amber-200 pb-1">
@@ -3408,7 +3617,7 @@ export default function QuoteForm() {
                     )}
                   </div>
                 )}
-                
+
                 <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
                   <Trash2 size={14} />
                 </button>
