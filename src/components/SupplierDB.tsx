@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search, ChevronDown, ChevronUp, Package, Copy, ArrowRight, CheckSquare, Square } from 'lucide-react';
 
 interface Supplier { id: number; name: string; }
@@ -172,7 +172,7 @@ export default function SupplierDB() {
               <tr className="bg-indigo-50">
                 <td className="p-4 text-gray-500">New</td>
                 <td className="p-4">
-                  <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                  <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                     placeholder="Supplier Name" value={editForm.name || ''} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
                 </td>
                 <td className="p-4" />
@@ -195,7 +195,7 @@ export default function SupplierDB() {
                   <td className="p-4 text-gray-500 align-top">{supplier.id}</td>
                   <td className="p-4 align-top">
                     {isEditing === supplier.id ? (
-                      <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                      <input type="text" className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                         value={editForm.name || ''} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
                     ) : (
                       <span className="font-medium text-gray-900">{supplier.name}</span>
@@ -304,7 +304,7 @@ export default function SupplierDB() {
       <div className="p-4 border-t border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-4 bg-white rounded-b-xl">
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-600">Rows per page:</span>
-          <input type="number" min="1" className="w-16 p-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+          <input type="number" min="1" className="w-16 p-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
             value={rowsPerPage || ''} onChange={e => { const v = parseInt(e.target.value); setRowsPerPage(isNaN(v) ? '' as any : v); setCurrentPage(1); }}
             onBlur={() => { if (!rowsPerPage || rowsPerPage < 1) setRowsPerPage(20); }} />
         </div>
@@ -343,12 +343,12 @@ export default function SupplierDB() {
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Item Code</label>
-                <input type="text" className="w-full p-2 border border-indigo-500 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm"
+                <input type="text" className="w-full p-2 border border-indigo-500 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm text-gray-900 bg-white"
                   placeholder="Enter item code..." value={productEditForm.item_code} onChange={e => setProductEditForm({ ...productEditForm, item_code: e.target.value })} />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Assign Supplier</label>
-                <select className="w-full p-2 border border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-sm"
+                <select className="w-full p-2 border border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-sm text-gray-900 bg-white"
                   value={productEditForm.supplier_name} onChange={e => setProductEditForm({ ...productEditForm, supplier_name: e.target.value })}>
                   <option value="">— Select a supplier —</option>
                   {suppliers.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
@@ -391,7 +391,7 @@ export default function SupplierDB() {
               <label className="block text-xs font-semibold text-gray-500 mb-1">
                 {bulkModal.mode === 'copy' ? 'Copy To Supplier' : 'Move To Supplier'}
               </label>
-              <select className="w-full p-2 border border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-sm"
+              <select className="w-full p-2 border border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-sm text-gray-900 bg-white"
                 value={bulkTargetSupplier} onChange={e => setBulkTargetSupplier(e.target.value)}>
                 <option value="">— Select target supplier —</option>
                 {suppliers.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}

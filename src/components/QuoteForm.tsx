@@ -161,6 +161,7 @@ export default function QuoteForm() {
   const [templateName, setTemplateName] = useState('');
   const [focusedDescriptionIndex, setFocusedDescriptionIndex] = useState<number | null>(null);
   const descriptionRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
+  const descriptionArRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
   const blurTimeoutRef = useRef<NodeJS.Timeout>();
   // Measured position of the active description textarea — updated by useEffect so it's always fresh
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -243,6 +244,37 @@ export default function QuoteForm() {
       window.cancelAnimationFrame(animationFrameId);
     };
   }, [items]);
+
+  const adjustRowDescriptionHeights = (index: number) => {
+    const engEl = descriptionRefs.current[index];
+    const arEl = descriptionArRefs.current[index];
+    if (engEl || arEl) {
+      if (engEl) engEl.style.height = 'auto';
+      if (arEl) arEl.style.height = 'auto';
+      const engHeight = engEl ? engEl.scrollHeight : 0;
+      const arHeight = arEl ? arEl.scrollHeight : 0;
+      const maxHeight = Math.max(engHeight, arHeight, 40);
+      if (engEl) engEl.style.height = `${maxHeight}px`;
+      if (arEl) arEl.style.height = `${maxHeight}px`;
+    }
+  };
+
+  const adjustAllDescriptionHeights = () => {
+    requestAnimationFrame(() => {
+      for (let i = 0; i < items.length; i++) {
+        adjustRowDescriptionHeights(i);
+      }
+    });
+  };
+
+  useEffect(() => {
+    adjustAllDescriptionHeights();
+  }, [items]);
+
+  useEffect(() => {
+    window.addEventListener('resize', adjustAllDescriptionHeights);
+    return () => window.removeEventListener('resize', adjustAllDescriptionHeights);
+  }, []);
 
   // AUTOMATIC PRICING UPDATE:
   // When the global markup percentage changes, recalculate all item prices
@@ -2597,7 +2629,7 @@ export default function QuoteForm() {
                         `}
                           style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                           <div
-                            className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-start pt-1 group/grip cursor-grab active:cursor-grabbing touch-none select-none print:cursor-auto"
+                            className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-center group/grip cursor-grab active:cursor-grabbing touch-none select-none print:cursor-auto"
                             onPointerDown={(e) => onGripPointerDown(e, index)}
                             onPointerMove={onGripPointerMove}
                             onPointerUp={onGripPointerUp}
@@ -2612,13 +2644,16 @@ export default function QuoteForm() {
                             )}
                           </div>
                           <div className="p-0 border-r border-gray-300 h-full flex relative group">
-                            <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                            <div className="px-2 py-1.5 w-1/2 flex flex-col justify-start relative">
                               <textarea
                                 ref={el => { descriptionRefs.current[index] = el; }}
                                 className="w-full outline-none bg-transparent resize-none overflow-hidden min-h-[40px] relative z-0"
                                 value={item.description}
                                 placeholder="Type to search product..."
-                                onChange={e => updateItem(index, 'description', e.target.value)}
+                                onChange={e => {
+                                  updateItem(index, 'description', e.target.value);
+                                  adjustRowDescriptionHeights(index);
+                                }}
                                 onFocus={() => {
                                   if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
                                   setFocusedDescriptionIndex(index);
@@ -2627,7 +2662,7 @@ export default function QuoteForm() {
                                   blurTimeoutRef.current = setTimeout(() => setFocusedDescriptionIndex(null), 200);
                                   handleProductAutoTranslate(index, item.description, item.description_ar || '');
                                 }}
-                                rows={item.description.split('\n').length || 1}
+                                rows={1}
                               />
 
                               {/* ── Product search dropdown — fixed-position via useEffect ── */}
@@ -2709,23 +2744,27 @@ export default function QuoteForm() {
 
                             </div>
                             <div className="w-px bg-gray-200 print:hidden shrink-0 my-1"></div>
-                            <div className="px-2 py-0.5 w-1/2 flex flex-col justify-center relative">
+                            <div className="px-2 py-1.5 w-1/2 flex flex-col justify-start relative">
                               {translatingRows.has(index) && (
                                 <div className="absolute inset-0 flex items-center justify-center bg-white/70 rounded z-10 print:hidden pointer-events-none">
                                   <span className="text-[10px] text-indigo-500 font-semibold animate-pulse">Translating…</span>
                                 </div>
                               )}
                               <textarea
+                                ref={el => { descriptionArRefs.current[index] = el; }}
                                 dir="rtl"
                                 className="w-full outline-none bg-transparent resize-none overflow-hidden text-right min-h-[40px]"
                                 value={item.description_ar || ''}
-                                onChange={e => updateItem(index, 'description_ar', e.target.value)}
+                                onChange={e => {
+                                  updateItem(index, 'description_ar', e.target.value);
+                                  adjustRowDescriptionHeights(index);
+                                }}
                                 placeholder="الوصف بالعربية..."
-                                rows={(item.description_ar || '').split('\n').length || 1}
+                                rows={1}
                               />
                             </div>
                           </div>
-                          <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
+                          <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center justify-center">
                             <input
                               type="number"
                               className="w-full text-center text-base outline-none bg-transparent"
@@ -2734,7 +2773,7 @@ export default function QuoteForm() {
                               min="1"
                             />
                           </div>
-                          <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5">
+                          <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center justify-center">
                             <input
                               type="text"
                               list="unit-suggestions"
@@ -2743,7 +2782,7 @@ export default function QuoteForm() {
                               onChange={e => updateItem(index, 'unit', e.target.value)}
                             />
                           </div>
-                          <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-start pt-1.5 font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                          <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center justify-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
                             <input
                               type="text"
                               className="w-full text-center text-base font-mono outline-none bg-transparent"
@@ -2764,7 +2803,7 @@ export default function QuoteForm() {
                               step="0.01"
                             />
                           </div>
-                          <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-start pt-1.5 justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                          <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
                             <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                         </div>
@@ -3589,7 +3628,7 @@ export default function QuoteForm() {
               type="text"
               autoFocus
               placeholder="E.g., Standard CCTV Terms"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 mb-6"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 mb-6 text-gray-900 bg-white"
               value={templateName}
               onChange={e => setTemplateName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && saveTemplate()}
@@ -3633,12 +3672,12 @@ export default function QuoteForm() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name</label>
-                <input
-                  type="text"
+                <textarea
                   autoFocus
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white resize-y"
                   value={addProductModal.description}
                   onChange={e => setAddProductModal(m => m ? { ...m, description: e.target.value } : m)}
+                  rows={Math.max(2, Math.min(6, Math.ceil((addProductModal.description || '').length / 45)))}
                 />
               </div>
               <div className="flex gap-3">
@@ -3646,7 +3685,7 @@ export default function QuoteForm() {
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Item Code</label>
                   <input
                     type="text"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                     value={addProductModal.item_code}
                     onChange={e => setAddProductModal(m => m ? { ...m, item_code: e.target.value } : m)}
                   />
@@ -3654,7 +3693,7 @@ export default function QuoteForm() {
                 <div className="flex-1">
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Supplier Name</label>
                   <select
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-gray-900"
                     value={addProductModal.supplier_name}
                     onChange={e => setAddProductModal(m => m ? { ...m, supplier_name: e.target.value } : m)}
                   >
@@ -3671,7 +3710,7 @@ export default function QuoteForm() {
                   <input
                     type="text"
                     list="unit-suggestions"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                     value={addProductModal.unit}
                     onChange={e => setAddProductModal(m => m ? { ...m, unit: e.target.value } : m)}
                   />
@@ -3682,7 +3721,7 @@ export default function QuoteForm() {
                     type="number"
                     min="0"
                     step="0.01"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                     value={addProductModal.price}
                     onChange={e => setAddProductModal(m => m ? { ...m, price: e.target.value } : m)}
                   />
@@ -3789,7 +3828,7 @@ export default function QuoteForm() {
                 <input
                   type="text"
                   autoFocus
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
                   value={addCustomerModal.name}
                   onChange={e => setAddCustomerModal({ ...addCustomerModal, name: e.target.value })}
                   placeholder="Company or Individual Name"
@@ -3800,7 +3839,7 @@ export default function QuoteForm() {
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Mobile</label>
                   <input
                     type="text"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
                     value={addCustomerModal.mobile}
                     onChange={e => setAddCustomerModal({ ...addCustomerModal, mobile: e.target.value })}
                   />
@@ -3809,7 +3848,7 @@ export default function QuoteForm() {
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Contact Person</label>
                   <input
                     type="text"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
                     value={addCustomerModal.contact}
                     onChange={e => setAddCustomerModal({ ...addCustomerModal, contact: e.target.value })}
                   />
@@ -3819,7 +3858,7 @@ export default function QuoteForm() {
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Email</label>
                 <input
                   type="text"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
                   value={addCustomerModal.email}
                   onChange={e => setAddCustomerModal({ ...addCustomerModal, email: e.target.value })}
                 />
@@ -3828,7 +3867,7 @@ export default function QuoteForm() {
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Address</label>
                 <textarea
                   rows={2}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
                   value={addCustomerModal.address}
                   onChange={e => setAddCustomerModal({ ...addCustomerModal, address: e.target.value })}
                 />

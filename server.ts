@@ -478,7 +478,7 @@ const validate = (schema: ZodSchema) =>
   (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
-      const errors = result.error?.errors ?? [];
+      const errors = result.error?.issues ?? [];
       return res.status(400).json({
         error: 'Validation failed',
         details: errors.map((e: any) => `${e.path.join('.')}: ${e.message}`)

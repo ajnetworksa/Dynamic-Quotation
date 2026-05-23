@@ -333,7 +333,7 @@ export default function CustomerDB() {
                   <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
                   <input
                     type="text"
-                    className="w-full p-2 border border-emerald-500 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow"
+                    className="w-full p-2 border border-emerald-500 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow text-gray-900 bg-white"
                     value={editForm.name || ''}
                     onChange={e => setEditForm({ ...editForm, name: e.target.value })}
                   />
@@ -344,7 +344,7 @@ export default function CustomerDB() {
                     <label className="block text-xs font-medium text-gray-500 mb-1">Mobile</label>
                     <input
                       type="text"
-                      className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+                      className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none text-gray-900 bg-white"
                       value={editForm.mobile || ''}
                       onChange={e => setEditForm({ ...editForm, mobile: e.target.value })}
                     />
@@ -353,7 +353,7 @@ export default function CustomerDB() {
                     <label className="block text-xs font-medium text-gray-500 mb-1">Contact Person</label>
                     <input
                       type="text"
-                      className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+                      className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none text-gray-900 bg-white"
                       value={editForm.contact || ''}
                       onChange={e => setEditForm({ ...editForm, contact: e.target.value })}
                     />
@@ -364,7 +364,7 @@ export default function CustomerDB() {
                   <label className="block text-xs font-medium text-gray-500 mb-1">Email</label>
                   <input
                     type="email"
-                    className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none text-gray-900 bg-white"
                     value={editForm.email || ''}
                     onChange={e => setEditForm({ ...editForm, email: e.target.value })}
                   />
@@ -374,7 +374,7 @@ export default function CustomerDB() {
                   <label className="block text-xs font-medium text-gray-500 mb-1">Address</label>
                   <textarea
                     rows={3}
-                    className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none resize-y"
+                    className="w-full p-2 border border-gray-300 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none resize-y text-gray-900 bg-white"
                     value={editForm.address || ''}
                     onChange={e => setEditForm({ ...editForm, address: e.target.value })}
                   />

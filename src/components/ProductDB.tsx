@@ -546,23 +546,23 @@ export default function ProductDB() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name</label>
-                <input
-                  type="text"
+                <textarea
                   autoFocus
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white resize-y"
                   value={editForm.description || ''}
                   onChange={e => setEditForm(m => ({ ...m, description: e.target.value }))}
                   onBlur={e => handleAutoTranslate(e.target.value)}
+                  rows={Math.max(2, Math.min(6, Math.ceil((editForm.description || '').length / 45)))}
                 />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name (Arabic)</label>
-                <input
-                  type="text"
+                <textarea
                   dir="rtl"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right text-gray-900 bg-white resize-y"
                   value={editForm.description_ar || ''}
                   onChange={e => setEditForm(m => ({ ...m, description_ar: e.target.value }))}
+                  rows={Math.max(2, Math.min(6, Math.ceil((editForm.description_ar || '').length / 45)))}
                 />
               </div>
               <div className="flex gap-3">
@@ -570,7 +570,7 @@ export default function ProductDB() {
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Item Code</label>
                   <input
                     type="text"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                     value={editForm.item_code || ''}
                     onChange={e => setEditForm(m => ({ ...m, item_code: e.target.value }))}
                   />
@@ -589,7 +589,7 @@ export default function ProductDB() {
                     )}
                   </div>
                   <select
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-gray-900"
                     value={editForm.supplier_name || ''}
                     onChange={e => setEditForm(m => ({ ...m, supplier_name: e.target.value }))}
                     disabled={showAddSupplier}
@@ -608,7 +608,7 @@ export default function ProductDB() {
                         value={newSupplierName}
                         onChange={e => setNewSupplierName(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') handleAddNewSupplier(); if (e.key === 'Escape') { setShowAddSupplier(false); setNewSupplierName(''); } }}
-                        className="flex-1 px-2 py-1.5 border border-indigo-300 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none min-w-0"
+                        className="flex-1 px-2 py-1.5 border border-indigo-300 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none min-w-0 text-gray-900 bg-white"
                       />
                       <button
                         type="button"
@@ -634,7 +634,7 @@ export default function ProductDB() {
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Unit</label>
                   <input
                     type="text"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                     value={editForm.unit || ''}
                     onChange={e => setEditForm(m => ({ ...m, unit: e.target.value }))}
                   />
@@ -645,7 +645,7 @@ export default function ProductDB() {
                      type="number"
                      min="0"
                      step="0.01"
-                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
                      value={editForm.unit_price === undefined ? '' : editForm.unit_price}
                      onChange={e => setEditForm(m => ({ ...m, unit_price: e.target.value === '' ? undefined : parseFloat(e.target.value) }))}
                      onBlur={e => { if (e.target.value === '') setEditForm(m => ({ ...m, unit_price: 0 })); }}
