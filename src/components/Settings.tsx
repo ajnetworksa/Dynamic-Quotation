@@ -84,7 +84,7 @@ export default function Settings() {
   const [rowReorderStatus, setRowReorderStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // PDF Generation Engine
-  const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('server');
+  const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
   const [pdfSystemStatus, setPdfSystemStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Developer mode
@@ -191,7 +191,18 @@ export default function Settings() {
 
     fetch('/api/settings/pdfSystem')
       .then(res => res.json())
-      .then(data => { if (data.value) setPdfSystem(data.value as 'client' | 'server'); })
+      .then(data => {
+        if (data.value === 'server' || !data.value) {
+          setPdfSystem('client');
+          fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+            body: JSON.stringify({ key: 'pdfSystem', value: 'client' })
+          }).catch(console.error);
+        } else {
+          setPdfSystem(data.value as 'client' | 'server');
+        }
+      })
       .catch(console.error);
 
     fetch('/api/settings/workflowVisibility')
@@ -1903,7 +1914,7 @@ export default function Settings() {
           </div>
         </div>
         <div className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="max-w-md">
             <div
               onClick={() => handlePdfSystemToggle('client')}
               className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
@@ -1919,23 +1930,6 @@ export default function Settings() {
               </div>
               <p className="text-sm text-gray-500">
                 Uses the old html2canvas method. Prints exactly as it appears on screen but may be blurry and not selectable.
-              </p>
-            </div>
-            <div
-              onClick={() => handlePdfSystemToggle('server')}
-              className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                pdfSystem === 'server' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Server size={18} className={pdfSystem === 'server' ? 'text-indigo-600' : 'text-gray-400'} />
-                  <span className="font-semibold text-gray-800">Modern React-PDF (Server)</span>
-                </div>
-                {pdfSystem === 'server' && <CheckCircle2 size={18} className="text-indigo-600" />}
-              </div>
-              <p className="text-sm text-gray-500">
-                Uses @react-pdf/renderer. Generates crystal clear, vector-based PDFs with searchable text and perfect Arabic support.
               </p>
             </div>
           </div>
