@@ -95,6 +95,7 @@ export default function QuoteForm() {
   const [stampUrl, setStampUrl] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isRfqLoading, setIsRfqLoading] = useState(false);
+  const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── SIDEBAR ALIGNMENT REFS ──────────────────────────────────────────────
@@ -660,6 +661,12 @@ export default function QuoteForm() {
 
       const resStampOffsetY = await fetch('/api/settings/stampOffsetY');
       if (resStampOffsetY.ok) { const d = await resStampOffsetY.json(); if (d.value) setStampOffsetY(parseInt(d.value, 10)); }
+
+      const resPdf = await fetch('/api/settings/pdfSystem');
+      if (resPdf.ok) {
+        const d = await resPdf.json();
+        if (d.value) setPdfSystem(d.value as 'client' | 'server');
+      }
     } catch (e) {
       console.error('Failed to fetch settings', e);
     }
@@ -1823,10 +1830,10 @@ export default function QuoteForm() {
             if (!el.dataset.pdfRoot) el.style.padding = '0';
           });
 
-          clonedDoc.querySelectorAll('.min-w-\\[1350px\\]').forEach((el: any) => {
-            el.classList.remove('min-w-[1350px]');
-            el.style.minWidth = '0';
-          });
+
+            // Keep min-w-[1350px] intact
+
+
 
           clonedDoc.querySelectorAll('.print\\:overflow-visible').forEach((el: any) => {
             el.style.overflow = 'visible';
@@ -1881,7 +1888,10 @@ export default function QuoteForm() {
           const pdfRoot = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement | null;
           if (pdfRoot) {
             const originalRoot = printRef.current;
-            const w = originalRoot ? (originalRoot.offsetWidth || originalRoot.getBoundingClientRect().width) : (pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width);
+            const w = originalRoot ? (originalRoot.scrollWidth || originalRoot.offsetWidth || originalRoot.getBoundingClientRect().width) : (pdfRoot.scrollWidth || pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width);
+            pdfRoot.style.width = `${w}px`;
+            pdfRoot.style.minWidth = `${w}px`;
+            pdfRoot.style.maxWidth = `${w}px`;
             const singlePageHeight = w * (297 / 210);
 
             if (originalRoot) {
@@ -1889,7 +1899,7 @@ export default function QuoteForm() {
               const getRelativeTop = (el: HTMLElement) => {
                 let top = 0;
                 let current: HTMLElement | null = el;
-                while (current && current !== originalRoot) {
+                while (current && current !== pdfRoot) {
                   top += current.offsetTop || 0;
                   current = current.offsetParent as HTMLElement | null;
                 }
@@ -1897,17 +1907,17 @@ export default function QuoteForm() {
               };
 
               // Query all printable rows and blocks that should NOT be split across pages
-              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+
               const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
 
-              let accumulatedSpacerHeight = 0;
 
-              clonedBreakables.forEach((clonedEl: any, idx: number) => {
-                const originalEl = originalBreakables[idx] as HTMLElement | null;
-                if (!originalEl) return;
 
-                const relativeTop = getRelativeTop(originalEl) + accumulatedSpacerHeight;
-                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
+              clonedBreakables.forEach((clonedEl: any) => {
+
+
+
+                const relativeTop = getRelativeTop(clonedEl);
+                const elementHeight = clonedEl.offsetHeight || clonedEl.getBoundingClientRect().height || 0;
                 const relativeBottom = relativeTop + elementHeight;
 
                 const pageOfTop = Math.floor(relativeTop / singlePageHeight);
@@ -1926,7 +1936,7 @@ export default function QuoteForm() {
                     spacer.className = 'print:block';
 
                     clonedEl.parentNode?.insertBefore(spacer, clonedEl);
-                    accumulatedSpacerHeight += spacerHeight;
+
                   }
                 }
               });
@@ -1943,7 +1953,7 @@ export default function QuoteForm() {
 
             // Set minHeight to exact multiple of A4 page height so footer is pushed to the bottom of the last page
             pdfRoot.style.minHeight = `${pageCount * singlePageHeight}px`;
-            pdfRoot.style.justifyContent = 'space-between';
+            pdfRoot.style.justifyContent = 'flex-start';
           }
         }
       });
@@ -2098,10 +2108,10 @@ export default function QuoteForm() {
             el.style.border = 'none';
           });
 
-          clonedDoc.querySelectorAll('.min-w-\\[1350px\\]').forEach((el: any) => {
-            el.classList.remove('min-w-[1350px]');
-            el.style.minWidth = '0';
-          });
+          // Keep min-w-[1350px] intact
+
+
+
 
           clonedDoc.querySelectorAll('.print\\:overflow-visible').forEach((el: any) => {
             el.style.overflow = 'visible';
@@ -2154,7 +2164,10 @@ export default function QuoteForm() {
           const pdfRoot = clonedDoc.querySelector('[data-pdf-root]') as HTMLElement | null;
           if (pdfRoot) {
             const originalRoot = printRef.current;
-            const w = originalRoot ? (originalRoot.offsetWidth || originalRoot.getBoundingClientRect().width) : (pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width);
+            const w = originalRoot ? (originalRoot.scrollWidth || originalRoot.offsetWidth || originalRoot.getBoundingClientRect().width) : (pdfRoot.scrollWidth || pdfRoot.offsetWidth || pdfRoot.getBoundingClientRect().width);
+            pdfRoot.style.width = `${w}px`;
+            pdfRoot.style.minWidth = `${w}px`;
+            pdfRoot.style.maxWidth = `${w}px`;
             const singlePageHeight = w * (297 / 210);
 
             if (originalRoot) {
@@ -2163,7 +2176,7 @@ export default function QuoteForm() {
               const getRelativeTop = (el: HTMLElement) => {
                 let top = 0;
                 let current: HTMLElement | null = el;
-                while (current && current !== originalRoot) {
+                while (current && current !== pdfRoot) {
                   top += current.offsetTop || 0;
                   current = current.offsetParent as HTMLElement | null;
                 }
@@ -2171,17 +2184,17 @@ export default function QuoteForm() {
               };
 
               // Query all printable rows and blocks that should NOT be split across pages
-              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+
               const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
 
-              let accumulatedSpacerHeight = 0;
 
-              clonedBreakables.forEach((clonedEl: any, idx: number) => {
-                const originalEl = originalBreakables[idx] as HTMLElement | null;
-                if (!originalEl) return;
 
-                const relativeTop = getRelativeTop(originalEl) + accumulatedSpacerHeight;
-                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
+              clonedBreakables.forEach((clonedEl: any) => {
+
+
+
+                const relativeTop = getRelativeTop(clonedEl);
+                const elementHeight = clonedEl.offsetHeight || clonedEl.getBoundingClientRect().height || 0;
                 const relativeBottom = relativeTop + elementHeight;
 
                 const pageOfTop = Math.floor(relativeTop / singlePageHeight);
@@ -2200,7 +2213,7 @@ export default function QuoteForm() {
                     spacer.className = 'print:block';
 
                     clonedEl.parentNode?.insertBefore(spacer, clonedEl);
-                    accumulatedSpacerHeight += spacerHeight;
+
                   }
                 }
               });
@@ -2217,7 +2230,7 @@ export default function QuoteForm() {
 
             // Set minHeight to exact multiple of A4 page height so footer is pushed to the bottom of the last page
             pdfRoot.style.minHeight = `${pageCount * singlePageHeight}px`;
-            pdfRoot.style.justifyContent = 'space-between';
+            pdfRoot.style.justifyContent = 'flex-start';
           }
         }
       });
@@ -2569,9 +2582,9 @@ export default function QuoteForm() {
           <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
           </button>
-          <button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server">
+          {pdfSystem === 'server' && <button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server">
             {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (Server)
-          </button>
+          </button>}
           {stampUrl && (
             <button onClick={handleExportPDFWithStamp} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors" title="Export PDF with company stamp">
               <Download size={18} /> Export PDF + Stamp
