@@ -1899,7 +1899,7 @@ export default function QuoteForm() {
               const getRelativeTop = (el: HTMLElement) => {
                 let top = 0;
                 let current: HTMLElement | null = el;
-                while (current && current !== pdfRoot) {
+                while (current && current !== originalRoot) {
                   top += current.offsetTop || 0;
                   current = current.offsetParent as HTMLElement | null;
                 }
@@ -1909,15 +1909,18 @@ export default function QuoteForm() {
               // Query all printable rows and blocks that should NOT be split across pages
 
               const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
 
 
 
-              clonedBreakables.forEach((clonedEl: any) => {
+              clonedBreakables.forEach((clonedEl: any, idx: number) => {
+                const originalEl = originalBreakables?.[idx] as HTMLElement | undefined;
+                if (!originalEl) return;
 
 
 
-                const relativeTop = getRelativeTop(clonedEl);
-                const elementHeight = clonedEl.offsetHeight || clonedEl.getBoundingClientRect().height || 0;
+                const relativeTop = getRelativeTop(originalEl);
+                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
                 const relativeBottom = relativeTop + elementHeight;
 
                 const pageOfTop = Math.floor(relativeTop / singlePageHeight);
@@ -2176,7 +2179,7 @@ export default function QuoteForm() {
               const getRelativeTop = (el: HTMLElement) => {
                 let top = 0;
                 let current: HTMLElement | null = el;
-                while (current && current !== pdfRoot) {
+                while (current && current !== originalRoot) {
                   top += current.offsetTop || 0;
                   current = current.offsetParent as HTMLElement | null;
                 }
@@ -2186,15 +2189,18 @@ export default function QuoteForm() {
               // Query all printable rows and blocks that should NOT be split across pages
 
               const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
+              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
 
 
 
-              clonedBreakables.forEach((clonedEl: any) => {
+              clonedBreakables.forEach((clonedEl: any, idx: number) => {
+                const originalEl = originalBreakables?.[idx] as HTMLElement | undefined;
+                if (!originalEl) return;
 
 
 
-                const relativeTop = getRelativeTop(clonedEl);
-                const elementHeight = clonedEl.offsetHeight || clonedEl.getBoundingClientRect().height || 0;
+                const relativeTop = getRelativeTop(originalEl);
+                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
                 const relativeBottom = relativeTop + elementHeight;
 
                 const pageOfTop = Math.floor(relativeTop / singlePageHeight);
