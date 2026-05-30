@@ -1899,7 +1899,7 @@ export default function QuoteForm() {
               const getRelativeTop = (el: HTMLElement) => {
                 let top = 0;
                 let current: HTMLElement | null = el;
-                while (current && current !== originalRoot) {
+                while (current && current !== pdfRoot) {
                   top += current.offsetTop || 0;
                   current = current.offsetParent as HTMLElement | null;
                 }
@@ -1909,18 +1909,15 @@ export default function QuoteForm() {
               // Query all printable rows and blocks that should NOT be split across pages
 
               const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
-              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
 
 
 
-              clonedBreakables.forEach((clonedEl: any, idx: number) => {
-                const originalEl = originalBreakables?.[idx] as HTMLElement | undefined;
-                if (!originalEl) return;
+              clonedBreakables.forEach((clonedEl: any) => {
 
 
 
-                const relativeTop = getRelativeTop(originalEl);
-                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
+                const relativeTop = getRelativeTop(clonedEl);
+                const elementHeight = clonedEl.offsetHeight || clonedEl.getBoundingClientRect().height || 0;
                 const relativeBottom = relativeTop + elementHeight;
 
                 const pageOfTop = Math.floor(relativeTop / singlePageHeight);
@@ -2179,7 +2176,7 @@ export default function QuoteForm() {
               const getRelativeTop = (el: HTMLElement) => {
                 let top = 0;
                 let current: HTMLElement | null = el;
-                while (current && current !== originalRoot) {
+                while (current && current !== pdfRoot) {
                   top += current.offsetTop || 0;
                   current = current.offsetParent as HTMLElement | null;
                 }
@@ -2189,18 +2186,15 @@ export default function QuoteForm() {
               // Query all printable rows and blocks that should NOT be split across pages
 
               const clonedBreakables = clonedDoc.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
-              const originalBreakables = originalRoot.querySelectorAll('div[data-row-index], [data-pdf-block="totals-notes"]');
 
 
 
-              clonedBreakables.forEach((clonedEl: any, idx: number) => {
-                const originalEl = originalBreakables?.[idx] as HTMLElement | undefined;
-                if (!originalEl) return;
+              clonedBreakables.forEach((clonedEl: any) => {
 
 
 
-                const relativeTop = getRelativeTop(originalEl);
-                const elementHeight = originalEl.offsetHeight || originalEl.getBoundingClientRect().height || 0;
+                const relativeTop = getRelativeTop(clonedEl);
+                const elementHeight = clonedEl.offsetHeight || clonedEl.getBoundingClientRect().height || 0;
                 const relativeBottom = relativeTop + elementHeight;
 
                 const pageOfTop = Math.floor(relativeTop / singlePageHeight);
@@ -2588,8 +2582,8 @@ export default function QuoteForm() {
           <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
           </button>
-          {pdfSystem === 'server' && <button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server">
-            {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (Server)
+          {<button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
+            {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (React)
           </button>}
           {stampUrl && (
             <button onClick={handleExportPDFWithStamp} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors" title="Export PDF with company stamp">

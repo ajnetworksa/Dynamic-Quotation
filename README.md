@@ -21,6 +21,9 @@ A professional, dual-language (English/Arabic) quotation and invoice management 
 - **Configurable ID Prefixes**: Administrators can customize the Quote ID prefix (e.g., `AJ-`, `QT-`, `INV-`) directly from settings.
 - **Group-Based RBAC**: Assign users to permission groups for bulk access management.
 - **Security**: Password hashing (Bcrypt), secure sessions, role-based access control (RBAC), and persistent ownership validation.
+- **Professional PDF Customization & Fine-Tuning**: Real-time adjustable scaling of the company logo (`logoSize`), terms font-size (`termsFontSize`), and dynamic footer image height (`footerSize`) straight from the settings dashboard.
+- **Bilingual Layout & Stamp-Ready Alignment**: Perfect bilingual alignment for English/Arabic terms with compact layouts that leave clean space on the right side of the page for official company stamps.
+- **Smart Multi-page Separation**: Header bottom border separator lines render conditionally ONLY on the first page, preventing lines from cutting through multi-page quotation details.
 - **Export Consistency**: Cross-browser fix for stamp aspect-ratio distortion in generated PDF documents.
 - **Kanban Feature Access**: Granular permission control to toggle Kanban pipeline access per user or permission group.
 - **Interactive Product Assignment**: Modern Indigo-themed pop-up modal to modify product Item Codes or re-link them to active suppliers instantly.

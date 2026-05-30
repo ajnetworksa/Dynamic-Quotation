@@ -1,15 +1,16 @@
 import React from "react";
-import { Document, Page, Text, View, StyleSheet, Image, Font } from "@react-pdf/renderer";
+import { Document, Page, Text, View, StyleSheet, Image, Font, Svg, Defs, LinearGradient, Stop, Rect } from "@react-pdf/renderer";
 
 Font.register({
   family: "Tajawal",
   fonts: [
-    { src: "https://raw.githubusercontent.com/googlefonts/tajawal/main/fonts/ttf/Tajawal-Regular.ttf", fontWeight: "normal" },
-    { src: "https://raw.githubusercontent.com/googlefonts/tajawal/main/fonts/ttf/Tajawal-Bold.ttf", fontWeight: "bold" },
+    { src: "https://cdn.jsdelivr.net/gh/googlefonts/tajawal@main/fonts/ttf/Tajawal-Regular.ttf", fontWeight: "normal" },
+    { src: "https://cdn.jsdelivr.net/gh/googlefonts/tajawal@main/fonts/ttf/Tajawal-Bold.ttf", fontWeight: "bold" },
   ],
 });
 
 export type PdfLine = {
+  type?: 'item' | 'section' | 'note';
   description: string;
   descriptionAr?: string | null;
   quantity: number;
@@ -34,7 +35,10 @@ export type PdfSettings = {
   phone?: string | null;
   address?: string | null;
   logoUrl?: string | null;
+  logoSize?: number | null;
+  termsFontSize?: number | null;
   footerImageUrl?: string | null;
+  footerSize?: number | null;
   brandColor: string;
   taxLabel: string;
   pdfPayment?: string | null;
@@ -47,6 +51,12 @@ export type PdfSettings = {
   bankIban?: string | null;
   bankAccountName?: string | null;
   footerText?: string | null;
+  pdfHeaderBgType?: string | null;
+  pdfHeaderBgColorStart?: string | null;
+  pdfHeaderBgColorEnd?: string | null;
+  pdfHeaderTextColor?: string | null;
+  pdfTableBgColor?: string | null;
+  pdfTableTextColor?: string | null;
 };
 
 export type PdfQuote = {
@@ -173,18 +183,8 @@ export function getBilingualNotes(notes: string | null | undefined, notesAr?: st
 export type PdfTermRow = { label: string; en: string; ar: string };
 
 export function buildPdfTermRows(
-  quote: {
-    payment?: string | null; paymentAr?: string | null;
-    warranty?: string | null; warrantyAr?: string | null;
-    manpower?: string | null; manpowerAr?: string | null;
-    mobilization?: string | null; mobilizationAr?: string | null;
-    duration?: string | null; durationAr?: string | null;
-  },
-  settings: {
-    pdfPayment?: string | null; pdfWarranty?: string | null;
-    pdfManpower?: string | null; pdfMobilization?: string | null;
-    pdfDuration?: string | null;
-  }
+  quote: PdfQuote,
+  settings: PdfSettings
 ): PdfTermRow[] {
   const rows = [
     { label: "PAYMENT", en: quote.payment ?? settings.pdfPayment, ar: quote.paymentAr },
@@ -193,55 +193,170 @@ export function buildPdfTermRows(
     { label: "MOBILIZATION", en: quote.mobilization ?? settings.pdfMobilization, ar: quote.mobilizationAr },
     { label: "DURATION", en: quote.duration ?? settings.pdfDuration, ar: quote.durationAr },
   ];
-  return rows
+  const mapped = rows
     .filter((r) => r.en || r.ar)
     .map((r) => {
       const parts = getBilingualParts(r.en, r.ar);
       return { label: r.label, en: parts.en, ar: parts.ar };
     });
+
+  // Append Bank Details if available
+  const bank = getBilingualParts(quote.bankDetails, quote.bankDetailsAr);
+  if (bank.en || bank.ar) {
+    mapped.push({
+      label: "BANK DETAILS",
+      en: bank.en || "",
+      ar: bank.ar || "",
+    });
+  }
+
+  return mapped;
 }
 
 // ── STYLES ────────────────────────────────────────────────────────────────────
+const LABEL_W = 58;
 
 const COL = {
-  item: 28,
-  qty: 34,
-  unit: 34,
-  unitPrice: 72,
-  netPrice: 76,
+  item: 20,
+  qty: 22,
+  unit: 22,
+  unitPrice: 52,
+  netPrice: 56,
 };
 
 const styles = StyleSheet.create({
-  page: { paddingHorizontal: 12, paddingTop: 20, paddingBottom: 60, fontSize: 8, fontFamily: "Tajawal", color: "#18181b" },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 10 },
-  title: { fontSize: 22, fontWeight: "bold", marginBottom: 4 },
-  metaRow: { flexDirection: "row", gap: 4, alignItems: "center", marginBottom: 2 },
-  metaLabel: { fontSize: 8, color: "#52525b" },
-  metaValue: { fontSize: 8, fontWeight: "bold" },
-  customerBox: { borderWidth: 0.5, borderColor: "#18181b", marginBottom: 10 },
-  customerHeader: { backgroundColor: "#f4f4f5", paddingVertical: 3, paddingHorizontal: 8, borderBottomWidth: 0.5, borderBottomColor: "#18181b" },
-  customerHeaderText: { fontSize: 8.5, fontWeight: "bold" },
-  customerContent: { padding: 6, gap: 3 },
-  customerRow: { flexDirection: "row", justifyContent: "space-between" },
+  page: { paddingHorizontal: 12, paddingTop: 95, paddingBottom: 65, fontSize: 9, fontFamily: "Tajawal", color: "#18181b" },
+  headerContainer: {
+    position: "absolute",
+    top: 15,
+    left: 12,
+    right: 12,
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  headerSeparator: {
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#d4d4d8",
+    paddingBottom: 8
+  },
+  title: { fontSize: 24, fontWeight: "bold", marginBottom: 4, letterSpacing: 0.5 },
+  metaRow: { flexDirection: "row", gap: 6, alignItems: "center", marginBottom: 1 },
+  metaLabel: { fontSize: 8, fontWeight: "bold", color: "#374151", width: 95 },
+  metaValue: { fontSize: 8, fontWeight: "bold", color: "#111827" },
+  customerBox: { borderWidth: 1, borderColor: "#1f2937", marginBottom: 10 },
+  customerHeader: { backgroundColor: "#f3f4f6", paddingVertical: 4, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: "#1f2937" },
+  customerHeaderText: { fontSize: 10.5, fontWeight: "bold" },
+  customerContent: { paddingHorizontal: 8, paddingVertical: 5 },
+  customerRow: { flexDirection: "row", alignItems: "flex-start", marginBottom: 1.5 },
   customerCol: { flexDirection: "row", gap: 3 },
-  lbl: { fontWeight: "bold" },
+  lbl: { fontWeight: "bold", fontSize: 9, width: LABEL_W },
+  val: { fontSize: 9 },
+  valBold: { fontSize: 9, fontWeight: "bold" },
   table: { marginBottom: 8 },
-  tableHeaderRow: { flexDirection: "row" },
-  th: { color: "#ffffff", fontSize: 7.5, fontWeight: "bold", padding: 5, textAlign: "center" },
-  thDesc: { color: "#ffffff", fontSize: 7.5, fontWeight: "bold", padding: 5 },
-  tableRow: { flexDirection: "row" },
-  cell: { padding: 5, fontSize: 7.5 },
-  border: { borderLeftWidth: 0.5, borderLeftColor: "#18181b", borderBottomWidth: 0.5, borderBottomColor: "#18181b" },
+  tableHeaderRow: {
+    flexDirection: "row",
+    borderTopWidth: 0.5,
+    borderTopColor: "#18181b",
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#18181b"
+  },
+  th: {
+    color: "#ffffff",
+    fontSize: 7.5,
+    fontWeight: "bold",
+    paddingVertical: 5,
+    paddingHorizontal: 2,
+    textAlign: "center"
+  },
+  thDesc: {
+    color: "#ffffff",
+    fontSize: 7.5,
+    fontWeight: "bold",
+    paddingVertical: 5,
+    paddingHorizontal: 5,
+    textAlign: "center"
+  },
+  tableRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#18181b"
+  },
+  cellContainer: {
+    justifyContent: "center",
+  },
+  cellText: {
+    paddingVertical: 5,
+    paddingHorizontal: 2,
+    fontSize: 7.5,
+    color: "#18181b"
+  },
+  cellCenter: {
+    textAlign: "center"
+  },
+  cellRight: {
+    textAlign: "right"
+  },
+  cellLeft: {
+    textAlign: "left"
+  },
+  cellBold: {
+    fontWeight: "bold"
+  },
+  border: { borderLeftWidth: 0.5, borderLeftColor: "#18181b" },
   borderTop: { borderTopWidth: 0.5, borderTopColor: "#18181b" },
   borderRight: { borderRightWidth: 0.5, borderRightColor: "#18181b" },
-  noteBox: { flex: 1, borderWidth: 0.5, borderColor: "#18181b", padding: 6 },
+  noteBox: { flex: 1, padding: 6 },
   totalsBox: { width: 158, borderWidth: 0.5, borderColor: "#18181b" },
   totalRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 6, paddingVertical: 3, borderBottomWidth: 0.5, borderColor: "#18181b" },
   totalPkg: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 6, paddingVertical: 5, fontWeight: "bold", color: "#ffffff" },
-  termsSection: { marginTop: 5, gap: 3 },
-  termRow: { flexDirection: "row", justifyContent: "space-between" },
-  termLeft: { flexDirection: "row", gap: 3, flex: 1 },
-  bankSection: { marginTop: 5, borderTopWidth: 0.5, borderTopColor: "#d4d4d8", paddingTop: 4 },
+  termsSection: { marginTop: 12, width: 390 },
+  termRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 4.5,
+  },
+  termLabel: {
+    fontWeight: "bold",
+    width: 90,
+    color: "#18181b",
+  },
+  termEnContainer: {
+    flex: 1,
+    paddingRight: 15,
+  },
+  termEnText: {
+    color: "#18181b",
+    lineHeight: 1.25,
+  },
+  termArContainer: {
+    flex: 1,
+    alignItems: "flex-end",
+  },
+  termArText: {
+    color: "#18181b",
+    textAlign: "right",
+    lineHeight: 1.25,
+  },
+  footerRow: {
+    position: "absolute",
+    bottom: 15,
+    left: 12,
+    right: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    borderTopWidth: 0.5,
+    borderTopColor: "#d4d4d8",
+    paddingTop: 6
+  },
+  footerText: {
+    fontSize: 7,
+    fontFamily: "Tajawal",
+    color: "#4b5563"
+  }
 });
 
 function fmt(n: number) {
@@ -255,8 +370,49 @@ function fmtDate(d: Date | string | null | undefined) {
 
 // ── COMPONENT ─────────────────────────────────────────────────────────────────
 
-export function QuotePdfDocument({ quote, settings }: { quote: PdfQuote; settings: PdfSettings }) {
-  const brand = settings.brandColor || "#039737";
+export function QuotePdfDocument({
+  quote,
+  settings,
+  type = "quotation",
+  amountPaid = 0,
+  amountDue = 0
+}: {
+  quote: PdfQuote;
+  settings: PdfSettings;
+  type?: "quotation" | "invoice";
+  amountPaid?: number;
+  amountDue?: number;
+}) {
+  const isInvoice = type === "invoice";
+
+  // Ensure brand color is never so dark it appears black in the PDF
+  const ensureVisibleColor = (hex: string): string => {
+    // Strip alpha channel from 8-char hex (e.g. "#039737a6" → "#039737")
+    let h = hex.replace("#", "");
+    if (h.length === 8) h = h.substring(0, 6);
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    // Calculate relative luminance (0 = black, 255 = white)
+    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+    // If too dark (< 40), brighten each channel proportionally
+    if (luminance < 40) {
+      const boost = 60;
+      const nr = Math.min(255, r + boost);
+      const ng = Math.min(255, g + boost);
+      const nb = Math.min(255, b + boost);
+      return `#${nr.toString(16).padStart(2, "0")}${ng.toString(16).padStart(2, "0")}${nb.toString(16).padStart(2, "0")}`;
+    }
+    return `#${h}`;
+  };
+
+  const brand = ensureVisibleColor(settings.brandColor || "#039737");
+  const headerBgType = settings.pdfHeaderBgType || "solid";
+  const headerBgColorStart = settings.pdfHeaderBgColorStart || brand;
+  const headerBgColorEnd = settings.pdfHeaderBgColorEnd || brand;
+  const headerTextColor = settings.pdfHeaderTextColor || "#ffffff";
+  const tableBgColor = settings.pdfTableBgColor || brand;
+  const tableTextColor = settings.pdfTableTextColor || "#18181b";
 
   const customerAddress = [
     quote.customer.address,
@@ -264,6 +420,7 @@ export function QuotePdfDocument({ quote, settings }: { quote: PdfQuote; setting
   ].filter(Boolean).join(", ");
 
   const termsRows = buildPdfTermRows(quote, settings);
+  const tFontSize = (settings.termsFontSize || 14) * 0.53; // scale web 14px to ~7.5pt
   const noteItems = getBilingualNotes(quote.notes, quote.notesAr);
   const bank = getBilingualParts(quote.bankDetails, quote.bankDetailsAr);
 
@@ -275,33 +432,46 @@ export function QuotePdfDocument({ quote, settings }: { quote: PdfQuote; setting
       <Page size="A4" style={styles.page}>
 
         {/* ── HEADER ─────────────────────────────────────────────────── */}
-        <View wrap={false} style={styles.headerRow}>
-          <View>
-            <Text style={styles.title}>QUOTATION</Text>
-            <View style={styles.metaRow}>
-              <Text style={styles.metaLabel}>Quote ID / رقم العرض:</Text>
-              <Text style={styles.metaValue}>{quote.number}</Text>
-            </View>
-            <View style={styles.metaRow}>
-              <Text style={styles.metaLabel}>Date / التاريخ:</Text>
-              <Text style={styles.metaValue}>{fmtDate(quote.createdAt)}</Text>
-            </View>
-            {quote.validUntil && (
+        <View fixed style={styles.headerContainer}>
+          <View style={styles.headerRow}>
+            <View>
+              <Text style={styles.title}>{isInvoice ? "TAX INVOICE" : "QUOTATION"}</Text>
               <View style={styles.metaRow}>
-                <Text style={styles.metaLabel}>Valid Until / صالح لغاية:</Text>
-                <Text style={styles.metaValue}>{fmtDate(quote.validUntil)}</Text>
+                <Text style={styles.metaLabel}>{isInvoice ? "Invoice ID / رقم الفاتورة:" : "Quote ID / رقم العرض:"}</Text>
+                <Text style={styles.metaValue}>{quote.number}</Text>
               </View>
-            )}
+
+              {/* Dynamic Date Row - Only visible on Page 1 */}
+              <View style={styles.metaRow} render={({ pageNumber }) => pageNumber === 1 ? (
+                <>
+                  <Text style={styles.metaLabel}>Date / التاريخ:</Text>
+                  <Text style={styles.metaValue}>{fmtDate(quote.createdAt)}</Text>
+                </>
+              ) : null} />
+
+              {/* Dynamic Valid Until / Due Date Row - Only visible on Page 1 if present */}
+              {quote.validUntil ? (
+                <View style={styles.metaRow} render={({ pageNumber }) => pageNumber === 1 ? (
+                  <>
+                    <Text style={styles.metaLabel}>{isInvoice ? "Due Date / تاريخ الاستحقاق:" : "Valid Until / صالح لغاية:"}</Text>
+                    <Text style={styles.metaValue}>{fmtDate(quote.validUntil)}</Text>
+                  </>
+                ) : null} />
+              ) : null}
+            </View>
+            <View style={{ alignItems: "flex-end" }}>
+              {settings.logoUrl ? (
+                <Image src={settings.logoUrl} style={{ width: (settings.logoSize || 24) * 5.8, height: (settings.logoSize || 24) * 2.2, objectFit: "contain" }} />
+              ) : (
+                <Text style={{ fontSize: 12, fontWeight: "bold", color: brand, textAlign: "right", maxWidth: 150 }}>
+                  {settings.companyName}
+                </Text>
+              )}
+            </View>
           </View>
-          <View style={{ alignItems: "flex-end" }}>
-            {settings.logoUrl ? (
-              <Image src={settings.logoUrl} style={{ width: 130, height: 50, objectFit: "contain" }} />
-            ) : (
-              <Text style={{ fontSize: 12, fontWeight: "bold", color: brand, textAlign: "right", maxWidth: 150 }}>
-                {settings.companyName}
-              </Text>
-            )}
-          </View>
+          <View render={({ pageNumber }) => pageNumber === 1 ? (
+            <View style={{ borderBottomWidth: 0.5, borderBottomColor: "#d4d4d8", marginTop: 8 }} />
+          ) : null} />
         </View>
 
         {/* ── CUSTOMER INFO ───────────────────────────────────────────── */}
@@ -310,96 +480,151 @@ export function QuotePdfDocument({ quote, settings }: { quote: PdfQuote; setting
             <Text style={styles.customerHeaderText}>CUSTOMER INFO</Text>
           </View>
           <View style={styles.customerContent}>
+            {/* Row 1: Customer + Mobile */}
             <View style={styles.customerRow}>
-              <View style={styles.customerCol}>
+              <View style={{ flexDirection: "row", flex: 1 }}>
                 <Text style={styles.lbl}>Customer:</Text>
-                <Text style={{ fontWeight: "bold" }}>{quote.customer.company}</Text>
+                <Text style={styles.valBold}>{quote.customer.company}</Text>
               </View>
-              <View style={styles.customerCol}>
-                <Text style={styles.lbl}>Mobile:</Text>
-                <Text>{quote.customer.phone || ""}</Text>
-              </View>
-            </View>
-            <View style={styles.customerRow}>
-              <View style={styles.customerCol}>
-                <Text style={styles.lbl}>Address:</Text>
-                <Text>{customerAddress}</Text>
+              <View style={{ flexDirection: "row", width: 200 }}>
+                <Text style={[styles.lbl, { width: 46 }]}>Mobile:</Text>
+                <Text style={styles.val}>{quote.customer.phone || ""}</Text>
               </View>
             </View>
+            {/* Row 2: Address (full width) */}
             <View style={styles.customerRow}>
-              <View style={styles.customerCol}>
+              <Text style={styles.lbl}>Address:</Text>
+              <Text style={[styles.val, { flex: 1 }]}>{customerAddress}</Text>
+            </View>
+            {/* Row 3: Contact + Email */}
+            <View style={styles.customerRow}>
+              <View style={{ flexDirection: "row", flex: 1 }}>
                 <Text style={styles.lbl}>Contact:</Text>
-                <Text>{quote.customer.contactName || ""}</Text>
+                <Text style={styles.val}>{quote.customer.contactName || ""}</Text>
               </View>
-              <View style={styles.customerCol}>
-                <Text style={styles.lbl}>E-mail:</Text>
-                <Text>{quote.customer.email || ""}</Text>
+              <View style={{ flexDirection: "row", width: 200 }}>
+                <Text style={[styles.lbl, { width: 46 }]}>E-mail:</Text>
+                <Text style={styles.val}>{quote.customer.email || ""}</Text>
               </View>
             </View>
-            {(quote.subject || quote.subjectAr) && (
-              <View style={{ borderTopWidth: 0.5, borderTopColor: "#d4d4d8", paddingTop: 4, marginTop: 2, flexDirection: "row", justifyContent: "space-between" }}>
-                <View style={[styles.customerCol, { flex: 1 }]}>
+            {(quote.subject || quote.subjectAr) ? (
+              <View style={{ marginTop: 3 }}>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
                   <Text style={styles.lbl}>Subject:</Text>
-                  <Text style={{ flex: 1 }}>{quote.subject}</Text>
+                  <View style={{ flex: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={[styles.val, { flex: 1 }]}>{quote.subject || ""}</Text>
+                    {quote.subjectAr ? <Text style={[styles.val, { flex: 1, textAlign: "right" }]}>{quote.subjectAr}</Text> : null}
+                  </View>
                 </View>
-                {quote.subjectAr && <Text style={{ flex: 1, textAlign: "right" }}>{quote.subjectAr}</Text>}
               </View>
-            )}
+            ) : null}
           </View>
         </View>
 
         {/* ── ITEMS TABLE ─────────────────────────────────────────────── */}
         <View style={styles.table}>
           {/* Header */}
-          <View wrap={false} style={[styles.tableHeaderRow, { backgroundColor: brand }]}>
-            <View style={[{ width: COL.item }, styles.border, styles.borderTop]}>
-              <Text style={styles.th}>ITEM</Text>
+          <View fixed style={[styles.tableHeaderRow, { position: "relative", minHeight: 18 }]}>
+            {headerBgType === "gradient" ? (
+              <Svg style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: -1 }}>
+                <Defs>
+                  <LinearGradient id="tableHeaderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <Stop offset="0%" stopColor={headerBgColorStart} />
+                    <Stop offset="100%" stopColor={headerBgColorEnd} />
+                  </LinearGradient>
+                </Defs>
+                <Rect x="0" y="0" width="100%" height="100%" fill="url(#tableHeaderGrad)" />
+              </Svg>
+            ) : (
+              <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: tableBgColor, zIndex: -1 }} />
+            )}
+            <View style={[{ width: COL.item, justifyContent: "center" }, styles.border]}>
+              <Text style={[styles.th, { color: tableTextColor }]}>ITEM</Text>
             </View>
-            <View style={[{ flex: 1 }, styles.border, styles.borderTop]}>
-              <Text style={styles.thDesc}>DESCRIPTION</Text>
+            <View style={[{ flex: 1, justifyContent: "center" }, styles.border]}>
+              <Text style={[styles.thDesc, { color: tableTextColor }]}>DESCRIPTION</Text>
             </View>
-            <View style={[{ width: COL.qty }, styles.border, styles.borderTop]}>
-              <Text style={styles.th}>QTY</Text>
+            <View style={[{ width: COL.qty, justifyContent: "center" }, styles.border]}>
+              <Text style={[styles.th, { color: tableTextColor }]}>QTY</Text>
             </View>
-            <View style={[{ width: COL.unit }, styles.border, styles.borderTop]}>
-              <Text style={styles.th}>UNIT</Text>
+            <View style={[{ width: COL.unit, justifyContent: "center" }, styles.border]}>
+              <Text style={[styles.th, { color: tableTextColor }]}>UNIT</Text>
             </View>
-            <View style={[{ width: COL.unitPrice }, styles.border, styles.borderTop]}>
-              <Text style={[styles.th, { textAlign: "right" }]}>UNIT PRICE</Text>
+            <View style={[{ width: COL.unitPrice, justifyContent: "center" }, styles.border]}>
+              <Text style={[styles.th, { color: tableTextColor }]}>UNIT PRICE</Text>
             </View>
-            <View style={[{ width: COL.netPrice }, cellBorderRight, styles.borderTop]}>
-              <Text style={[styles.th, { textAlign: "right" }]}>NET PRICE</Text>
+            <View style={[{ width: COL.netPrice, justifyContent: "center" }, ...cellBorderRight]}>
+              <Text style={[styles.th, { color: tableTextColor }]}>NET PRICE</Text>
             </View>
           </View>
 
           {/* Rows */}
-          {quote.lines.map((line, i) => (
-            <View key={i} wrap={false} style={[styles.tableRow, { backgroundColor: i % 2 === 1 ? "#f4f4f5" : "#ffffff" }]}>
-              <View style={[{ width: COL.item }, ...cellBorder]}>
-                <Text style={[styles.cell, { textAlign: "center" }]}>{i + 1}</Text>
-              </View>
-              <View style={[{ flex: 1 }, ...cellBorder]}>
-                <View style={{ flexDirection: "row" }}>
-                  <Text style={[styles.cell, { flex: 1 }]}>{line.description}</Text>
-                  {line.descriptionAr ? (
-                    <Text style={[styles.cell, { flex: 1, textAlign: "right" }]}>{line.descriptionAr}</Text>
-                  ) : null}
+          {quote.lines.map((line, i) => {
+            // Section rows render as full-width branded headers
+            if (line.type === 'section') {
+              return (
+                <View key={i} wrap={false} style={[styles.tableRow, { backgroundColor: '#f0fdfa' }]}>
+                  <View style={[{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }, styles.cellContainer, ...cellBorder, ...cellBorderRight]}>
+                    <Text style={[styles.cellText, styles.cellLeft, { fontWeight: 'bold', color: brand, fontSize: 8.5 }]}>
+                      {line.description}
+                    </Text>
+                    {line.descriptionAr ? (
+                      <Text style={[styles.cellText, styles.cellRight, { fontWeight: 'bold', color: brand, fontSize: 8.5 }]}>
+                        {line.descriptionAr}
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
+              );
+            }
+
+            // Sequential numbering excluding section rows
+            let serialNum = 0;
+            for (let k = 0; k <= i; k++) {
+              if (quote.lines[k]?.type !== 'section') serialNum++;
+            }
+
+            return (
+              <View key={i} wrap={false} style={[styles.tableRow, { backgroundColor: i % 2 === 1 ? '#f4f4f5' : '#ffffff' }]}>
+
+                {/* ITEM Column */}
+                <View style={[{ width: COL.item }, styles.cellContainer, ...cellBorder]}>
+                  <Text style={[styles.cellText, styles.cellCenter]}>{serialNum}</Text>
+                </View>
+
+                {/* DESCRIPTION Column */}
+                <View style={[{ flex: 1 }, styles.cellContainer, ...cellBorder]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={[styles.cellText, styles.cellLeft, { flex: 1 }]}>{line.description}</Text>
+                    {line.descriptionAr ? (
+                      <Text style={[styles.cellText, styles.cellRight, { flex: 1 }]}>{line.descriptionAr}</Text>
+                    ) : null}
+                  </View>
+                </View>
+
+                {/* QTY Column */}
+                <View style={[{ width: COL.qty }, styles.cellContainer, ...cellBorder]}>
+                  <Text style={[styles.cellText, styles.cellCenter]}>{line.quantity}</Text>
+                </View>
+
+                {/* UNIT Column */}
+                <View style={[{ width: COL.unit }, styles.cellContainer, ...cellBorder]}>
+                  <Text style={[styles.cellText, styles.cellCenter]}>{line.unit}</Text>
+                </View>
+
+                {/* UNIT PRICE Column */}
+                <View style={[{ width: COL.unitPrice }, styles.cellContainer, ...cellBorder]}>
+                  <Text style={[styles.cellText, styles.cellCenter]}>{fmt(line.unitPrice)}</Text>
+                </View>
+
+                {/* NET PRICE Column */}
+                <View style={[{ width: COL.netPrice }, styles.cellContainer, ...cellBorderRight]}>
+                  <Text style={[styles.cellText, styles.cellCenter, styles.cellBold]}>{fmt(lineNetPrice(line))}</Text>
+                </View>
+
               </View>
-              <View style={[{ width: COL.qty }, ...cellBorder]}>
-                <Text style={[styles.cell, { textAlign: "center" }]}>{line.quantity}</Text>
-              </View>
-              <View style={[{ width: COL.unit }, ...cellBorder]}>
-                <Text style={[styles.cell, { textAlign: "center" }]}>{line.unit}</Text>
-              </View>
-              <View style={[{ width: COL.unitPrice }, ...cellBorder]}>
-                <Text style={[styles.cell, { textAlign: "right" }]}>{fmt(line.unitPrice)}</Text>
-              </View>
-              <View style={[{ width: COL.netPrice }, ...cellBorderRight]}>
-                <Text style={[styles.cell, { textAlign: "right", fontWeight: "bold" }]}>{fmt(lineNetPrice(line))}</Text>
-              </View>
-            </View>
-          ))}
+            );
+          })}
         </View>
 
         {/* ── NOTE + TOTALS ───────────────────────────────────────────── */}
@@ -417,13 +642,13 @@ export function QuotePdfDocument({ quote, settings }: { quote: PdfQuote; setting
                     ))}
                   </View>
                   {/* Arabic lines */}
-                  {noteItems.some((n) => n.ar) && (
+                  {noteItems.some((n) => n.ar) ? (
                     <View style={{ flex: 1 }}>
                       {noteItems.map((item, idx) => (
                         <Text key={idx} style={{ fontSize: 7.5, textAlign: "right", marginBottom: 1 }}>{item.ar}</Text>
                       ))}
                     </View>
-                  )}
+                  ) : null}
                 </View>
               </View>
             </View>
@@ -434,58 +659,81 @@ export function QuotePdfDocument({ quote, settings }: { quote: PdfQuote; setting
                 <Text style={{ fontWeight: "bold" }}>SUBTOTAL</Text>
                 <Text>{quote.currency} {fmt(quote.subtotal)}</Text>
               </View>
-              {quote.discountTotal > 0 && (
+              {quote.discountTotal > 0 ? (
                 <View style={styles.totalRow}>
                   <Text style={{ fontWeight: "bold" }}>DISCOUNT</Text>
                   <Text>-{quote.currency} {fmt(quote.discountTotal)}</Text>
                 </View>
-              )}
+              ) : null}
               <View style={styles.totalRow}>
                 <Text style={{ fontWeight: "bold" }}>{settings.taxLabel}</Text>
                 <Text>{quote.currency} {fmt(quote.taxTotal)}</Text>
               </View>
-              <View style={[styles.totalPkg, { backgroundColor: brand }]}>
-                <Text>TOTAL PACKAGE</Text>
-                <Text>{quote.currency} {fmt(quote.total)}</Text>
+              <View style={[styles.totalPkg, { position: "relative", minHeight: 18, borderBottomWidth: 0 }]}>
+                {headerBgType === "gradient" ? (
+                  <Svg style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: -1 }}>
+                    <Defs>
+                      <LinearGradient id="totalsGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <Stop offset="0%" stopColor={headerBgColorStart} />
+                        <Stop offset="100%" stopColor={headerBgColorEnd} />
+                      </LinearGradient>
+                    </Defs>
+                    <Rect x="0" y="0" width="100%" height="100%" fill="url(#totalsGrad)" />
+                  </Svg>
+                ) : (
+                  <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: tableBgColor, zIndex: -1 }} />
+                )}
+                <Text style={{ color: tableTextColor, fontWeight: "bold" }}>TOTAL PACKAGE</Text>
+                <Text style={{ color: tableTextColor, fontWeight: "bold" }}>{quote.currency} {fmt(quote.total)}</Text>
               </View>
+              {(isInvoice && amountPaid > 0) ? (
+                <>
+                  <View style={styles.totalRow}>
+                    <Text style={{ fontWeight: "bold", color: "#16a34a" }}>PAID</Text>
+                    <Text>{quote.currency} {fmt(amountPaid)}</Text>
+                  </View>
+                  <View style={[styles.totalRow, { borderBottomWidth: 0, paddingTop: 4 }]}>
+                    <Text style={{ fontWeight: "bold", color: "#ef4444" }}>DUE</Text>
+                    <Text style={{ fontWeight: "bold", color: "#ef4444" }}>{quote.currency} {fmt(amountDue)}</Text>
+                  </View>
+                </>
+              ) : null}
             </View>
           </View>
 
           {/* ── TERMS ───────────────────────────────────────────────── */}
-          {termsRows.length > 0 && (
+          {termsRows.length > 0 ? (
             <View style={styles.termsSection}>
               {termsRows.map((row) => (
                 <View key={row.label} style={styles.termRow}>
-                  <View style={styles.termLeft}>
-                    <Text style={{ fontWeight: "bold" }}>{row.label}:</Text>
-                    <Text style={{ flex: 1 }}>{row.en}</Text>
+                  <Text style={[styles.termLabel, { fontSize: tFontSize }]}>{row.label}:</Text>
+                  <View style={styles.termEnContainer}>
+                    <Text style={[styles.termEnText, { fontSize: tFontSize }]}>{row.en}</Text>
                   </View>
                   {row.ar ? (
-                    <Text style={{ flex: 1, textAlign: "right" }}>{row.ar}</Text>
+                    <View style={styles.termArContainer}>
+                      <Text style={[styles.termArText, { fontSize: tFontSize }]}>{row.ar}</Text>
+                    </View>
                   ) : null}
                 </View>
               ))}
             </View>
-          )}
-
-          {/* ── BANK DETAILS ─────────────────────────────────────────── */}
-          {(bank.en || bank.ar) && (
-            <View style={styles.bankSection}>
-              <Text style={{ fontWeight: "bold", marginBottom: 2 }}>BANK DETAILS</Text>
-              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                <Text style={{ flex: 1 }}>{bank.en}</Text>
-                {bank.ar ? <Text style={{ flex: 1, textAlign: "right" }}>{bank.ar}</Text> : null}
-              </View>
-            </View>
-          )}
+          ) : null}
         </View>
 
-        {/* ── FOOTER IMAGE ─────────────────────────────────────────── */}
-        {settings.footerImageUrl && (
-          <View fixed style={{ position: "absolute", bottom: 10, left: 0, right: 0, alignItems: "center" }}>
-            <Image src={settings.footerImageUrl} style={{ width: "100%", height: 50, objectFit: "contain" }} />
+        {/* ── DYNAMIC FOOTER ───────────────────────────────────────── */}
+        <View fixed style={styles.footerRow}>
+          <Text style={styles.footerText}>
+            {settings.companyName || "AJ Network Solutions"} | Tel: +966 920002087 | info@ajnetworksa.com
+          </Text>
+          <Text style={styles.footerText} render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
+        </View>
+
+        {settings.footerImageUrl ? (
+          <View fixed style={{ position: "absolute", bottom: 25, left: 0, right: 0, alignItems: "center" }}>
+            <Image src={settings.footerImageUrl} style={{ width: "100%", height: settings.footerSize || 30, objectFit: "contain" }} />
           </View>
-        )}
+        ) : null}
 
       </Page>
     </Document>
