@@ -20,6 +20,8 @@ export default function Settings() {
 
   const [termsFontSize, setTermsFontSize] = useState<number>(14); // default 14px
   const [termsFontSizeStatus, setTermsFontSizeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [footerSize, setFooterSize] = useState<number>(30); // default 30 pt
+  const [footerSizeStatus, setFooterSizeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   const [footerImageStatus, setFooterImageStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [currentFooterImage, setCurrentFooterImage] = useState<string | null>(null);
@@ -120,6 +122,13 @@ export default function Settings() {
       .then(res => res.json())
       .then(data => {
         if (data.value) setTermsFontSize(parseInt(data.value, 10));
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/footerSize')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setFooterSize(parseInt(data.value, 10));
       })
       .catch(console.error);
 
@@ -1329,6 +1338,49 @@ export default function Settings() {
                     <XCircle size={16} /> Failed to upload footer image
                   </span>
                 )}
+              </div>
+
+              <div className="mt-6 border-t border-gray-100 pt-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Adjust Footer Image Height
+                </label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="15"
+                    max="120"
+                    value={footerSize}
+                    onChange={(e) => setFooterSize(parseInt(e.target.value, 10))}
+                    onMouseUp={async () => {
+                      setFooterSizeStatus('loading');
+                      try {
+                        const res = await fetch('/api/settings', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                          body: JSON.stringify({ key: 'footerSize', value: footerSize.toString() })
+                        });
+                        if (res.ok) {
+                          setFooterSizeStatus('success');
+                          setTimeout(() => setFooterSizeStatus('idle'), 3000);
+                        } else {
+                          setFooterSizeStatus('error');
+                        }
+                      } catch (e) {
+                        setFooterSizeStatus('error');
+                      }
+                    }}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-gray-600 text-sm font-mono w-8">{footerSize}</span>
+                </div>
+                <div className="mt-2 h-4">
+                  {footerSizeStatus === 'success' && (
+                    <span className="text-emerald-600 text-xs font-medium">Height saved</span>
+                  )}
+                  {footerSizeStatus === 'error' && (
+                    <span className="text-red-600 text-xs font-medium">Failed to save height</span>
+                  )}
+                </div>
               </div>
             </div>
 

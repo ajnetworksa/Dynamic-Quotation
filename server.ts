@@ -335,6 +335,7 @@ addColumnIfNotExists('products', 'item_code', 'TEXT');
 addColumnIfNotExists('products', 'supplier_name', 'TEXT');
 addColumnIfNotExists('quote_items', 'item_code', 'TEXT');
 addColumnIfNotExists('quote_items', 'supplier_name', 'TEXT');
+addColumnIfNotExists('quote_items', 'type', "TEXT DEFAULT 'item'");
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -1154,6 +1155,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         country: "Saudi Arabia",
       },
       lines: items.map((it: any) => ({
+        type: (it.type as 'item' | 'section' | 'note') || 'item',
         description: it.description || "",
         descriptionAr: it.description_ar || "",
         quantity: it.qty || 0,
@@ -1170,23 +1172,37 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       if (colors.headerBg) brandColor = colors.headerBg;
     } catch {}
 
+    // Determine document type for the PDF component
+    const isInvoice = (quote.type || '').toLowerCase().includes('invoice');
+
     const pdfSettings = {
       companyName: "AJ Network Solutions", // default fallback
       brandColor,
       taxLabel: `VAT ${quote.vat_rate || 15}%`,
       logoUrl: settingsMap.logo || null,
+      logoSize: settingsMap.logoSize ? parseInt(settingsMap.logoSize, 10) : 24,
+      termsFontSize: settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14,
       footerImageUrl: settingsMap.footerImage || null,
+      footerSize: settingsMap.footerSize ? parseInt(settingsMap.footerSize, 10) : 30,
       bankName: "",
       bankAccount: "",
       bankIban: "",
       bankAccountName: "",
       footerText: settingsMap.footerText || "Thank you for your business!",
+      // Gradient / color customization fields (read from settings if available)
+      pdfHeaderBgType: settingsMap.pdfHeaderBgType || 'solid',
+      pdfHeaderBgColorStart: settingsMap.pdfHeaderBgColorStart || brandColor,
+      pdfHeaderBgColorEnd: settingsMap.pdfHeaderBgColorEnd || brandColor,
+      pdfHeaderTextColor: settingsMap.pdfHeaderTextColor || '#ffffff',
+      pdfTableBgColor: settingsMap.pdfTableBgColor || brandColor,
+      pdfTableTextColor: settingsMap.pdfTableTextColor || '#18181b',
     };
 
     const buffer = await renderToBuffer(
       React.createElement(QuotePdfDocument, {
         quote: pdfQuote,
         settings: pdfSettings,
+        type: isInvoice ? 'invoice' : 'quotation',
       })
     );
 
