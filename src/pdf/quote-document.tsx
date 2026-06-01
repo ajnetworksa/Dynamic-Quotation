@@ -229,7 +229,7 @@ const COL = {
 };
 
 const styles = StyleSheet.create({
-  page: { paddingHorizontal: 12, paddingTop: 95, paddingBottom: 65, fontSize: 9, fontFamily: "Tajawal", color: "#18181b" },
+  page: { paddingHorizontal: 12, paddingTop: 115, paddingBottom: 65, fontSize: 9, fontFamily: "Tajawal", color: "#18181b" },
   headerContainer: {
     position: "absolute",
     top: 15,
@@ -637,21 +637,22 @@ export function QuotePdfDocument({
         <View style={{ marginTop: 6 }}>
           <View style={{ flexDirection: "row", gap: 10 }}>
             {/* Note box */}
+            {/* Note box */}
             <View style={styles.noteBox}>
               <View style={{ flexDirection: "row", gap: 4 }}>
-                <Text style={{ fontWeight: "bold", minWidth: 38 }}>NOTE:</Text>
+                <Text style={{ fontWeight: "bold", minWidth: 38, fontSize: tFontSize }}>NOTE:</Text>
                 <View style={{ flex: 1, flexDirection: "row", gap: 6 }}>
                   {/* English lines */}
                   <View style={{ flex: 1 }}>
                     {noteItems.map((item, idx) => (
-                      <Text key={idx} style={{ fontSize: 7.5, marginBottom: 1 }}>{item.en}</Text>
+                      <Text key={idx} style={{ fontSize: tFontSize, marginBottom: 1, lineHeight: 1.25 }}>{item.en}</Text>
                     ))}
                   </View>
                   {/* Arabic lines */}
                   {noteItems.some((n) => n.ar) ? (
                     <View style={{ flex: 1 }}>
                       {noteItems.map((item, idx) => (
-                        <Text key={idx} style={{ fontSize: 7.5, textAlign: "right", marginBottom: 1 }}>{item.ar}</Text>
+                        <Text key={idx} style={{ fontSize: tFontSize, textAlign: "right", marginBottom: 1, lineHeight: 1.25 }}>{item.ar}</Text>
                       ))}
                     </View>
                   ) : null}
