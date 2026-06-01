@@ -1175,6 +1175,8 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
     // Determine document type for the PDF component
     const isInvoice = (quote.type || '').toLowerCase().includes('invoice');
 
+    const showStamp = req.query.stamp === 'true';
+
     const pdfSettings = {
       companyName: "AJ Network Solutions", // default fallback
       brandColor,
@@ -1196,6 +1198,10 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       pdfHeaderTextColor: settingsMap.pdfHeaderTextColor || '#ffffff',
       pdfTableBgColor: settingsMap.pdfTableBgColor || brandColor,
       pdfTableTextColor: settingsMap.pdfTableTextColor || '#18181b',
+      stampUrl: settingsMap.stampImage || null,
+      stampSize: settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 140,
+      stampOffsetX: settingsMap.stampOffsetX ? parseInt(settingsMap.stampOffsetX, 10) : 0,
+      stampOffsetY: settingsMap.stampOffsetY ? parseInt(settingsMap.stampOffsetY, 10) : 0,
     };
 
     const buffer = await renderToBuffer(
@@ -1203,6 +1209,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         quote: pdfQuote,
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
+        showStamp,
       })
     );
 

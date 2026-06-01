@@ -57,6 +57,10 @@ export type PdfSettings = {
   pdfHeaderTextColor?: string | null;
   pdfTableBgColor?: string | null;
   pdfTableTextColor?: string | null;
+  stampUrl?: string | null;
+  stampSize?: number | null;
+  stampOffsetX?: number | null;
+  stampOffsetY?: number | null;
 };
 
 export type PdfQuote = {
@@ -375,13 +379,15 @@ export function QuotePdfDocument({
   settings,
   type = "quotation",
   amountPaid = 0,
-  amountDue = 0
+  amountDue = 0,
+  showStamp = false
 }: {
   quote: PdfQuote;
   settings: PdfSettings;
   type?: "quotation" | "invoice";
   amountPaid?: number;
   amountDue?: number;
+  showStamp?: boolean;
 }) {
   const isInvoice = type === "invoice";
 
@@ -654,50 +660,65 @@ export function QuotePdfDocument({
             </View>
 
             {/* Totals box */}
-            <View style={styles.totalsBox}>
-              <View style={styles.totalRow}>
-                <Text style={{ fontWeight: "bold" }}>SUBTOTAL</Text>
-                <Text>{quote.currency} {fmt(quote.subtotal)}</Text>
-              </View>
-              {quote.discountTotal > 0 ? (
+            <View style={{ position: "relative" }}>
+              <View style={styles.totalsBox}>
                 <View style={styles.totalRow}>
-                  <Text style={{ fontWeight: "bold" }}>DISCOUNT</Text>
-                  <Text>-{quote.currency} {fmt(quote.discountTotal)}</Text>
+                  <Text style={{ fontWeight: "bold" }}>SUBTOTAL</Text>
+                  <Text>{quote.currency} {fmt(quote.subtotal)}</Text>
                 </View>
-              ) : null}
-              <View style={styles.totalRow}>
-                <Text style={{ fontWeight: "bold" }}>{settings.taxLabel}</Text>
-                <Text>{quote.currency} {fmt(quote.taxTotal)}</Text>
-              </View>
-              <View style={[styles.totalPkg, { position: "relative", minHeight: 18, borderBottomWidth: 0 }]}>
-                {headerBgType === "gradient" ? (
-                  <Svg style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: -1 }}>
-                    <Defs>
-                      <LinearGradient id="totalsGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <Stop offset="0%" stopColor={headerBgColorStart} />
-                        <Stop offset="100%" stopColor={headerBgColorEnd} />
-                      </LinearGradient>
-                    </Defs>
-                    <Rect x="0" y="0" width="100%" height="100%" fill="url(#totalsGrad)" />
-                  </Svg>
-                ) : (
-                  <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: tableBgColor, zIndex: -1 }} />
-                )}
-                <Text style={{ color: tableTextColor, fontWeight: "bold" }}>TOTAL PACKAGE</Text>
-                <Text style={{ color: tableTextColor, fontWeight: "bold" }}>{quote.currency} {fmt(quote.total)}</Text>
-              </View>
-              {(isInvoice && amountPaid > 0) ? (
-                <>
+                {quote.discountTotal > 0 ? (
                   <View style={styles.totalRow}>
-                    <Text style={{ fontWeight: "bold", color: "#16a34a" }}>PAID</Text>
-                    <Text>{quote.currency} {fmt(amountPaid)}</Text>
+                    <Text style={{ fontWeight: "bold" }}>DISCOUNT</Text>
+                    <Text>-{quote.currency} {fmt(quote.discountTotal)}</Text>
                   </View>
-                  <View style={[styles.totalRow, { borderBottomWidth: 0, paddingTop: 4 }]}>
-                    <Text style={{ fontWeight: "bold", color: "#ef4444" }}>DUE</Text>
-                    <Text style={{ fontWeight: "bold", color: "#ef4444" }}>{quote.currency} {fmt(amountDue)}</Text>
-                  </View>
-                </>
-              ) : null}
+                ) : null}
+                <View style={styles.totalRow}>
+                  <Text style={{ fontWeight: "bold" }}>{settings.taxLabel}</Text>
+                  <Text>{quote.currency} {fmt(quote.taxTotal)}</Text>
+                </View>
+                <View style={[styles.totalPkg, { position: "relative", minHeight: 18, borderBottomWidth: 0 }]}>
+                  {headerBgType === "gradient" ? (
+                    <Svg style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: -1 }}>
+                      <Defs>
+                        <LinearGradient id="totalsGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <Stop offset="0%" stopColor={headerBgColorStart} />
+                          <Stop offset="100%" stopColor={headerBgColorEnd} />
+                        </LinearGradient>
+                      </Defs>
+                      <Rect x="0" y="0" width="100%" height="100%" fill="url(#totalsGrad)" />
+                    </Svg>
+                  ) : (
+                    <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: tableBgColor, zIndex: -1 }} />
+                  )}
+                  <Text style={{ color: tableTextColor, fontWeight: "bold" }}>TOTAL PACKAGE</Text>
+                  <Text style={{ color: tableTextColor, fontWeight: "bold" }}>{quote.currency} {fmt(quote.total)}</Text>
+                </View>
+                {(isInvoice && amountPaid > 0) ? (
+                  <>
+                    <View style={styles.totalRow}>
+                      <Text style={{ fontWeight: "bold", color: "#16a34a" }}>PAID</Text>
+                      <Text>{quote.currency} {fmt(amountPaid)}</Text>
+                    </View>
+                    <View style={[styles.totalRow, { borderBottomWidth: 0, paddingTop: 4 }]}>
+                      <Text style={{ fontWeight: "bold", color: "#ef4444" }}>DUE</Text>
+                      <Text style={{ fontWeight: "bold", color: "#ef4444" }}>{quote.currency} {fmt(amountDue)}</Text>
+                    </View>
+                  </>
+                ) : null}
+              </View>
+              {settings.stampUrl && showStamp && (
+                <Image
+                  src={settings.stampUrl}
+                  style={{
+                    position: "absolute",
+                    width: settings.stampSize || 140,
+                    height: settings.stampSize || 140,
+                    top: 85 + (settings.stampOffsetY || 0),
+                    left: 10 + (settings.stampOffsetX || 0),
+                    opacity: 0.9,
+                  }}
+                />
+              )}
             </View>
           </View>
 
