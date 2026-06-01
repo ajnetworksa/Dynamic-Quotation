@@ -96,6 +96,7 @@ export default function QuoteForm() {
   const [isSending, setIsSending] = useState(false);
   const [isRfqLoading, setIsRfqLoading] = useState(false);
   const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
+  const [enableLegacyPdfExport, setEnableLegacyPdfExport] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── SIDEBAR ALIGNMENT REFS ──────────────────────────────────────────────
@@ -666,6 +667,12 @@ export default function QuoteForm() {
       if (resPdf.ok) {
         const d = await resPdf.json();
         if (d.value) setPdfSystem(d.value as 'client' | 'server');
+      }
+
+      const resLegacy = await fetch('/api/settings/enableLegacyPdfExport');
+      if (resLegacy.ok) {
+        const d = await resLegacy.json();
+        if (d.value) setEnableLegacyPdfExport(d.value === 'true');
       }
     } catch (e) {
       console.error('Failed to fetch settings', e);
@@ -1699,12 +1706,12 @@ export default function QuoteForm() {
     window.print();
   };
 
-  const handleServerPDF = async () => {
+  const handleServerPDF = async (includeStamp: boolean = false) => {
     if (!quoteId) return alert('Please save the quote first before exporting.');
     setIsGeneratingServerPDF(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`/api/quotes/${quoteId}/pdf`, {
+      const response = await fetch(`/api/quotes/${quoteId}/pdf${includeStamp ? '?stamp=true' : ''}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -1716,7 +1723,10 @@ export default function QuoteForm() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${quoteId}.pdf`;
+      const customerName = (selectedCustomer?.name || 'Unknown')
+        .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
+        .trim();
+      a.download = `${customerName}-${quoteId}${includeStamp ? '-stamped' : ''}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -2579,16 +2589,48 @@ export default function QuoteForm() {
           <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
             <FileSpreadsheet size={18} /> Export Excel
           </button>
-          <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
-            <Download size={18} /> Export PDF
+          {/* Primary Vector PDF Export (React PDF) */}
+          <button 
+            onClick={() => handleServerPDF(false)} 
+            disabled={isGeneratingServerPDF} 
+            className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 font-semibold" 
+            title="Download high-fidelity vector PDF generated on server"
+          >
+            {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF
           </button>
-          {<button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
-            {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (React)
-          </button>}
+
+          {/* Primary Vector PDF Export + Stamp */}
           {stampUrl && (
-            <button onClick={handleExportPDFWithStamp} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors" title="Export PDF with company stamp">
-              <Download size={18} /> Export PDF + Stamp
+            <button 
+              onClick={() => handleServerPDF(true)} 
+              disabled={isGeneratingServerPDF} 
+              className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50 font-semibold" 
+              title="Download high-fidelity vector PDF with official company stamp"
+            >
+              {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF + Stamp
             </button>
+          )}
+
+          {/* Fallback Legacy HTML2Canvas Exports (Only if toggled in Settings) */}
+          {enableLegacyPdfExport && (
+            <>
+              <button 
+                onClick={handleExportPDF} 
+                className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors font-medium"
+                title="Legacy html2canvas fallback export"
+              >
+                <Download size={18} /> Export PDF (Legacy)
+              </button>
+              {stampUrl && (
+                <button 
+                  onClick={handleExportPDFWithStamp} 
+                  className="flex items-center gap-2 px-4 py-2 text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors font-medium" 
+                  title="Legacy html2canvas fallback export with stamp"
+                >
+                  <Download size={18} /> Export PDF + Stamp (Legacy)
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

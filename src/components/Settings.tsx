@@ -87,6 +87,7 @@ export default function Settings() {
 
   // PDF Generation Engine
   const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
+  const [enableLegacyPdfExport, setEnableLegacyPdfExport] = useState<boolean>(false);
   const [pdfSystemStatus, setPdfSystemStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Developer mode
@@ -211,6 +212,13 @@ export default function Settings() {
         } else {
           setPdfSystem(data.value as 'client' | 'server');
         }
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/enableLegacyPdfExport')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setEnableLegacyPdfExport(data.value === 'true');
       })
       .catch(console.error);
 
@@ -637,6 +645,21 @@ export default function Settings() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ key: 'pdfSystem', value: val })
+      });
+      setPdfSystemStatus('success');
+    } catch {
+      setPdfSystemStatus('error');
+    }
+    setTimeout(() => setPdfSystemStatus('idle'), 2000);
+  };
+
+  const handleLegacyPdfToggle = async (val: boolean) => {
+    setEnableLegacyPdfExport(val);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key: 'enableLegacyPdfExport', value: String(val) })
       });
       setPdfSystemStatus('success');
     } catch {
@@ -1961,27 +1984,29 @@ export default function Settings() {
             <FileText size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-gray-800">PDF Generation Engine</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Select the PDF generator to use for exporting Quotations</p>
+            <h2 className="text-xl font-semibold text-gray-800">PDF Generation Engine Settings</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Configure PDF exports. Note: Server-Side Vector React-PDF is now the primary high-fidelity export method.</p>
           </div>
         </div>
         <div className="p-6">
           <div className="max-w-md">
             <div
-              onClick={() => handlePdfSystemToggle('client')}
+              onClick={() => handleLegacyPdfToggle(!enableLegacyPdfExport)}
               className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                pdfSystem === 'client' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'
+                enableLegacyPdfExport ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 bg-white hover:border-indigo-200 hover:bg-gray-50'
               }`}
             >
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <Monitor size={18} className={pdfSystem === 'client' ? 'text-indigo-600' : 'text-gray-400'} />
-                  <span className="font-semibold text-gray-800">Legacy Canvas (Client)</span>
+                  <Monitor size={18} className={enableLegacyPdfExport ? 'text-indigo-600' : 'text-gray-400'} />
+                  <span className="font-semibold text-gray-800">Enable Legacy HTML2Canvas Export</span>
                 </div>
-                {pdfSystem === 'client' && <CheckCircle2 size={18} className="text-indigo-600" />}
+                <div className={`w-10 h-5 rounded-full relative transition-colors ${enableLegacyPdfExport ? 'bg-indigo-600' : 'bg-gray-300'}`}>
+                  <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${enableLegacyPdfExport ? 'left-5.5' : 'left-0.5'}`} style={{ transform: enableLegacyPdfExport ? 'translateX(20px)' : 'translateX(0)' }}></div>
+                </div>
               </div>
               <p className="text-sm text-gray-500">
-                Uses the old html2canvas method. Prints exactly as it appears on screen but may be blurry and not selectable.
+                If enabled, the client-side legacy canvas print buttons will be shown as fallback options on the Quotation page. We recommend keeping this disabled.
               </p>
             </div>
           </div>
