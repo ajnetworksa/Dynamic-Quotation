@@ -2493,10 +2493,10 @@ export default function QuoteForm() {
   };
 
   return (
-    <div className="flex flex-col gap-6 dark:text-gray-100">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
+    <div className="flex flex-col gap-4 dark:text-gray-100">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 py-3.5 px-5 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
         <div className="flex items-center gap-4">
-          <div className="bg-indigo-100 dark:bg-indigo-900/40 p-3 rounded-xl text-indigo-700 dark:text-indigo-400">
+          <div className="bg-indigo-100 dark:bg-indigo-900/40 p-2.5 rounded-xl text-indigo-700 dark:text-indigo-400">
             <FileText size={24} />
           </div>
           <div>
@@ -2593,7 +2593,7 @@ export default function QuoteForm() {
         </div>
       </div>
 
-      <div className="flex flex-col xl:flex-row gap-6">
+      <div className="flex flex-col xl:flex-row gap-4">
         {/* Printable Quote Form */}
         <div
           ref={printRef}

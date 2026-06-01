@@ -517,7 +517,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col">
       <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[98%] mx-auto px-2 sm:px-4 lg:px-5">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
             <div className="flex items-center gap-2">
               <div className="bg-indigo-600 p-2 rounded-lg">
@@ -560,7 +560,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+      <main className="flex-1 max-w-[98%] mx-auto px-2 sm:px-4 lg:px-5 py-4 w-full">
         <div style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
           <QuoteForm />
         </div>
