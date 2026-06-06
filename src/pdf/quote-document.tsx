@@ -746,7 +746,7 @@ export function QuotePdfDocument({
         {/* ── DYNAMIC FOOTER ───────────────────────────────────────── */}
         <View fixed style={styles.footerRow}>
           <Text style={styles.footerText}>
-            {settings.companyName || "AJ Network Solutions"} | Tel: +966 920002087 | info@ajnetworksa.com
+            {settings.companyName || "AJ Network Solutions"} | Tel: +966 506098198 | info@ajnetworksa.com
           </Text>
           <Text style={styles.footerText} render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
         </View>
