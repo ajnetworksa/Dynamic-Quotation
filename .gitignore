@@ -10,6 +10,7 @@ coverage/
 
 # Database files — never commit live data
 quotes.db
+quotes*
 *.sqlite
 database.sqlite
 *.db-wal*

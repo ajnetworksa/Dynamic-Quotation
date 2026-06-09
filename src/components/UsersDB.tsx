@@ -25,15 +25,17 @@ interface Permissions {
   canShareQuote?: boolean;
   canEditSharedQuote?: boolean;
   canUseKanban?: boolean;
+  canUseWatermark?: boolean;
+  canUsePricingControls?: boolean;
 }
-
+ 
 interface AppUser {
   id: number;
   username: string;
   role: string;
   permissions: Permissions;
 }
-
+ 
 interface PermissionGroup {
   id: number;
   name: string;
@@ -41,7 +43,7 @@ interface PermissionGroup {
   permissions: Permissions;
   members: number[];
 }
-
+ 
 const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.ReactNode; description: string }[] = [
   { key: 'canManageUsers', label: 'Manage Users', icon: <Shield size={14} />, description: 'Create, edit, and delete system users and their permissions.' },
   { key: 'canManageSettings', label: 'Manage Settings', icon: <SettingsIcon size={14} />, description: 'Access global system settings, backup, and branding.' },
@@ -66,6 +68,8 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
   { key: 'canChangeAuthor', label: 'Change Prepared By', icon: <UserCheck size={14} />, description: 'Allow modifying the "Prepared By" name on quotes.' },
   { key: 'canShareQuote', label: 'Share Quotes', icon: <Users size={14} />, description: 'Allow sharing specific quotes with selected users or groups.' },
   { key: 'canEditSharedQuote', label: 'Edit Shared Quotes', icon: <Eye size={14} />, description: 'Allow editing and saving quotes that were shared with this user (not just viewing).' },
+  { key: 'canUseWatermark', label: 'Document Watermark', icon: <FileText size={14} />, description: 'Access watermark controls to add status text overlay on document PDFs.' },
+  { key: 'canUsePricingControls', label: 'Pricing Controls', icon: <Bot size={14} />, description: 'Access pricing controls like hiding price columns and manual total overrides.' },
 ];
 
 // ── Permission Toggles ────────────────────────────────────────────────────────

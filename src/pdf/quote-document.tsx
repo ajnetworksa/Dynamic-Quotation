@@ -88,8 +88,12 @@ export type PdfQuote = {
   discountTotal: number;
   taxTotal: number;
   total: number;
+  hidePrices?: boolean;
+  manualTotal?: number;
   customer: PdfCustomer;
   lines: PdfLine[];
+  watermarkText?: string | null;
+  watermarkType?: string | null;
 };
 
 export function lineNetPrice(line: PdfLine): number {
@@ -363,6 +367,86 @@ const styles = StyleSheet.create({
   }
 });
 
+const watermarkStyles = StyleSheet.create({
+  centerContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: -1,
+  },
+  centerText: {
+    fontSize: 72,
+    fontWeight: "bold",
+    color: "#6b7280",
+    opacity: 0.16,
+    transform: "rotate(-35deg)",
+    fontFamily: "Tajawal",
+  },
+  multiContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "space-around",
+    paddingVertical: 100,
+    zIndex: -1,
+  },
+  multiRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+  },
+  multiText: {
+    fontSize: 26,
+    fontWeight: "bold",
+    color: "#6b7280",
+    opacity: 0.15,
+    transform: "rotate(-30deg)",
+    fontFamily: "Tajawal",
+  },
+});
+
+function Watermark({ text, type }: { text?: string | null; type?: string | null }) {
+  if (!type || type === "none" || !text) return null;
+
+  if (type === "center") {
+    return (
+      <View fixed style={watermarkStyles.centerContainer} pointerEvents="none">
+        <Text style={watermarkStyles.centerText}>{text.toUpperCase()}</Text>
+      </View>
+    );
+  }
+
+  if (type === "multi") {
+    return (
+      <View fixed style={watermarkStyles.multiContainer} pointerEvents="none">
+        <View style={watermarkStyles.multiRow}>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+        </View>
+        <View style={watermarkStyles.multiRow}>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+        </View>
+        <View style={watermarkStyles.multiRow}>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+          <Text style={watermarkStyles.multiText}>{text.toUpperCase()}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return null;
+}
+
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
@@ -553,15 +637,19 @@ export function QuotePdfDocument({
             <View style={[{ width: COL.qty, justifyContent: "center" }, styles.border]}>
               <Text style={[styles.th, { color: tableTextColor }]}>QTY</Text>
             </View>
-            <View style={[{ width: COL.unit, justifyContent: "center" }, styles.border]}>
+            <View style={[{ width: COL.unit, justifyContent: "center" }, ...(quote.hidePrices ? cellBorderRight : [styles.border])]}>
               <Text style={[styles.th, { color: tableTextColor }]}>UNIT</Text>
             </View>
-            <View style={[{ width: COL.unitPrice, justifyContent: "center" }, styles.border]}>
-              <Text style={[styles.th, { color: tableTextColor }]}>UNIT PRICE</Text>
-            </View>
-            <View style={[{ width: COL.netPrice, justifyContent: "center" }, ...cellBorderRight]}>
-              <Text style={[styles.th, { color: tableTextColor }]}>NET PRICE</Text>
-            </View>
+            {!quote.hidePrices && (
+              <>
+                <View style={[{ width: COL.unitPrice, justifyContent: "center" }, styles.border]}>
+                  <Text style={[styles.th, { color: tableTextColor }]}>UNIT PRICE</Text>
+                </View>
+                <View style={[{ width: COL.netPrice, justifyContent: "center" }, ...cellBorderRight]}>
+                  <Text style={[styles.th, { color: tableTextColor }]}>NET PRICE</Text>
+                </View>
+              </>
+            )}
           </View>
 
           {/* Rows */}
@@ -569,7 +657,7 @@ export function QuotePdfDocument({
             // Section rows render as full-width branded headers
             if (line.type === 'section') {
               return (
-                <View key={i} wrap={false} style={[styles.tableRow, { backgroundColor: '#f0fdfa' }]}>
+                <View key={i} wrap={false} style={[styles.tableRow, { backgroundColor: 'rgba(240, 253, 250, 0.85)' }]}>
                   <View style={[{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }, styles.cellContainer, ...cellBorder, ...cellBorderRight]}>
                     <Text style={[styles.cellText, styles.cellLeft, { fontWeight: 'bold', color: brand, fontSize: 8.5 }]}>
                       {line.description}
@@ -591,7 +679,7 @@ export function QuotePdfDocument({
             }
 
             return (
-              <View key={i} wrap={false} style={[styles.tableRow, { backgroundColor: i % 2 === 1 ? '#f4f4f5' : '#ffffff' }]}>
+              <View key={i} wrap={false} style={[styles.tableRow, { backgroundColor: i % 2 === 1 ? 'rgba(244, 244, 245, 0.8)' : 'transparent' }]}>
 
                 {/* ITEM Column */}
                 <View style={[{ width: COL.item }, styles.cellContainer, ...cellBorder]}>
@@ -614,19 +702,21 @@ export function QuotePdfDocument({
                 </View>
 
                 {/* UNIT Column */}
-                <View style={[{ width: COL.unit }, styles.cellContainer, ...cellBorder]}>
+                <View style={[{ width: COL.unit }, styles.cellContainer, ...(quote.hidePrices ? cellBorderRight : [styles.border])]}>
                   <Text style={[styles.cellText, styles.cellCenter]}>{line.unit}</Text>
                 </View>
 
-                {/* UNIT PRICE Column */}
-                <View style={[{ width: COL.unitPrice }, styles.cellContainer, ...cellBorder]}>
-                  <Text style={[styles.cellText, styles.cellCenter]}>{fmt(line.unitPrice)}</Text>
-                </View>
-
-                {/* NET PRICE Column */}
-                <View style={[{ width: COL.netPrice }, styles.cellContainer, ...cellBorderRight]}>
-                  <Text style={[styles.cellText, styles.cellCenter, styles.cellBold]}>{fmt(lineNetPrice(line))}</Text>
-                </View>
+                {/* UNIT PRICE & NET PRICE Columns */}
+                {!quote.hidePrices && (
+                  <>
+                    <View style={[{ width: COL.unitPrice }, styles.cellContainer, ...cellBorder]}>
+                      <Text style={[styles.cellText, styles.cellCenter]}>{fmt(line.unitPrice)}</Text>
+                    </View>
+                    <View style={[{ width: COL.netPrice }, styles.cellContainer, ...cellBorderRight]}>
+                      <Text style={[styles.cellText, styles.cellCenter, styles.cellBold]}>{fmt(lineNetPrice(line))}</Text>
+                    </View>
+                  </>
+                )}
 
               </View>
             );
@@ -677,22 +767,9 @@ export function QuotePdfDocument({
                   <Text style={{ fontWeight: "bold" }}>{settings.taxLabel}</Text>
                   <Text>{quote.currency} {fmt(quote.taxTotal)}</Text>
                 </View>
-                <View style={[styles.totalPkg, { position: "relative", minHeight: 18, borderBottomWidth: 0 }]}>
-                  {headerBgType === "gradient" ? (
-                    <Svg style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: -1 }}>
-                      <Defs>
-                        <LinearGradient id="totalsGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <Stop offset="0%" stopColor={headerBgColorStart} />
-                          <Stop offset="100%" stopColor={headerBgColorEnd} />
-                        </LinearGradient>
-                      </Defs>
-                      <Rect x="0" y="0" width="100%" height="100%" fill="url(#totalsGrad)" />
-                    </Svg>
-                  ) : (
-                    <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: tableBgColor, zIndex: -1 }} />
-                  )}
-                  <Text style={{ color: tableTextColor, fontWeight: "bold" }}>TOTAL PACKAGE</Text>
-                  <Text style={{ color: tableTextColor, fontWeight: "bold" }}>{quote.currency} {fmt(quote.total)}</Text>
+                <View style={[styles.totalPkg, { position: "relative", minHeight: 18, borderBottomWidth: 0, backgroundColor: "#039737" }]}>
+                  <Text style={{ fontWeight: "bold", color: "#ffffff" }}>TOTAL PACKAGE</Text>
+                  <Text style={{ color: "#ffffff", fontWeight: "bold" }}>{quote.currency} {fmt(quote.manualTotal !== undefined && quote.manualTotal !== null ? quote.manualTotal : quote.total)}</Text>
                 </View>
                 {(isInvoice && amountPaid > 0) ? (
                   <>
@@ -717,6 +794,7 @@ export function QuotePdfDocument({
                     top: 85 + (settings.stampOffsetY || 0),
                     left: 10 + (settings.stampOffsetX || 0),
                     opacity: 0.9,
+                    objectFit: "contain",
                   }}
                 />
               )}
@@ -725,7 +803,7 @@ export function QuotePdfDocument({
 
           {/* ── TERMS ───────────────────────────────────────────────── */}
           {termsRows.length > 0 ? (
-            <View style={styles.termsSection}>
+            <View wrap={false} style={styles.termsSection}>
               {termsRows.map((row) => (
                 <View key={row.label} style={styles.termRow}>
                   <Text style={[styles.termLabel, { fontSize: tFontSize }]}>{row.label}:</Text>
@@ -746,7 +824,7 @@ export function QuotePdfDocument({
         {/* ── DYNAMIC FOOTER ───────────────────────────────────────── */}
         <View fixed style={styles.footerRow}>
           <Text style={styles.footerText}>
-            {settings.companyName || "AJ Network Solutions"} | Tel: +966 920002087 | info@ajnetworksa.com
+            {settings.companyName || "AJ Network Solutions"} | info@ajnetworksa.com
           </Text>
           <Text style={styles.footerText} render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
         </View>
@@ -756,6 +834,8 @@ export function QuotePdfDocument({
             <Image src={settings.footerImageUrl} style={{ width: "100%", height: settings.footerSize || 30, objectFit: "contain" }} />
           </View>
         ) : null}
+
+        <Watermark text={quote.watermarkText} type={quote.watermarkType} />
 
       </Page>
     </Document>
