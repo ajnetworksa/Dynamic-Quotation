@@ -81,6 +81,8 @@ const PERM_LABELS: Record<string, string> = {
   canPrintQuote: 'Print Quote',
   canViewFeatureAccess: 'View Own Feature Access',
   canUsePriceSync: 'AI Price Sync',
+  canUseWatermark: 'Document Watermark',
+  canUsePricingControls: 'Pricing Controls',
 };
 
 const PERM_DESCRIPTIONS: Record<string, string> = {
@@ -102,6 +104,8 @@ const PERM_DESCRIPTIONS: Record<string, string> = {
   canPrintQuote: 'Generate and print PDF versions of documents.',
   canViewFeatureAccess: 'See the "Feature Access" list in your profile menu.',
   canUsePriceSync: 'Bulk update product prices using AI to extract data from supplier lists (PDF/Excel).',
+  canUseWatermark: 'Access watermark controls to add status text overlay on document PDFs.',
+  canUsePricingControls: 'Access pricing controls like hiding price columns and manual total overrides.',
 };
 
 // ── Profile Modal ─────────────────────────────────────────────────────────────

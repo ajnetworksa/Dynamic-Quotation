@@ -77,9 +77,15 @@ export default function Settings() {
     showFeatureAccess: true,
     inspectionProtection: true,
     internalNotes: true,
-    bottomNote: true
+    bottomNote: true,
+    watermark: true,
+    markupCalculation: true
   });
   const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  // Global Default Markup Percentage
+  const [defaultMarkupPercentage, setDefaultMarkupPercentage] = useState<number>(8);
+  const [defaultMarkupStatus, setDefaultMarkupStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
   const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
@@ -225,6 +231,13 @@ export default function Settings() {
     fetch('/api/settings/workflowVisibility')
       .then(res => res.json())
       .then(data => { if (data.value) setWorkflowVisibility(JSON.parse(data.value)); })
+      .catch(console.error);
+
+    fetch('/api/settings/defaultMarkupPercentage')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setDefaultMarkupPercentage(parseFloat(data.value));
+      })
       .catch(console.error);
 
     fetch('/api/settings/developerMode')
@@ -621,6 +634,25 @@ export default function Settings() {
       setMuFilterStatus('error');
     }
     setTimeout(() => setMuFilterStatus('idle'), 3000);
+  };
+
+  const handleSaveDefaultMarkup = async () => {
+    setDefaultMarkupStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key: 'defaultMarkupPercentage', value: String(defaultMarkupPercentage) })
+      });
+      if (res.ok) {
+        setDefaultMarkupStatus('success');
+        setTimeout(() => setDefaultMarkupStatus('idle'), 3000);
+      } else {
+        setDefaultMarkupStatus('error');
+      }
+    } catch {
+      setDefaultMarkupStatus('error');
+    }
   };
 
   const handleRowReorderToggle = async (val: 'click' | 'drag') => {
@@ -1926,6 +1958,42 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* Pricing Settings (Default Markup) */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+            <Filter size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Pricing Settings</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Configure global default pricing markup percentage</p>
+          </div>
+        </div>
+        <div className="p-6 flex items-center gap-4">
+          <div className="flex items-center gap-3 flex-1 max-w-xs">
+            <input
+              type="number"
+              step="0.01"
+              value={defaultMarkupPercentage}
+              onChange={e => setDefaultMarkupPercentage(parseFloat(e.target.value) || 0)}
+              className="w-32 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-bold text-center text-lg"
+            />
+            <span className="text-gray-400 font-mono text-lg">% Default Markup</span>
+          </div>
+          <button
+            onClick={handleSaveDefaultMarkup}
+            disabled={defaultMarkupStatus === 'loading'}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 text-sm font-medium"
+          >
+            {defaultMarkupStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save Default Markup'}
+          </button>
+          <div className="h-5">
+            {defaultMarkupStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
+            {defaultMarkupStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save</span>}
+          </div>
+        </div>
+      </div>
+
       {/* Access Control: Workflow Visibility */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
@@ -1949,6 +2017,8 @@ export default function Settings() {
               { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
               { id: 'internalNotes', label: 'Internal Notes', desc: 'Enable private internal notes on quote items' },
               { id: 'bottomNote', label: 'Bottom Note Section', desc: 'Show terms/conditions note section at page bottom' },
+              { id: 'watermark', label: 'Watermark Option', desc: 'Enable document watermarks (PAID, AJNETWORK, etc.)' },
+              { id: 'markupCalculation', label: 'Markup Calculation', desc: 'Enable global markup pricing controls' },
             ].map((btn) => (
               <div
                 key={btn.id}

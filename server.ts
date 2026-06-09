@@ -330,6 +330,10 @@ addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
 addColumnIfNotExists('users', 'name', 'TEXT');
 addColumnIfNotExists('quotes', 'version', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'draft_data', 'TEXT');
+addColumnIfNotExists('quotes', 'watermark_text', "TEXT DEFAULT 'PAID'");
+addColumnIfNotExists('quotes', 'watermark_type', "TEXT DEFAULT 'none'");
+addColumnIfNotExists('quotes', 'hide_prices', 'INTEGER DEFAULT 0');
+addColumnIfNotExists('quotes', 'manual_total', 'REAL');
 addColumnIfNotExists('activity_log', 'details', 'TEXT'); // stores JSON array of field changes
 addColumnIfNotExists('products', 'item_code', 'TEXT');
 addColumnIfNotExists('products', 'supplier_name', 'TEXT');
@@ -603,6 +607,10 @@ const QuoteSchema = z.object({
     canEditUsers: z.array(z.number().int()).optional().default([]),
     canEditGroups: z.array(z.number().int()).optional().default([]),
   }).optional(),
+  watermark_text: z.string().max(200).optional().default('PAID'),
+  watermark_type: z.enum(['none', 'center', 'multi']).optional().default('none'),
+  hide_prices: z.boolean().optional().default(false),
+  manual_total: z.number().nullable().optional(),
   force: z.boolean().optional(),
 });
 
@@ -1145,6 +1153,8 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       discountTotal: quote.discount || 0,
       taxTotal: quote.tax || 0,
       total: quote.grand_total || 0,
+      hidePrices: !!quote.hide_prices,
+      manualTotal: quote.manual_total != null ? Number(quote.manual_total) : undefined,
       customer: {
         company: quote.customer_name || "",
         contactName: quote.customer_contact || "",
@@ -1163,6 +1173,8 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         unitPrice: it.unit_price || 0,
         discount: 0,
       })),
+      watermarkText: quote.watermark_text || "",
+      watermarkType: quote.watermark_type || "none",
     };
 
     // Load custom themes or settings
@@ -1370,7 +1382,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    author_name, author_id, shared_with, version, force
+    author_name, author_id, shared_with, version, force, watermark_text, watermark_type
   } = req.body;
   const shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
   const updated_at = new Date().toISOString();
@@ -1520,7 +1532,8 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
             custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?,
-            author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL
+            author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL,
+            watermark_text = ?, watermark_type = ?, hide_prices = ?, manual_total = ?
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
@@ -1528,7 +1541,8 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion, quote_id
+          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion,
+          watermark_text || 'PAID', watermark_type || 'none', req.body.hide_prices ? 1 : 0, req.body.manual_total ?? null, quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
 
@@ -1543,14 +1557,16 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version,
+            watermark_text, watermark_type, hide_prices, manual_total
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1,
+          watermark_text || 'PAID', watermark_type || 'none', req.body.hide_prices ? 1 : 0, req.body.manual_total ?? null
         );
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
