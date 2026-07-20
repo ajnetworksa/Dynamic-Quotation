@@ -340,6 +340,9 @@ addColumnIfNotExists('products', 'supplier_name', 'TEXT');
 addColumnIfNotExists('quote_items', 'item_code', 'TEXT');
 addColumnIfNotExists('quote_items', 'supplier_name', 'TEXT');
 addColumnIfNotExists('quote_items', 'type', "TEXT DEFAULT 'item'");
+addColumnIfNotExists('quotes', 'deleted_at', 'TEXT');
+addColumnIfNotExists('quotes', 'deleted_by', 'TEXT');
+addColumnIfNotExists('quotes', 'retain_forever', 'INTEGER DEFAULT 0');
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -403,6 +406,37 @@ const cleanupLogs = () => {
 };
 // Run cleanup on startup
 cleanupLogs();
+
+// ── RECYCLE BIN CLEANUP ────────────────────────────────────────────────────────
+const cleanupRecycleBin = () => {
+  try {
+    const settingRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('recycleBinDays') as { value: string } | undefined;
+    const days = settingRow ? parseInt(settingRow.value, 10) : 30;
+    if (days > 0) {
+      const expirationDate = new Date();
+      expirationDate.setDate(expirationDate.getDate() - days);
+      const toDelete = db.prepare('SELECT quote_id FROM quotes WHERE deleted_at IS NOT NULL AND deleted_at < ? AND retain_forever = 0').all(expirationDate.toISOString()) as { quote_id: string }[];
+      
+      if (toDelete.length > 0) {
+        db.transaction(() => {
+          const deleteItems = db.prepare('DELETE FROM quote_items WHERE quote_id = ?');
+          const deleteLogs = db.prepare('DELETE FROM activity_log WHERE quote_id = ?');
+          const deleteQuote = db.prepare('DELETE FROM quotes WHERE quote_id = ?');
+          for (const row of toDelete) {
+            deleteItems.run(row.quote_id);
+            deleteLogs.run(row.quote_id);
+            deleteQuote.run(row.quote_id);
+          }
+        })();
+        console.log(`🗑️  Cleaned up ${toDelete.length} expired item(s) from recycle bin.`);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to cleanup recycle bin:', e);
+  }
+};
+cleanupRecycleBin();
+setInterval(cleanupRecycleBin, 24 * 60 * 60 * 1000); // Run daily
 
 // ── SESSION CLEANUP: remove expired sessions every hour ──────────────────────
 // Prevents the sessions table from growing unbounded. Runs on startup and
@@ -701,10 +735,14 @@ app.post('/api/me/profile', requireAuth, async (req, res) => {
 
 // ── Self-service: Change own password ─────────────────────────────────────────
 // Any authenticated user can change their OWN password by proving they know
-// the current one. No admin privilege required.
+// the current one. Must have canChangePassword permission or be admin.
 app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema), async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const currentUser = (req as any).user;
+
+  if (currentUser.role !== 'admin' && !currentUser.permissions?.canChangePassword) {
+    return res.status(403).json({ error: 'Permission denied to change password. Please contact your administrator.' });
+  }
 
   try {
     const row = db.prepare('SELECT password FROM users WHERE id = ?').get(currentUser.id) as { password: string } | undefined;
@@ -999,6 +1037,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
+          WHERE q.deleted_at IS NULL
           ORDER BY q.id DESC
         `).all()
       : (() => {
@@ -1007,7 +1046,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
             FROM quotes q 
             LEFT JOIN customers c ON q.customer_id = c.id
             LEFT JOIN users u ON q.author_id = u.id
-            WHERE q.author_id = ?
+            WHERE q.author_id = ? AND q.deleted_at IS NULL
             ORDER BY q.id DESC
           `).all(currentUser.id) as any[];
 
@@ -1017,7 +1056,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
             FROM quotes q 
             LEFT JOIN customers c ON q.customer_id = c.id
             LEFT JOIN users u ON q.author_id = u.id
-            WHERE q.author_id != ? AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '')
+            WHERE q.author_id != ? AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '') AND q.deleted_at IS NULL
             ORDER BY q.id DESC
           `).all(currentUser.id) as any[];
 
@@ -1061,7 +1100,7 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
     FROM quotes q
     LEFT JOIN customers c ON q.customer_id = c.id
     LEFT JOIN users u ON q.author_id = u.id
-    WHERE q.quote_id = ?
+    WHERE q.quote_id = ? AND q.deleted_at IS NULL
   `).get(req.params.quote_id) as any;
   if (!quote) return res.status(404).json({ error: 'Quote not found' });
 
@@ -1097,7 +1136,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       LEFT JOIN users u ON q.author_id = u.id
-      WHERE q.quote_id = ?
+      WHERE q.quote_id = ? AND q.deleted_at IS NULL
     `).get(req.params.quote_id) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
@@ -1256,7 +1295,7 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
     SELECT q.*, c.name as customer_name 
     FROM quotes q 
     LEFT JOIN customers c ON q.customer_id = c.id
-    WHERE q.quote_id LIKE ? 
+    WHERE q.quote_id LIKE ? AND q.deleted_at IS NULL
     ORDER BY q.quote_id ASC
   `).all(`${baseId}%`) as any[];
 
@@ -1593,11 +1632,70 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
   try {
     const currentUser = (req as any).user;
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
     if (!canSeeAll && quote.author_id !== currentUser.id) {
       return res.status(403).json({ error: 'Access denied' });
     }
+    const actor = currentUser.name || currentUser.username;
+    db.prepare('UPDATE quotes SET deleted_at = ?, deleted_by = ? WHERE quote_id = ?').run(new Date().toISOString(), actor, req.params.quote_id);
+    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(req.params.quote_id, 'Sent to Recycle Bin', actor, new Date().toISOString(), null);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Recycle Bin Routes ────────────────────────────────────────────────────────
+app.get('/api/recycle-bin', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
+  try {
+    const quotes = db.prepare(`
+      SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+      FROM quotes q 
+      LEFT JOIN customers c ON q.customer_id = c.id
+      LEFT JOIN users u ON q.author_id = u.id
+      WHERE q.deleted_at IS NOT NULL
+      ORDER BY q.deleted_at DESC
+    `).all();
+    res.json(quotes);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/recycle-bin/:quote_id/restore', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
+  try {
+    const currentUser = (req as any).user;
+    const actor = currentUser.name || currentUser.username;
+    const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
+    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
+    
+    db.prepare('UPDATE quotes SET deleted_at = NULL, deleted_by = NULL, retain_forever = 0 WHERE quote_id = ?').run(req.params.quote_id);
+    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(req.params.quote_id, 'Restored from Recycle Bin', actor, new Date().toISOString(), null);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/recycle-bin/:quote_id/retain', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
+  try {
+    const { retain } = req.body;
+    const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
+    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
+    
+    db.prepare('UPDATE quotes SET retain_forever = ? WHERE quote_id = ?').run(retain ? 1 : 0, req.params.quote_id);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/recycle-bin/:quote_id', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
+  try {
+    const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
+    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
+    
     db.transaction(() => {
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(req.params.quote_id);
       db.prepare('DELETE FROM activity_log WHERE quote_id = ?').run(req.params.quote_id);
@@ -1648,7 +1746,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       LEFT JOIN users u ON q.author_id = u.id
-      WHERE q.quote_id = ?
+      WHERE q.quote_id = ? AND q.deleted_at IS NULL
     `).get(quoteId) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
