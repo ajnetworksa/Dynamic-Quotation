@@ -57,6 +57,8 @@ export default function Settings() {
   const [logsStatus, setLogsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [logExpirationDays, setLogExpirationDays] = useState<number>(7);
   const [logExpirationStatus, setLogExpirationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [recycleBinDays, setRecycleBinDays] = useState<number>(30);
+  const [recycleBinStatus, setRecycleBinStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
 
   // ── MU FILTERS ─────────────────────────────────────────────────────────────
@@ -186,6 +188,13 @@ export default function Settings() {
       .then(res => res.json())
       .then(data => {
         if (data.value) setLogExpirationDays(parseInt(data.value, 10));
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/recycleBinDays')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) setRecycleBinDays(parseInt(data.value, 10));
       })
       .catch(console.error);
 
@@ -322,6 +331,29 @@ export default function Settings() {
       }
     } catch {
       setLogExpirationStatus('error');
+    }
+  };
+
+  const handleSaveRecycleBinDays = async (days: number) => {
+    setRecycleBinDays(days);
+    setRecycleBinStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ key: 'recycleBinDays', value: days.toString() })
+      });
+      if (res.ok) {
+        setRecycleBinStatus('success');
+        setTimeout(() => setRecycleBinStatus('idle'), 3000);
+      } else {
+        setRecycleBinStatus('error');
+      }
+    } catch {
+      setRecycleBinStatus('error');
     }
   };
 
@@ -1727,6 +1759,30 @@ export default function Settings() {
                 {logExpirationStatus === 'error' && 'Failed to save expiration.'}
               </span>
             </p>
+
+            <div className="flex items-center gap-3 mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg max-w-xl">
+              <span className="text-sm font-medium text-gray-700">Recycle Bin Auto-Clear:</span>
+              <div className="relative">
+                <select
+                  value={recycleBinDays}
+                  onChange={(e) => handleSaveRecycleBinDays(parseInt(e.target.value, 10))}
+                  className="appearance-none pl-3 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                >
+                  <option value="7">7 Days</option>
+                  <option value="14">14 Days</option>
+                  <option value="30">30 Days</option>
+                  <option value="60">60 Days</option>
+                  <option value="90">90 Days</option>
+                  <option value="0">Never (Manual Only)</option>
+                </select>
+                <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+              </div>
+              <span className="ml-2 text-indigo-600 text-sm">
+                {recycleBinStatus === 'loading' && 'Saving...'}
+                {recycleBinStatus === 'success' && 'Saved!'}
+                {recycleBinStatus === 'error' && 'Error.'}
+              </span>
+            </div>
 
             {logsStatus === 'loading' ? (
               <div className="flex items-center gap-2 text-gray-500 justify-center py-8">

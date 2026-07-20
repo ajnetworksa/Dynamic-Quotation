@@ -27,6 +27,7 @@ interface Permissions {
   canUseKanban?: boolean;
   canUseWatermark?: boolean;
   canUsePricingControls?: boolean;
+  canManageRecycleBin?: boolean;
 }
  
 interface AppUser {
@@ -70,6 +71,7 @@ const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.Reac
   { key: 'canEditSharedQuote', label: 'Edit Shared Quotes', icon: <Eye size={14} />, description: 'Allow editing and saving quotes that were shared with this user (not just viewing).' },
   { key: 'canUseWatermark', label: 'Document Watermark', icon: <FileText size={14} />, description: 'Access watermark controls to add status text overlay on document PDFs.' },
   { key: 'canUsePricingControls', label: 'Pricing Controls', icon: <Bot size={14} />, description: 'Access pricing controls like hiding price columns and manual total overrides.' },
+  { key: 'canManageRecycleBin', label: 'Manage Recycle Bin', icon: <Trash2 size={14} />, description: 'Access the recycle bin to restore or permanently delete quotes.' },
 ];
 
 // ── Permission Toggles ────────────────────────────────────────────────────────
@@ -171,10 +173,14 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
 
   const handleUpdate = async (id: number) => {
     setError('');
+    const payload = { ...editForm, permissions: editForm.permissions || {} };
+    if (payload.password === '') {
+      delete payload.password;
+    }
     const res = await fetch(`/api/users/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...editForm, permissions: editForm.permissions || {} }),
+      body: JSON.stringify(payload),
     });
     if (res.ok) { setIsEditing(null); setEditForm({}); setSelectedGroupId(''); fetchUsers(); }
     else { const d = await res.json(); setError(d.error || 'Failed to update user'); }
@@ -197,50 +203,6 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
     setEditForm(prev => ({ ...prev, permissions: { ...prev.permissions, [key]: !(prev.permissions as Permissions)?.[key] } }));
   };
 
-  const FormPanel = ({ title, onSave, onCancel, bg }: { title: string; onSave: () => void; onCancel: () => void; bg: string }) => (
-    <div className={`p-5 border-b ${bg}`}>
-      <h3 className="text-sm font-bold mb-3">{title}</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-        <input type="text" className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Username" value={editForm.username || ''} onChange={e => setEditForm({ ...editForm, username: e.target.value })} />
-        <input type="password" className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder={isEditing ? 'New password (leave blank to keep)' : 'Password'} value={editForm.password || ''} onChange={e => setEditForm({ ...editForm, password: e.target.value })} />
-        <select className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.role || 'user'} onChange={e => setEditForm({ ...editForm, role: e.target.value })}>
-          <option value="user">User</option>
-          <option value="editor">Editor</option>
-          <option value="admin">Admin</option>
-        </select>
-      </div>
-
-      {/* Apply Permission Group */}
-      {editForm.role !== 'admin' && groups.length > 0 && (
-        <div className="flex items-center gap-2 mb-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
-          <Layers size={14} className="text-amber-600 shrink-0" />
-          <span className="text-xs font-semibold text-amber-700">Apply Group Preset:</span>
-          <select
-            className="flex-1 text-sm border border-amber-300 rounded p-1.5 bg-white focus:ring-2 focus:ring-amber-400 outline-none"
-            value={selectedGroupId}
-            onChange={e => {
-              setSelectedGroupId(e.target.value);
-              if (e.target.value) {
-                setEditForm(prev => ({ ...prev, permissions: applyGroup(e.target.value, (prev.permissions || {}) as Permissions) }));
-              }
-            }}
-          >
-            <option value="">— Select a group to apply —</option>
-            {groups.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
-          </select>
-          {selectedGroupId && (
-            <button className="text-xs text-amber-700 underline" onClick={() => { setSelectedGroupId(''); setEditForm(prev => ({ ...prev, permissions: {} })); }}>Clear</button>
-          )}
-        </div>
-      )}
-
-      <PermissionToggles perms={(editForm.permissions || {}) as Permissions} role={editForm.role || 'user'} onChange={togglePerm} />
-      <div className="flex gap-2 mt-3">
-        <button onClick={onSave} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"><Save size={15} /> Save</button>
-        <button onClick={onCancel} className="flex items-center gap-1.5 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 text-sm"><X size={15} /> Cancel</button>
-      </div>
-    </div>
-  );
 
   return (
     <>
@@ -256,8 +218,85 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
 
       {error && <div className="p-4 bg-red-50 text-red-600 text-sm font-medium border-b border-red-100">{error}</div>}
 
-      {isAdding && <FormPanel title="New User" onSave={handleAdd} onCancel={() => { setIsAdding(false); setSelectedGroupId(''); }} bg="border-indigo-100 bg-indigo-50 text-indigo-800" />}
-      {isEditing !== null && <FormPanel title={`Editing: ${users.find(u => u.id === isEditing)?.username}`} onSave={() => handleUpdate(isEditing)} onCancel={() => { setIsEditing(null); setSelectedGroupId(''); }} bg="border-blue-100 bg-blue-50 text-blue-800" />}
+      {isAdding && (
+        <div className="p-5 border-b border-indigo-100 bg-indigo-50 text-indigo-800">
+          <h3 className="text-sm font-bold mb-3">New User</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+            <input type="text" className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Username" value={editForm.username || ''} onChange={e => setEditForm({ ...editForm, username: e.target.value })} />
+            <input type="password" className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Password" value={editForm.password || ''} onChange={e => setEditForm({ ...editForm, password: e.target.value })} />
+            <select className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.role || 'user'} onChange={e => setEditForm({ ...editForm, role: e.target.value })}>
+              <option value="user">User</option>
+              <option value="editor">Editor</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          {editForm.role !== 'admin' && groups.length > 0 && (
+            <div className="flex items-center gap-2 mb-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+              <Layers size={14} className="text-amber-600 shrink-0" />
+              <span className="text-xs font-semibold text-amber-700">Apply Group Preset:</span>
+              <select
+                className="flex-1 text-sm border border-amber-300 rounded p-1.5 bg-white focus:ring-2 focus:ring-amber-400 outline-none"
+                value={selectedGroupId}
+                onChange={e => {
+                  setSelectedGroupId(e.target.value);
+                  if (e.target.value) {
+                    setEditForm(prev => ({ ...prev, permissions: applyGroup(e.target.value, (prev.permissions || {}) as Permissions) }));
+                  }
+                }}
+              >
+                <option value="">— Select a group to apply —</option>
+                {groups.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
+              </select>
+              {selectedGroupId && <button className="text-xs text-amber-700 underline" onClick={() => { setSelectedGroupId(''); setEditForm(prev => ({ ...prev, permissions: {} })); }}>Clear</button>}
+            </div>
+          )}
+          <PermissionToggles perms={(editForm.permissions || {}) as Permissions} role={editForm.role || 'user'} onChange={togglePerm} />
+          <div className="flex gap-2 mt-3">
+            <button onClick={handleAdd} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"><Save size={15} /> Save</button>
+            <button onClick={() => { setIsAdding(false); setSelectedGroupId(''); }} className="flex items-center gap-1.5 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 text-sm"><X size={15} /> Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {isEditing !== null && (
+        <div className="p-5 border-b border-blue-100 bg-blue-50 text-blue-800">
+          <h3 className="text-sm font-bold mb-3">Editing: {users.find(u => u.id === isEditing)?.username}</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+            <input type="text" className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Username" value={editForm.username || ''} onChange={e => setEditForm({ ...editForm, username: e.target.value })} />
+            <input type="password" className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="New password (leave blank to keep)" value={editForm.password || ''} onChange={e => setEditForm({ ...editForm, password: e.target.value })} />
+            <select className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.role || 'user'} onChange={e => setEditForm({ ...editForm, role: e.target.value })}>
+              <option value="user">User</option>
+              <option value="editor">Editor</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          {editForm.role !== 'admin' && groups.length > 0 && (
+            <div className="flex items-center gap-2 mb-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+              <Layers size={14} className="text-amber-600 shrink-0" />
+              <span className="text-xs font-semibold text-amber-700">Apply Group Preset:</span>
+              <select
+                className="flex-1 text-sm border border-amber-300 rounded p-1.5 bg-white focus:ring-2 focus:ring-amber-400 outline-none"
+                value={selectedGroupId}
+                onChange={e => {
+                  setSelectedGroupId(e.target.value);
+                  if (e.target.value) {
+                    setEditForm(prev => ({ ...prev, permissions: applyGroup(e.target.value, (prev.permissions || {}) as Permissions) }));
+                  }
+                }}
+              >
+                <option value="">— Select a group to apply —</option>
+                {groups.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
+              </select>
+              {selectedGroupId && <button className="text-xs text-amber-700 underline" onClick={() => { setSelectedGroupId(''); setEditForm(prev => ({ ...prev, permissions: {} })); }}>Clear</button>}
+            </div>
+          )}
+          <PermissionToggles perms={(editForm.permissions || {}) as Permissions} role={editForm.role || 'user'} onChange={togglePerm} />
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => handleUpdate(isEditing)} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"><Save size={15} /> Save</button>
+            <button onClick={() => { setIsEditing(null); setSelectedGroupId(''); }} className="flex items-center gap-1.5 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 text-sm"><X size={15} /> Cancel</button>
+          </div>
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">

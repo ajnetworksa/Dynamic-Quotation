@@ -2,13 +2,14 @@
 // App.tsx — Root Application Layout
 // =============================================================================
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
   FileText, Database, Users, History,
   Settings as SettingsIcon, LogOut, Shield,
   LayoutDashboard, KeyRound, X, ChevronDown,
   User, CheckCircle2, Lock, Eye, EyeOff,
-  Moon, Sun, Kanban, Truck
+  Moon, Sun, Kanban, Truck, Trash2
 } from 'lucide-react';
 import KanbanBoard from './components/KanbanBoard';
 import QuoteForm from './components/QuoteForm';
@@ -21,6 +22,7 @@ import Settings from './components/Settings';
 import Login from './components/Login';
 import UsersDB from './components/UsersDB';
 import AIAssistant from './components/AIAssistant';
+import { RecycleBin } from './components/RecycleBin';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Global fetch interceptor for auth token
@@ -139,8 +141,8 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
@@ -169,7 +171,8 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -216,9 +219,9 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     finally { setLoading(false); }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
             <div className="p-2 bg-indigo-50 rounded-lg"><KeyRound size={18} className="text-indigo-600" /></div>
@@ -315,7 +318,8 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
           </form>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -543,6 +547,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                   <NavItem to="/users" icon={Shield} label="Users" />
                 )}
+                {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
+                  <NavItem to="/recycle-bin" icon={Trash2} label="Recycle Bin" />
+                )}
                 {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
                   <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
                 )}
@@ -589,8 +596,13 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                 <Route path="/users" element={<UsersDB />} />
               )}
-              {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
+              {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
+                <Route path="/recycle-bin" element={<RecycleBin />} />
+              )}
+              {(user?.role === 'admin' || user?.permissions?.canManageSettings) ? (
                 <Route path="/settings" element={<Settings />} />
+              ) : (
+                <Route path="/settings" element={<div className="p-8 mt-10 text-center"><div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4"><SettingsIcon size={32} /></div><h2 className="text-xl font-bold text-gray-800">Access Denied</h2><p className="text-gray-500 mt-2">You do not have permission to view settings.</p></div>} />
               )}
             </Routes>
           </motion.div>
@@ -625,6 +637,23 @@ export default function App() {
     window.addEventListener('auth-change', handleAuthChange);
     return () => window.removeEventListener('auth-change', handleAuthChange);
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetch('/api/me')
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error('Not authenticated');
+        })
+        .then(data => {
+          localStorage.setItem('user', JSON.stringify(data));
+          setUser(data);
+        })
+        .catch(() => {
+          // If /api/me fails, the interceptor will handle 401s, but we do nothing here for other errors
+        });
+    }
+  }, [isAuthenticated]);
 
   const handleLogin = (token: string, userData: any) => {
     localStorage.setItem('token', token);
