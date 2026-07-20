@@ -3041,8 +3041,8 @@ export default function QuoteForm() {
                           ref={el => rowRefs.current[index] = el}
                           className={`flex-1 grid ${hidePrices ? 'grid-cols-[48px_1fr_64px_64px]' : 'grid-cols-[48px_1fr_64px_64px_110px_110px]'} border-b border-gray-300 last:border-b-0 text-base items-stretch print:items-stretch transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
-                          ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
-                          ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
+                          ${dragIndex === index ? 'opacity-40 bg-gray-100 scale-[0.995] shadow-inner border-y border-gray-300' : 'opacity-100'}
+                          ${dragOverIndex === index && dragIndex !== index ? 'border-t-[4px] border-t-indigo-500 bg-indigo-50/50 shadow-[0_-4px_6px_-2px_rgba(99,102,241,0.2)]' : ''}
                         `}
                           style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                           <div
