@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers, StickyNote } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers, StickyNote, FileSpreadsheet } from 'lucide-react';
 import QuoteDiffViewer from './QuoteDiffViewer';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
@@ -241,8 +241,48 @@ export default function Tracking() {
       try {
         const res = await fetch(`/api/quotes/${id}`);
         if (!res.ok) continue;
-        const data = await res.json();
-        const { items = [], ...quote } = data;
+        const rawData = await res.json();
+
+        let parsedDraft: any = null;
+        if (rawData.draft_data) {
+          try {
+            parsedDraft = typeof rawData.draft_data === 'string' ? JSON.parse(rawData.draft_data) : rawData.draft_data;
+          } catch (e) { }
+        }
+
+        const quote = {
+          ...rawData,
+          customer_name: parsedDraft?.selectedCustomer?.name || rawData.customer_name || '',
+          customer_mobile: parsedDraft?.selectedCustomer?.mobile || rawData.customer_mobile || '',
+          customer_address: parsedDraft?.selectedCustomer?.address || rawData.customer_address || '',
+          customer_contact: parsedDraft?.selectedCustomer?.contact || rawData.customer_contact || '',
+          customer_email: parsedDraft?.selectedCustomer?.email || rawData.customer_email || '',
+          subject: parsedDraft?.subject || rawData.subject || '',
+          subject_ar: parsedDraft?.subjectAr || rawData.subject_ar || '',
+          type: parsedDraft?.type || rawData.type || 'Quotation',
+          date: parsedDraft?.date || rawData.date || '',
+          markup: parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup ?? 8),
+          subtotal: parsedDraft?.subtotal !== undefined ? parsedDraft.subtotal : (rawData.subtotal || 0),
+          discount: parsedDraft?.discount !== undefined ? parsedDraft.discount : (rawData.discount || 0),
+          tax: parsedDraft?.tax !== undefined ? parsedDraft.tax : (rawData.tax || 0),
+          grand_total: parsedDraft?.grandTotal !== undefined ? parsedDraft.grandTotal : (rawData.grand_total || 0),
+          note: parsedDraft?.note || rawData.note || '',
+          note_ar: parsedDraft?.noteAr || rawData.note_ar || '',
+          payment: parsedDraft?.payment || rawData.payment || '',
+          payment_ar: parsedDraft?.paymentAr || rawData.payment_ar || '',
+          warranty: parsedDraft?.warranty || rawData.warranty || '',
+          warranty_ar: parsedDraft?.warrantyAr || rawData.warranty_ar || '',
+          manpower: parsedDraft?.manpower || rawData.manpower || '',
+          manpower_ar: parsedDraft?.manpowerAr || rawData.manpower_ar || '',
+          mobilization: parsedDraft?.mobilization || rawData.mobilization || '',
+          mobilization_ar: parsedDraft?.mobilizationAr || rawData.mobilization_ar || '',
+          duration: parsedDraft?.duration || rawData.duration || '',
+          duration_ar: parsedDraft?.durationAr || rawData.duration_ar || '',
+          bank_details: parsedDraft?.bankDetails || rawData.bank_details || '',
+          bank_details_ar: parsedDraft?.bankDetailsAr || rawData.bank_details_ar || '',
+        };
+
+        const items = parsedDraft?.items || rawData.items || [];
 
         const quoteInfo = [
           [], // 1
@@ -445,6 +485,329 @@ export default function Tracking() {
         console.error(`Failed to download Excel for ${id}:`, e);
       }
     }
+  };
+
+  const handleDownloadMergedExcel = async () => {
+    if (selectedIds.size === 0) return;
+    const isOk = confirm(`Are you sure you want to download a merged Excel file for ${selectedIds.size} quotes?`);
+    if (!isOk) return;
+
+    // Fetch filters for logic
+    let muFilters = { excl: [] as string[], zm: [] as string[], man: [] as string[], db: [] as string[] };
+    try {
+      const settingsRes = await fetch('/api/settings');
+      if (settingsRes.ok) {
+        const settingsList = await settingsRes.json();
+        const settingsMap: any = {};
+        settingsList.forEach((s: any) => settingsMap[s.key] = s.value);
+        if (settingsMap.muFilters) {
+          muFilters = JSON.parse(settingsMap.muFilters);
+        }
+      }
+    } catch (e) { }
+
+    const getItemRule = (item: any) => {
+      if (muFilters.excl.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'EXCL';
+      if (muFilters.zm.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'ZM';
+      if (muFilters.man.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'MAN';
+      if (muFilters.db.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'DB';
+      return 'MU';
+    };
+
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet('Merged Quotes');
+
+    ws.columns = [
+      { key: 'A', width: 6 },   // ITEM
+      { key: 'B', width: 50 },  // DESCRIPTION (EN)
+      { key: 'C', width: 8 },   // QTY
+      { key: 'D', width: 8 },   // UNIT
+      { key: 'E', width: 14 },  // UNIT PRICE / SUBTOTAL / DISCOUNT / VAT / TOTAL PACKAGE
+      { key: 'F', width: 16 },  // NET PRICE / NUMERIC TOTALS
+      { key: 'G', width: 18 },  // ITEM CODE
+      { key: 'H', width: 22 },  // SUPPLIER NAME
+      { key: 'I', width: 4 },   // GAP
+      { key: 'J', width: 8 },   // MARKUP %
+      { key: 'K', width: 12 },  // MANUAL
+      { key: 'L', width: 12 },  // BASE / B.TOTAL / TTL PROFIT
+      { key: 'M', width: 16 },  // TOTAL / NUMERIC PROFIT
+    ];
+
+    let currentRow = 1;
+    let quoteIndex = 0;
+
+    for (const id of selectedIds) {
+      try {
+        const res = await fetch(`/api/quotes/${id}`);
+        if (!res.ok) continue;
+        const rawData = await res.json();
+
+        let parsedDraft: any = null;
+        if (rawData.draft_data) {
+          try {
+            parsedDraft = typeof rawData.draft_data === 'string' ? JSON.parse(rawData.draft_data) : rawData.draft_data;
+          } catch (e) { }
+        }
+
+        const quote = {
+          ...rawData,
+          customer_name: parsedDraft?.selectedCustomer?.name || rawData.customer_name || '',
+          customer_mobile: parsedDraft?.selectedCustomer?.mobile || rawData.customer_mobile || '',
+          customer_address: parsedDraft?.selectedCustomer?.address || rawData.customer_address || '',
+          customer_contact: parsedDraft?.selectedCustomer?.contact || rawData.customer_contact || '',
+          customer_email: parsedDraft?.selectedCustomer?.email || rawData.customer_email || '',
+          subject: parsedDraft?.subject || rawData.subject || '',
+          subject_ar: parsedDraft?.subjectAr || rawData.subject_ar || '',
+          type: parsedDraft?.type || rawData.type || 'Quotation',
+          date: parsedDraft?.date || rawData.date || '',
+          markup: parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup ?? 8),
+          subtotal: parsedDraft?.subtotal !== undefined ? parsedDraft.subtotal : (rawData.subtotal || 0),
+          discount: parsedDraft?.discount !== undefined ? parsedDraft.discount : (rawData.discount || 0),
+          tax: parsedDraft?.tax !== undefined ? parsedDraft.tax : (rawData.tax || 0),
+          grand_total: parsedDraft?.grandTotal !== undefined ? parsedDraft.grandTotal : (rawData.grand_total || 0),
+          note: parsedDraft?.note || rawData.note || '',
+          note_ar: parsedDraft?.noteAr || rawData.note_ar || '',
+          payment: parsedDraft?.payment || rawData.payment || '',
+          payment_ar: parsedDraft?.paymentAr || rawData.payment_ar || '',
+          warranty: parsedDraft?.warranty || rawData.warranty || '',
+          warranty_ar: parsedDraft?.warrantyAr || rawData.warranty_ar || '',
+          manpower: parsedDraft?.manpower || rawData.manpower || '',
+          manpower_ar: parsedDraft?.manpowerAr || rawData.manpower_ar || '',
+          mobilization: parsedDraft?.mobilization || rawData.mobilization || '',
+          mobilization_ar: parsedDraft?.mobilizationAr || rawData.mobilization_ar || '',
+          duration: parsedDraft?.duration || rawData.duration || '',
+          duration_ar: parsedDraft?.durationAr || rawData.duration_ar || '',
+          bank_details: parsedDraft?.bankDetails || rawData.bank_details || '',
+          bank_details_ar: parsedDraft?.bankDetailsAr || rawData.bank_details_ar || '',
+        };
+
+        const items = parsedDraft?.items || rawData.items || [];
+
+        // 1. Quote ID Metadata only
+        ws.getRow(currentRow).values = ['Quote ID:', quote.quote_id];
+        ws.getCell(`A${currentRow}`).font = { name: 'Arial', size: 10, bold: true };
+        ws.getCell(`B${currentRow}`).font = { name: 'Arial', size: 10 };
+        currentRow++;
+
+        // 2. CUSTOMER INFO box
+        const custBoxStartRow = currentRow;
+        let rName: number | null = null;
+        if (quoteIndex === 0) {
+          rName = currentRow;
+          ws.getRow(rName).values = ['Customer Name:', quote.customer_name || ''];
+          ws.mergeCells(`B${rName}:H${rName}`);
+          currentRow++;
+        }
+
+        const rSubj = currentRow;
+        ws.getRow(rSubj).values = ['Subject:', quote.subject || ''];
+        ws.mergeCells(`B${rSubj}:H${rSubj}`);
+        currentRow++;
+
+        const lastBoxRow = rSubj;
+
+        // Borders & Formatting for CUSTOMER INFO box
+        for (let r = custBoxStartRow; r <= lastBoxRow; r++) {
+          for (let c = 1; c <= 8; c++) {
+            const cell = ws.getCell(r, c);
+            cell.font = { name: 'Arial', size: 10, bold: c === 1 };
+            cell.border = {
+              top: { style: r === custBoxStartRow ? 'medium' : 'thin' },
+              left: { style: c === 1 ? 'medium' : 'thin' },
+              bottom: { style: r === lastBoxRow ? 'medium' : 'thin' },
+              right: { style: c === 8 ? 'medium' : 'thin' }
+            };
+            cell.alignment = { vertical: 'middle', wrapText: true };
+          }
+        }
+
+        currentRow++;
+        // Blank row before table
+        currentRow++;
+
+        // 3. TABLE HEADER ROW
+        const tableHeaderRow = currentRow;
+        const headerRowObj = ws.getRow(tableHeaderRow);
+        headerRowObj.values = [
+          'ITEM', 'DESCRIPTION (EN)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'ITEM CODE', 'SUPPLIER NAME',
+          '', String(quote.markup || 0), 'Manual', 'BASE', 'TOTAL'
+        ];
+
+        for (let c = 1; c <= 8; c++) {
+          const cell = headerRowObj.getCell(c);
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF166534' } };
+          cell.font = { name: 'Arial', size: 10, color: { argb: 'FFFFFFFF' }, bold: true };
+          cell.border = { top: { style: 'medium' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+
+        const markupCell = headerRowObj.getCell(10);
+        markupCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
+        markupCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF000000' } };
+        markupCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        markupCell.border = { top: { style: 'medium' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+
+        for (let c = 11; c <= 13; c++) {
+          const cell = headerRowObj.getCell(c);
+          cell.font = { name: 'Arial', size: 10, bold: true };
+          cell.border = { top: { style: 'medium' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+
+        currentRow++;
+
+        // 4. ITEM ROWS
+        let baseTotal = 0;
+        items.forEach((item: any, index: number) => {
+          const rule = getItemRule(item);
+          let displayBase = 0;
+          let displayTotal = 0;
+
+          if (rule === 'EXCL') {
+            displayBase = 0;
+            displayTotal = 0;
+          } else if (rule === 'ZM') {
+            displayBase = item.unit_price || 0;
+            displayTotal = item.net_price || 0;
+          } else {
+            if (rule === 'MAN') displayBase = item.manual_price || 0;
+            else if (rule === 'DB') displayBase = item.original_price || 0;
+            else displayBase = item.original_price || 0;
+            displayTotal = displayBase * item.qty;
+          }
+          baseTotal += displayTotal;
+
+          const manualVal = item.manual_price !== undefined ? item.manual_price : item.unit_price;
+
+          const rowObj = ws.getRow(currentRow);
+          rowObj.values = [
+            index + 1,
+            item.description,
+            item.qty,
+            item.unit,
+            item.unit_price,
+            item.net_price,
+            item.item_code || '',
+            item.supplier_name || '',
+            '',
+            '',
+            manualVal,
+            displayBase,
+            displayTotal
+          ];
+
+          const bgColor = index % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF';
+
+          for (let c = 1; c <= 8; c++) {
+            const cell = rowObj.getCell(c);
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
+            cell.border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' }, top: { style: 'thin' } };
+            cell.font = { name: 'Arial', size: 10 };
+            if (c === 2 || c === 7 || c === 8) {
+              cell.alignment = { wrapText: true, vertical: 'middle' };
+            } else {
+              cell.alignment = { horizontal: 'center', vertical: 'middle' };
+              if (c === 5 || c === 6) {
+                cell.alignment.horizontal = 'right';
+                cell.numFmt = '#,##0.00';
+              }
+            }
+          }
+
+          for (let c = 11; c <= 13; c++) {
+            const cell = rowObj.getCell(c);
+            cell.border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' }, top: { style: 'thin' } };
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            cell.font = { name: 'Arial', size: 10 };
+            cell.numFmt = '#,##0.00';
+          }
+
+          currentRow++;
+        });
+
+        // 5. TOTALS SECTION
+        // Subtotal row
+        const rSub = ws.getRow(currentRow);
+        rSub.getCell(5).value = 'SUBTOTAL';
+        rSub.getCell(5).font = { name: 'Arial', size: 10, bold: true };
+        rSub.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };
+
+        rSub.getCell(6).value = quote.subtotal || 0;
+        rSub.getCell(6).font = { name: 'Arial', size: 10, bold: true };
+        rSub.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };
+        rSub.getCell(6).numFmt = '#,##0.00';
+
+        rSub.getCell(12).value = 'B.TOTAL';
+        rSub.getCell(12).font = { name: 'Arial', size: 10, bold: true };
+        rSub.getCell(12).alignment = { horizontal: 'right', vertical: 'middle' };
+
+        rSub.getCell(13).value = baseTotal;
+        rSub.getCell(13).font = { name: 'Arial', size: 10, bold: true };
+        rSub.getCell(13).alignment = { horizontal: 'right', vertical: 'middle' };
+        rSub.getCell(13).numFmt = '#,##0.00';
+        currentRow++;
+
+        // Discount row
+        const rDisc = ws.getRow(currentRow);
+        rDisc.getCell(5).value = 'DISCOUNT';
+        rDisc.getCell(5).font = { name: 'Arial', size: 10, bold: true };
+        rDisc.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };
+
+        rDisc.getCell(6).value = quote.discount || 0;
+        rDisc.getCell(6).font = { name: 'Arial', size: 10 };
+        rDisc.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };
+        rDisc.getCell(6).numFmt = '#,##0.00';
+        currentRow++;
+
+        // VAT row
+        const rVat = ws.getRow(currentRow);
+        rVat.getCell(5).value = 'VAT (15%)';
+        rVat.getCell(5).font = { name: 'Arial', size: 10, bold: true };
+        rVat.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };
+
+        rVat.getCell(6).value = quote.tax || 0;
+        rVat.getCell(6).font = { name: 'Arial', size: 10 };
+        rVat.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };
+        rVat.getCell(6).numFmt = '#,##0.00';
+        currentRow++;
+
+        // TOTAL PACKAGE / TTL PROFIT row
+        const rTot = ws.getRow(currentRow);
+        rTot.getCell(5).value = 'TOTAL PACKAGE';
+        rTot.getCell(5).font = { name: 'Arial', size: 10, bold: true };
+        rTot.getCell(5).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } };
+        rTot.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };
+
+        rTot.getCell(6).value = quote.grand_total || 0;
+        rTot.getCell(6).font = { name: 'Arial', size: 10, bold: true };
+        rTot.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4ADE80' } };
+        rTot.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };
+        rTot.getCell(6).numFmt = '#,##0.00';
+
+        rTot.getCell(12).value = 'TTL PROFIT';
+        rTot.getCell(12).font = { name: 'Arial', size: 10, bold: true };
+        rTot.getCell(12).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } };
+        rTot.getCell(12).alignment = { horizontal: 'right', vertical: 'middle' };
+
+        rTot.getCell(13).value = (quote.grand_total || 0) - baseTotal;
+        rTot.getCell(13).font = { name: 'Arial', size: 10, bold: true };
+        rTot.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } };
+        rTot.getCell(13).alignment = { horizontal: 'right', vertical: 'middle' };
+        rTot.getCell(13).numFmt = '#,##0.00';
+
+        currentRow++;
+
+        // Spacing between merged quotes (2 blank rows)
+        currentRow += 2;
+        quoteIndex++;
+      } catch (e) {
+        console.error(`Failed to include quote ${id} in merged Excel:`, e);
+      }
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    saveAs(blob, `Merged_Quotations_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   const closeTimeline = () => { setTimelineQuoteId(null); setTimelineData([]); setTimelineQuote(null); };
@@ -955,6 +1318,12 @@ export default function Tracking() {
                 className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-2"
               >
                 <Download size={16} /> Excels
+              </button>
+              <button
+                onClick={handleDownloadMergedExcel}
+                className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors flex items-center gap-2"
+              >
+                <FileSpreadsheet size={16} /> Merged Excel
               </button>
               <button
                 onClick={handleBulkStatusApply}
