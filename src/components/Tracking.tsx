@@ -241,8 +241,48 @@ export default function Tracking() {
       try {
         const res = await fetch(`/api/quotes/${id}`);
         if (!res.ok) continue;
-        const data = await res.json();
-        const { items = [], ...quote } = data;
+        const rawData = await res.json();
+
+        let parsedDraft: any = null;
+        if (rawData.draft_data) {
+          try {
+            parsedDraft = typeof rawData.draft_data === 'string' ? JSON.parse(rawData.draft_data) : rawData.draft_data;
+          } catch (e) { }
+        }
+
+        const quote = {
+          ...rawData,
+          customer_name: parsedDraft?.selectedCustomer?.name || rawData.customer_name || '',
+          customer_mobile: parsedDraft?.selectedCustomer?.mobile || rawData.customer_mobile || '',
+          customer_address: parsedDraft?.selectedCustomer?.address || rawData.customer_address || '',
+          customer_contact: parsedDraft?.selectedCustomer?.contact || rawData.customer_contact || '',
+          customer_email: parsedDraft?.selectedCustomer?.email || rawData.customer_email || '',
+          subject: parsedDraft?.subject || rawData.subject || '',
+          subject_ar: parsedDraft?.subjectAr || rawData.subject_ar || '',
+          type: parsedDraft?.type || rawData.type || 'Quotation',
+          date: parsedDraft?.date || rawData.date || '',
+          markup: parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup ?? 8),
+          subtotal: parsedDraft?.subtotal !== undefined ? parsedDraft.subtotal : (rawData.subtotal || 0),
+          discount: parsedDraft?.discount !== undefined ? parsedDraft.discount : (rawData.discount || 0),
+          tax: parsedDraft?.tax !== undefined ? parsedDraft.tax : (rawData.tax || 0),
+          grand_total: parsedDraft?.grandTotal !== undefined ? parsedDraft.grandTotal : (rawData.grand_total || 0),
+          note: parsedDraft?.note || rawData.note || '',
+          note_ar: parsedDraft?.noteAr || rawData.note_ar || '',
+          payment: parsedDraft?.payment || rawData.payment || '',
+          payment_ar: parsedDraft?.paymentAr || rawData.payment_ar || '',
+          warranty: parsedDraft?.warranty || rawData.warranty || '',
+          warranty_ar: parsedDraft?.warrantyAr || rawData.warranty_ar || '',
+          manpower: parsedDraft?.manpower || rawData.manpower || '',
+          manpower_ar: parsedDraft?.manpowerAr || rawData.manpower_ar || '',
+          mobilization: parsedDraft?.mobilization || rawData.mobilization || '',
+          mobilization_ar: parsedDraft?.mobilizationAr || rawData.mobilization_ar || '',
+          duration: parsedDraft?.duration || rawData.duration || '',
+          duration_ar: parsedDraft?.durationAr || rawData.duration_ar || '',
+          bank_details: parsedDraft?.bankDetails || rawData.bank_details || '',
+          bank_details_ar: parsedDraft?.bankDetailsAr || rawData.bank_details_ar || '',
+        };
+
+        const items = parsedDraft?.items || rawData.items || [];
 
         const quoteInfo = [
           [], // 1
@@ -499,8 +539,48 @@ export default function Tracking() {
       try {
         const res = await fetch(`/api/quotes/${id}`);
         if (!res.ok) continue;
-        const data = await res.json();
-        const { items = [], ...quote } = data;
+        const rawData = await res.json();
+
+        let parsedDraft: any = null;
+        if (rawData.draft_data) {
+          try {
+            parsedDraft = typeof rawData.draft_data === 'string' ? JSON.parse(rawData.draft_data) : rawData.draft_data;
+          } catch (e) { }
+        }
+
+        const quote = {
+          ...rawData,
+          customer_name: parsedDraft?.selectedCustomer?.name || rawData.customer_name || '',
+          customer_mobile: parsedDraft?.selectedCustomer?.mobile || rawData.customer_mobile || '',
+          customer_address: parsedDraft?.selectedCustomer?.address || rawData.customer_address || '',
+          customer_contact: parsedDraft?.selectedCustomer?.contact || rawData.customer_contact || '',
+          customer_email: parsedDraft?.selectedCustomer?.email || rawData.customer_email || '',
+          subject: parsedDraft?.subject || rawData.subject || '',
+          subject_ar: parsedDraft?.subjectAr || rawData.subject_ar || '',
+          type: parsedDraft?.type || rawData.type || 'Quotation',
+          date: parsedDraft?.date || rawData.date || '',
+          markup: parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup ?? 8),
+          subtotal: parsedDraft?.subtotal !== undefined ? parsedDraft.subtotal : (rawData.subtotal || 0),
+          discount: parsedDraft?.discount !== undefined ? parsedDraft.discount : (rawData.discount || 0),
+          tax: parsedDraft?.tax !== undefined ? parsedDraft.tax : (rawData.tax || 0),
+          grand_total: parsedDraft?.grandTotal !== undefined ? parsedDraft.grandTotal : (rawData.grand_total || 0),
+          note: parsedDraft?.note || rawData.note || '',
+          note_ar: parsedDraft?.noteAr || rawData.note_ar || '',
+          payment: parsedDraft?.payment || rawData.payment || '',
+          payment_ar: parsedDraft?.paymentAr || rawData.payment_ar || '',
+          warranty: parsedDraft?.warranty || rawData.warranty || '',
+          warranty_ar: parsedDraft?.warrantyAr || rawData.warranty_ar || '',
+          manpower: parsedDraft?.manpower || rawData.manpower || '',
+          manpower_ar: parsedDraft?.manpowerAr || rawData.manpower_ar || '',
+          mobilization: parsedDraft?.mobilization || rawData.mobilization || '',
+          mobilization_ar: parsedDraft?.mobilizationAr || rawData.mobilization_ar || '',
+          duration: parsedDraft?.duration || rawData.duration || '',
+          duration_ar: parsedDraft?.durationAr || rawData.duration_ar || '',
+          bank_details: parsedDraft?.bankDetails || rawData.bank_details || '',
+          bank_details_ar: parsedDraft?.bankDetailsAr || rawData.bank_details_ar || '',
+        };
+
+        const items = parsedDraft?.items || rawData.items || [];
 
         // 1. QUOTATION Title & Metadata
         ws.getRow(currentRow).values = [(quote.type || 'QUOTATION').toUpperCase()];
