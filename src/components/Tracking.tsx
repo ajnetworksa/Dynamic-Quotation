@@ -583,23 +583,14 @@ export default function Tracking() {
 
         const items = parsedDraft?.items || rawData.items || [];
 
-        // 1. Quote ID Metadata only (No QUOTATION header, No Date, No Valid For)
+        // 1. Quote ID Metadata only
         ws.getRow(currentRow).values = ['Quote ID:', quote.quote_id];
         ws.getCell(`A${currentRow}`).font = { name: 'Arial', size: 10, bold: true };
         ws.getCell(`B${currentRow}`).font = { name: 'Arial', size: 10 };
         currentRow++;
 
-        // Blank gap
-        currentRow++;
-
         // 2. CUSTOMER INFO box
-        const custHeaderRow = currentRow;
-        ws.getRow(custHeaderRow).values = ['CUSTOMER INFO'];
-        ws.mergeCells(`A${custHeaderRow}:H${custHeaderRow}`);
-        ws.getCell(`A${custHeaderRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
-        ws.getCell(`A${custHeaderRow}`).font = { name: 'Arial', size: 10, bold: true };
-        currentRow++;
-
+        const custBoxStartRow = currentRow;
         let rName: number | null = null;
         if (quoteIndex === 0) {
           rName = currentRow;
@@ -613,25 +604,20 @@ export default function Tracking() {
         ws.mergeCells(`B${rSubj}:H${rSubj}`);
         currentRow++;
 
-        const rSubjAr = currentRow;
-        ws.getRow(rSubjAr).values = ['', quote.subject_ar || ''];
-        ws.mergeCells(`B${rSubjAr}:H${rSubjAr}`);
-        currentRow++;
-
-        const lastBoxRow = rSubjAr;
+        const lastBoxRow = rSubj;
 
         // Borders & Formatting for CUSTOMER INFO box
-        for (let r = custHeaderRow; r <= lastBoxRow; r++) {
+        for (let r = custBoxStartRow; r <= lastBoxRow; r++) {
           for (let c = 1; c <= 8; c++) {
             const cell = ws.getCell(r, c);
-            cell.font = { name: 'Arial', size: 10, bold: c === 1 || r === custHeaderRow };
+            cell.font = { name: 'Arial', size: 10, bold: c === 1 };
             cell.border = {
-              top: { style: r === custHeaderRow ? 'medium' : 'thin' },
+              top: { style: r === custBoxStartRow ? 'medium' : 'thin' },
               left: { style: c === 1 ? 'medium' : 'thin' },
               bottom: { style: r === lastBoxRow ? 'medium' : 'thin' },
               right: { style: c === 8 ? 'medium' : 'thin' }
             };
-            cell.alignment = { vertical: 'middle', wrapText: true, horizontal: (r === rSubjAr && c === 2) ? 'right' : 'left' };
+            cell.alignment = { vertical: 'middle', wrapText: true };
           }
         }
 
