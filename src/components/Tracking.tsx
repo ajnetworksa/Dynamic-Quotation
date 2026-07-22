@@ -1,3 +1,5 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers, StickyNote, FileSpreadsheet } from 'lucide-react';
 import QuoteDiffViewer from './QuoteDiffViewer';
 import ExcelJS from 'exceljs';
