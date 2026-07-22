@@ -534,6 +534,7 @@ export default function Tracking() {
     ];
 
     let currentRow = 1;
+    let quoteIndex = 0;
 
     for (const id of selectedIds) {
       try {
@@ -582,72 +583,52 @@ export default function Tracking() {
 
         const items = parsedDraft?.items || rawData.items || [];
 
-        // 1. QUOTATION Title & Metadata
-        ws.getRow(currentRow).values = [(quote.type || 'QUOTATION').toUpperCase()];
-        ws.mergeCells(`A${currentRow}:D${currentRow}`);
-        ws.getCell(`A${currentRow}`).font = { name: 'Arial', size: 16, bold: true, color: { argb: 'FF1E3A8A' } };
-        currentRow++;
-
+        // 1. Quote ID Metadata only (No QUOTATION header, No Date, No Valid For)
         ws.getRow(currentRow).values = ['Quote ID:', quote.quote_id];
         ws.getCell(`A${currentRow}`).font = { name: 'Arial', size: 10, bold: true };
         ws.getCell(`B${currentRow}`).font = { name: 'Arial', size: 10 };
         currentRow++;
 
-        ws.getRow(currentRow).values = ['Date:', quote.date];
-        ws.getCell(`A${currentRow}`).font = { name: 'Arial', size: 10, bold: true };
-        ws.getCell(`B${currentRow}`).font = { name: 'Arial', size: 10 };
-        currentRow++;
-
-        ws.getRow(currentRow).values = ['Valid For:'];
-        ws.getCell(`A${currentRow}`).font = { name: 'Arial', size: 10, bold: true };
-        currentRow++;
-
         // Blank gap
         currentRow++;
 
-        // 2. CUSTOMER INFO
+        // 2. CUSTOMER INFO box
         const custHeaderRow = currentRow;
         ws.getRow(custHeaderRow).values = ['CUSTOMER INFO'];
         ws.mergeCells(`A${custHeaderRow}:H${custHeaderRow}`);
         ws.getCell(`A${custHeaderRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
         ws.getCell(`A${custHeaderRow}`).font = { name: 'Arial', size: 10, bold: true };
-
         currentRow++;
-        const rName = currentRow;
-        ws.getRow(rName).values = ['Customer Name:', quote.customer_name || '', '', '', 'Mobile:', quote.customer_mobile || ''];
-        ws.mergeCells(`B${rName}:D${rName}`);
-        ws.mergeCells(`F${rName}:H${rName}`);
 
-        currentRow++;
-        const rAddr = currentRow;
-        ws.getRow(rAddr).values = ['Address:', quote.customer_address || ''];
-        ws.mergeCells(`B${rAddr}:H${rAddr}`);
+        let rName: number | null = null;
+        if (quoteIndex === 0) {
+          rName = currentRow;
+          ws.getRow(rName).values = ['Customer Name:', quote.customer_name || ''];
+          ws.mergeCells(`B${rName}:H${rName}`);
+          currentRow++;
+        }
 
-        currentRow++;
-        const rCont = currentRow;
-        ws.getRow(rCont).values = ['Contact:', quote.customer_contact || '', '', '', 'E-mail:', quote.customer_email || ''];
-        ws.mergeCells(`B${rCont}:D${rCont}`);
-        ws.mergeCells(`F${rCont}:H${rCont}`);
-
-        currentRow++;
         const rSubj = currentRow;
         ws.getRow(rSubj).values = ['Subject:', quote.subject || ''];
         ws.mergeCells(`B${rSubj}:H${rSubj}`);
-
         currentRow++;
+
         const rSubjAr = currentRow;
         ws.getRow(rSubjAr).values = ['', quote.subject_ar || ''];
         ws.mergeCells(`B${rSubjAr}:H${rSubjAr}`);
+        currentRow++;
+
+        const lastBoxRow = rSubjAr;
 
         // Borders & Formatting for CUSTOMER INFO box
-        for (let r = custHeaderRow; r <= rSubjAr; r++) {
+        for (let r = custHeaderRow; r <= lastBoxRow; r++) {
           for (let c = 1; c <= 8; c++) {
             const cell = ws.getCell(r, c);
-            cell.font = { name: 'Arial', size: 10, bold: c === 1 || c === 5 || r === custHeaderRow };
+            cell.font = { name: 'Arial', size: 10, bold: c === 1 || r === custHeaderRow };
             cell.border = {
               top: { style: r === custHeaderRow ? 'medium' : 'thin' },
               left: { style: c === 1 ? 'medium' : 'thin' },
-              bottom: { style: r === rSubjAr ? 'medium' : 'thin' },
+              bottom: { style: r === lastBoxRow ? 'medium' : 'thin' },
               right: { style: c === 8 ? 'medium' : 'thin' }
             };
             cell.alignment = { vertical: 'middle', wrapText: true, horizontal: (r === rSubjAr && c === 2) ? 'right' : 'left' };
@@ -832,6 +813,7 @@ export default function Tracking() {
 
         // Spacing between merged quotes (2 blank rows)
         currentRow += 2;
+        quoteIndex++;
       } catch (e) {
         console.error(`Failed to include quote ${id} in merged Excel:`, e);
       }
