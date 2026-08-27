@@ -2,14 +2,13 @@
 // App.tsx — Root Application Layout
 // =============================================================================
 import React, { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
   FileText, Database, Users, History,
   Settings as SettingsIcon, LogOut, Shield,
   LayoutDashboard, KeyRound, X, ChevronDown,
   User, CheckCircle2, Lock, Eye, EyeOff,
-  Moon, Sun, Kanban, Truck, Trash2
+  Moon, Sun, Kanban, Truck
 } from 'lucide-react';
 import KanbanBoard from './components/KanbanBoard';
 import QuoteForm from './components/QuoteForm';
@@ -22,7 +21,6 @@ import Settings from './components/Settings';
 import Login from './components/Login';
 import UsersDB from './components/UsersDB';
 import AIAssistant from './components/AIAssistant';
-import { RecycleBin } from './components/RecycleBin';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Global fetch interceptor for auth token
@@ -83,8 +81,6 @@ const PERM_LABELS: Record<string, string> = {
   canPrintQuote: 'Print Quote',
   canViewFeatureAccess: 'View Own Feature Access',
   canUsePriceSync: 'AI Price Sync',
-  canUseWatermark: 'Document Watermark',
-  canUsePricingControls: 'Pricing Controls',
 };
 
 const PERM_DESCRIPTIONS: Record<string, string> = {
@@ -106,8 +102,6 @@ const PERM_DESCRIPTIONS: Record<string, string> = {
   canPrintQuote: 'Generate and print PDF versions of documents.',
   canViewFeatureAccess: 'See the "Feature Access" list in your profile menu.',
   canUsePriceSync: 'Bulk update product prices using AI to extract data from supplier lists (PDF/Excel).',
-  canUseWatermark: 'Access watermark controls to add status text overlay on document PDFs.',
-  canUsePricingControls: 'Access pricing controls like hiding price columns and manual total overrides.',
 };
 
 // ── Profile Modal ─────────────────────────────────────────────────────────────
@@ -141,8 +135,8 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
     }
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={onClose}>
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
@@ -171,8 +165,7 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
           </div>
         </form>
       </div>
-    </div>,
-    document.body
+    </div>
   );
 }
 
@@ -219,9 +212,9 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     finally { setLoading(false); }
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
             <div className="p-2 bg-indigo-50 rounded-lg"><KeyRound size={18} className="text-indigo-600" /></div>
@@ -318,8 +311,7 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
           </form>
         )}
       </div>
-    </div>,
-    document.body
+    </div>
   );
 }
 
@@ -525,7 +517,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col">
       <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
-        <div className="max-w-[98%] mx-auto px-2 sm:px-4 lg:px-5">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
             <div className="flex items-center gap-2">
               <div className="bg-indigo-600 p-2 rounded-lg">
@@ -546,9 +538,6 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 )}
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                   <NavItem to="/users" icon={Shield} label="Users" />
-                )}
-                {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
-                  <NavItem to="/recycle-bin" icon={Trash2} label="Recycle Bin" />
                 )}
                 {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
                   <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
@@ -571,7 +560,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
         </div>
       </header>
 
-      <main className="flex-1 max-w-[98%] mx-auto px-2 sm:px-4 lg:px-5 py-4 w-full">
+      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
         <div style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
           <QuoteForm />
         </div>
@@ -596,13 +585,8 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                 <Route path="/users" element={<UsersDB />} />
               )}
-              {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
-                <Route path="/recycle-bin" element={<RecycleBin />} />
-              )}
-              {(user?.role === 'admin' || user?.permissions?.canManageSettings) ? (
+              {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
                 <Route path="/settings" element={<Settings />} />
-              ) : (
-                <Route path="/settings" element={<div className="p-8 mt-10 text-center"><div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4"><SettingsIcon size={32} /></div><h2 className="text-xl font-bold text-gray-800">Access Denied</h2><p className="text-gray-500 mt-2">You do not have permission to view settings.</p></div>} />
               )}
             </Routes>
           </motion.div>
@@ -637,23 +621,6 @@ export default function App() {
     window.addEventListener('auth-change', handleAuthChange);
     return () => window.removeEventListener('auth-change', handleAuthChange);
   }, []);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      fetch('/api/me')
-        .then(res => {
-          if (res.ok) return res.json();
-          throw new Error('Not authenticated');
-        })
-        .then(data => {
-          localStorage.setItem('user', JSON.stringify(data));
-          setUser(data);
-        })
-        .catch(() => {
-          // If /api/me fails, the interceptor will handle 401s, but we do nothing here for other errors
-        });
-    }
-  }, [isAuthenticated]);
 
   const handleLogin = (token: string, userData: any) => {
     localStorage.setItem('token', token);

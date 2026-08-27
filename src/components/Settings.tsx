@@ -57,8 +57,6 @@ export default function Settings() {
   const [logsStatus, setLogsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [logExpirationDays, setLogExpirationDays] = useState<number>(7);
   const [logExpirationStatus, setLogExpirationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [recycleBinDays, setRecycleBinDays] = useState<number>(30);
-  const [recycleBinStatus, setRecycleBinStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
 
   // ── MU FILTERS ─────────────────────────────────────────────────────────────
@@ -79,15 +77,9 @@ export default function Settings() {
     showFeatureAccess: true,
     inspectionProtection: true,
     internalNotes: true,
-    bottomNote: true,
-    watermark: true,
-    markupCalculation: true
+    bottomNote: true
   });
   const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-
-  // Global Default Markup Percentage
-  const [defaultMarkupPercentage, setDefaultMarkupPercentage] = useState<number>(8);
-  const [defaultMarkupStatus, setDefaultMarkupStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
   const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
@@ -95,7 +87,6 @@ export default function Settings() {
 
   // PDF Generation Engine
   const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
-  const [enableLegacyPdfExport, setEnableLegacyPdfExport] = useState<boolean>(false);
   const [pdfSystemStatus, setPdfSystemStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Developer mode
@@ -191,13 +182,6 @@ export default function Settings() {
       })
       .catch(console.error);
 
-    fetch('/api/settings/recycleBinDays')
-      .then(res => res.json())
-      .then(data => {
-        if (data.value) setRecycleBinDays(parseInt(data.value, 10));
-      })
-      .catch(console.error);
-
     fetch('/api/settings/muFilters')
       .then(res => res.json())
       .then(data => {
@@ -230,23 +214,9 @@ export default function Settings() {
       })
       .catch(console.error);
 
-    fetch('/api/settings/enableLegacyPdfExport')
-      .then(res => res.json())
-      .then(data => {
-        if (data.value) setEnableLegacyPdfExport(data.value === 'true');
-      })
-      .catch(console.error);
-
     fetch('/api/settings/workflowVisibility')
       .then(res => res.json())
       .then(data => { if (data.value) setWorkflowVisibility(JSON.parse(data.value)); })
-      .catch(console.error);
-
-    fetch('/api/settings/defaultMarkupPercentage')
-      .then(res => res.json())
-      .then(data => {
-        if (data.value) setDefaultMarkupPercentage(parseFloat(data.value));
-      })
       .catch(console.error);
 
     fetch('/api/settings/developerMode')
@@ -331,29 +301,6 @@ export default function Settings() {
       }
     } catch {
       setLogExpirationStatus('error');
-    }
-  };
-
-  const handleSaveRecycleBinDays = async (days: number) => {
-    setRecycleBinDays(days);
-    setRecycleBinStatus('loading');
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ key: 'recycleBinDays', value: days.toString() })
-      });
-      if (res.ok) {
-        setRecycleBinStatus('success');
-        setTimeout(() => setRecycleBinStatus('idle'), 3000);
-      } else {
-        setRecycleBinStatus('error');
-      }
-    } catch {
-      setRecycleBinStatus('error');
     }
   };
 
@@ -668,25 +615,6 @@ export default function Settings() {
     setTimeout(() => setMuFilterStatus('idle'), 3000);
   };
 
-  const handleSaveDefaultMarkup = async () => {
-    setDefaultMarkupStatus('loading');
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'defaultMarkupPercentage', value: String(defaultMarkupPercentage) })
-      });
-      if (res.ok) {
-        setDefaultMarkupStatus('success');
-        setTimeout(() => setDefaultMarkupStatus('idle'), 3000);
-      } else {
-        setDefaultMarkupStatus('error');
-      }
-    } catch {
-      setDefaultMarkupStatus('error');
-    }
-  };
-
   const handleRowReorderToggle = async (val: 'click' | 'drag') => {
     setRowReorderMode(val);
     try {
@@ -709,21 +637,6 @@ export default function Settings() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ key: 'pdfSystem', value: val })
-      });
-      setPdfSystemStatus('success');
-    } catch {
-      setPdfSystemStatus('error');
-    }
-    setTimeout(() => setPdfSystemStatus('idle'), 2000);
-  };
-
-  const handleLegacyPdfToggle = async (val: boolean) => {
-    setEnableLegacyPdfExport(val);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'enableLegacyPdfExport', value: String(val) })
       });
       setPdfSystemStatus('success');
     } catch {
@@ -1760,30 +1673,6 @@ export default function Settings() {
               </span>
             </p>
 
-            <div className="flex items-center gap-3 mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg max-w-xl">
-              <span className="text-sm font-medium text-gray-700">Recycle Bin Auto-Clear:</span>
-              <div className="relative">
-                <select
-                  value={recycleBinDays}
-                  onChange={(e) => handleSaveRecycleBinDays(parseInt(e.target.value, 10))}
-                  className="appearance-none pl-3 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                >
-                  <option value="7">7 Days</option>
-                  <option value="14">14 Days</option>
-                  <option value="30">30 Days</option>
-                  <option value="60">60 Days</option>
-                  <option value="90">90 Days</option>
-                  <option value="0">Never (Manual Only)</option>
-                </select>
-                <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
-              </div>
-              <span className="ml-2 text-indigo-600 text-sm">
-                {recycleBinStatus === 'loading' && 'Saving...'}
-                {recycleBinStatus === 'success' && 'Saved!'}
-                {recycleBinStatus === 'error' && 'Error.'}
-              </span>
-            </div>
-
             {logsStatus === 'loading' ? (
               <div className="flex items-center gap-2 text-gray-500 justify-center py-8">
                 <Loader2 size={18} className="animate-spin" /> Loading logs...
@@ -2014,42 +1903,6 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Pricing Settings (Default Markup) */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
-            <Filter size={20} />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Pricing Settings</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Configure global default pricing markup percentage</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center gap-4">
-          <div className="flex items-center gap-3 flex-1 max-w-xs">
-            <input
-              type="number"
-              step="0.01"
-              value={defaultMarkupPercentage}
-              onChange={e => setDefaultMarkupPercentage(parseFloat(e.target.value) || 0)}
-              className="w-32 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-bold text-center text-lg"
-            />
-            <span className="text-gray-400 font-mono text-lg">% Default Markup</span>
-          </div>
-          <button
-            onClick={handleSaveDefaultMarkup}
-            disabled={defaultMarkupStatus === 'loading'}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 text-sm font-medium"
-          >
-            {defaultMarkupStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save Default Markup'}
-          </button>
-          <div className="h-5">
-            {defaultMarkupStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
-            {defaultMarkupStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save</span>}
-          </div>
-        </div>
-      </div>
-
       {/* Access Control: Workflow Visibility */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
@@ -2073,8 +1926,6 @@ export default function Settings() {
               { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
               { id: 'internalNotes', label: 'Internal Notes', desc: 'Enable private internal notes on quote items' },
               { id: 'bottomNote', label: 'Bottom Note Section', desc: 'Show terms/conditions note section at page bottom' },
-              { id: 'watermark', label: 'Watermark Option', desc: 'Enable document watermarks (PAID, AJNETWORK, etc.)' },
-              { id: 'markupCalculation', label: 'Markup Calculation', desc: 'Enable global markup pricing controls' },
             ].map((btn) => (
               <div
                 key={btn.id}
@@ -2110,29 +1961,27 @@ export default function Settings() {
             <FileText size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-gray-800">PDF Generation Engine Settings</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Configure PDF exports. Note: Server-Side Vector React-PDF is now the primary high-fidelity export method.</p>
+            <h2 className="text-xl font-semibold text-gray-800">PDF Generation Engine</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Select the PDF generator to use for exporting Quotations</p>
           </div>
         </div>
         <div className="p-6">
           <div className="max-w-md">
             <div
-              onClick={() => handleLegacyPdfToggle(!enableLegacyPdfExport)}
+              onClick={() => handlePdfSystemToggle('client')}
               className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                enableLegacyPdfExport ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 bg-white hover:border-indigo-200 hover:bg-gray-50'
+                pdfSystem === 'client' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'
               }`}
             >
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <Monitor size={18} className={enableLegacyPdfExport ? 'text-indigo-600' : 'text-gray-400'} />
-                  <span className="font-semibold text-gray-800">Enable Legacy HTML2Canvas Export</span>
+                  <Monitor size={18} className={pdfSystem === 'client' ? 'text-indigo-600' : 'text-gray-400'} />
+                  <span className="font-semibold text-gray-800">Legacy Canvas (Client)</span>
                 </div>
-                <div className={`w-10 h-5 rounded-full relative transition-colors ${enableLegacyPdfExport ? 'bg-indigo-600' : 'bg-gray-300'}`}>
-                  <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${enableLegacyPdfExport ? 'left-5.5' : 'left-0.5'}`} style={{ transform: enableLegacyPdfExport ? 'translateX(20px)' : 'translateX(0)' }}></div>
-                </div>
+                {pdfSystem === 'client' && <CheckCircle2 size={18} className="text-indigo-600" />}
               </div>
               <p className="text-sm text-gray-500">
-                If enabled, the client-side legacy canvas print buttons will be shown as fallback options on the Quotation page. We recommend keeping this disabled.
+                Uses the old html2canvas method. Prints exactly as it appears on screen but may be blurry and not selectable.
               </p>
             </div>
           </div>
