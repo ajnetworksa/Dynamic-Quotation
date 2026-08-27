@@ -1,39 +1,135 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
+# =============================================================================
+# 1. SECURITY, CREDENTIALS & SECRETS (Never commit)
+# =============================================================================
+.env
+.env.*
+.env.local
+.env.development
+.env.test
+.env.production
 !.env.example
 !.env_example
 
-# Database files — never commit live data
-quotes.db
-quotes*
-*.sqlite
-database.sqlite
-*.db-wal*
-*.db-shm*
+# SSL certificates, SSH keys, tokens, and cloud credentials
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*.pub
+*id_rsa*
+*credentials*.json
+service-account*.json
+client_secret*.json
+*.token
+tokens/
+.auth/
+
+# =============================================================================
+# 2. DATABASES, SQL DUMPS & RUNTIME LOCKS (Live & historic data)
+# =============================================================================
+*.db
+*.db-*
 *.db.backup*
 *.db.corrupt*
+*.db.bak*
+*.db.old*
+*.sqlite
+*.sqlite3
+*.db3
+*.s3db
+quotes*.db*
+database.sqlite*
 quotes_recovered*
-*.db-wal
-quotes.db-wal
+quotes_old*
+*.sql
+*.sql.gz
+*.dump
+*.dmp
 
-# Debug / scratch development files
+# =============================================================================
+# 3. BACKUPS, ARCHIVES & USER UPLOADS
+# =============================================================================
+backups/
+backup/
+*Backup*/
+*backup*/
+AJ_Network_Full_Backup_*/
+*DB_Backup*.xlsx
+uploads/
+public/uploads/
+temp/
+tmp/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.bak
+*.backup
+
+# =============================================================================
+# 4. LOGS & DIAGNOSTICS (May leak sensitive stack traces or inputs)
+# =============================================================================
+*.log
+*.log.*
+error.log
+build_error.log
+access.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =============================================================================
+# 5. DEPENDENCIES & BUILD ARTIFACTS
+# =============================================================================
+node_modules/
+dist/
+build/
+out/
+.vite/
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+*.tsbuildinfo
+coverage/
+.nyc_output/
+
+# =============================================================================
+# 6. IDE, EDITOR & OS FILES
+# =============================================================================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# =============================================================================
+# 7. DEVELOPMENT SCRATCH & ONE-OFF SCRIPTS
+# =============================================================================
+scratch/
 all_useStates.txt
 const_search.txt
 useState_search.txt
-build_error.log
-error.log
 get-gemini.js
 get-models.js
 test-api.ts
-scratch/
-metadata.json
-todo.md
-
-# Backups and Zip files
-backups/
-*.zip
+test-*.js
+test-*.ts

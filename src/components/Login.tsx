@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileText, Lock, User, Eye, EyeOff } from 'lucide-react';
+import { FileText, Lock, User } from 'lucide-react';
 
 export default function Login({ onLogin }: { onLogin: (token: string, user: any) => void }) {
   const [username, setUsername] = useState('');
@@ -7,7 +7,6 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,24 +76,13 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
                 <Lock className="h-5 w-5 text-gray-400" />
               </div>
               <input
-                type={showPassword ? "text" : "password"}
+                type="password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="block w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                 placeholder="Enter your password"
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-indigo-600 focus:outline-none"
-              >
-                {showPassword ? (
-                  <EyeOff className="h-5 w-5" />
-                ) : (
-                  <Eye className="h-5 w-5" />
-                )}
-              </button>
             </div>
           </div>
 

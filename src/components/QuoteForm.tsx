@@ -96,7 +96,6 @@ export default function QuoteForm() {
   const [isSending, setIsSending] = useState(false);
   const [isRfqLoading, setIsRfqLoading] = useState(false);
   const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
-  const [enableLegacyPdfExport, setEnableLegacyPdfExport] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── SIDEBAR ALIGNMENT REFS ──────────────────────────────────────────────
@@ -199,20 +198,13 @@ export default function QuoteForm() {
     preparedBy: true,
     shareWith: true,
     internalNotes: true,
-    bottomNote: true,
-    watermark: true,
-    markupCalculation: true
+    bottomNote: true
   });
 
   // Global markup percentage added for automated pricing.
   // When products are added from the DB, their unit_price is calculated as:
   // original_price * (1 + markup / 100).
-  const [markup, setMarkup] = useState(20);
-  const [defaultMarkup, setDefaultMarkup] = useState(20);
-  const [watermarkText, setWatermarkText] = useState('PAID');
-  const [watermarkType, setWatermarkType] = useState('none');
-  const [hidePrices, setHidePrices] = useState(false);
-  const [manualTotal, setManualTotal] = useState<number | ''>('');
+  const [markup, setMarkup] = useState(8);
 
   // ── ROW HEIGHT SYNCING ──────────────────────────────────────────────────
   // rowRefs tracks the DOM elements of the main table rows.
@@ -294,15 +286,14 @@ export default function QuoteForm() {
       if ((item.manual_price !== undefined && item.manual_price !== null) || item.original_price === undefined || item.original_price === null) {
         return item;
       }
-      const currentMarkup = workflowVisibility.markupCalculation ? markup : 0;
-      const newUnitPrice = item.original_price * (1 + currentMarkup / 100);
+      const newUnitPrice = item.original_price * (1 + markup / 100);
       return {
         ...item,
         unit_price: newUnitPrice,
         net_price: newUnitPrice * item.qty
       };
     }));
-  }, [markup, workflowVisibility.markupCalculation]);
+  }, [markup]);
   // ── DEFAULT VAT RATE ──────────────────────────────────────────────────────
   // Change 15 to any number (e.g. 5 for 5%).  The user can also edit it live
   // in the totals box on the right side of the form.
@@ -655,19 +646,6 @@ export default function QuoteForm() {
         }
       }
 
-      // Load default markup percentage setting
-      const resDefaultMarkup = await fetch('/api/settings/defaultMarkupPercentage');
-      if (resDefaultMarkup.ok) {
-        const dataDefaultMarkup = await resDefaultMarkup.json();
-        if (dataDefaultMarkup.value) {
-          const val = parseFloat(dataDefaultMarkup.value);
-          setDefaultMarkup(val);
-          if (!recallQuoteId && !localStorage.getItem(DRAFT_KEY)) {
-            setMarkup(val);
-          }
-        }
-      }
-
       // Load stamp image
       const resStamp = await fetch('/api/settings/stampImage');
       if (resStamp.ok) {
@@ -688,12 +666,6 @@ export default function QuoteForm() {
       if (resPdf.ok) {
         const d = await resPdf.json();
         if (d.value) setPdfSystem(d.value as 'client' | 'server');
-      }
-
-      const resLegacy = await fetch('/api/settings/enableLegacyPdfExport');
-      if (resLegacy.ok) {
-        const d = await resLegacy.json();
-        if (d.value) setEnableLegacyPdfExport(d.value === 'true');
       }
     } catch (e) {
       console.error('Failed to fetch settings', e);
@@ -1007,7 +979,7 @@ export default function QuoteForm() {
       setType(data.type || 'Quotation');
       setVersion(data.version || 1);
       setVatRate(parsedDraft?.vatRate !== undefined ? parsedDraft.vatRate : (data.vat_rate !== undefined ? data.vat_rate : 15));
-      setMarkup(parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : defaultMarkup));
+      setMarkup(parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8));
       setPayment(parsedDraft?.payment || data.payment || 'Full Payment in ADVANCE');
       setPaymentAr(parsedDraft?.paymentAr || data.payment_ar || 'الدفع الكامل مقدما');
       setWarranty(parsedDraft?.warranty || data.warranty || "2 YEARS limited warranty and/or supplier's recommendation");
@@ -1022,10 +994,6 @@ export default function QuoteForm() {
       setBankDetailsAr(parsedDraft?.bankDetailsAr || data.bank_details_ar || 'بنك الإنماء - الحساب: 68206662020000\nالأيبان: SA0305000068206662020000 عبدالمحسن\nعبدالعزيز الجبر للتجارة');
       setFooter(parsedDraft?.footer || data.footer || 'Thank you for your business!');
       setFooterAr(parsedDraft?.footerAr || data.footer_ar || 'شكرا لتعاملكم معنا!');
-      setWatermarkText(parsedDraft?.watermarkText || data.watermark_text || 'PAID');
-      setWatermarkType(parsedDraft?.watermarkType || data.watermark_type || 'none');
-      setHidePrices(!!(parsedDraft?.hidePrices ?? data.hide_prices));
-      setManualTotal(parsedDraft?.manualTotal !== undefined && parsedDraft?.manualTotal !== null ? parsedDraft.manualTotal : (data.manual_total != null ? Number(data.manual_total) : ''));
 
       let parsedCustomFields: CustomField[] = [];
       const cfSource = parsedDraft?.customFields ? JSON.stringify(parsedDraft.customFields) : data.custom_field;
@@ -1098,7 +1066,7 @@ export default function QuoteForm() {
               }
 
               original_price = dbPrice;
-              const currentMarkup = workflowVisibility.markupCalculation ? (parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : defaultMarkup)) : 0;
+              const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8);
               const expectedNewUnitPrice = dbPrice * (1 + currentMarkup / 100);
               const currentUnitPrice = item.unit_price;
               if (manual_price === undefined && Math.abs(currentUnitPrice - expectedNewUnitPrice) > 0.01) {
@@ -1118,7 +1086,7 @@ export default function QuoteForm() {
         if (manual_price !== undefined) {
           unit_price = manual_price;
         } else if (original_price !== undefined) {
-          const currentMarkup = workflowVisibility.markupCalculation ? (parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup || defaultMarkup)) : 0;
+          const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup || 8);
           unit_price = Math.round(original_price * (1 + currentMarkup / 100) * 100) / 100;
         }
 
@@ -1196,7 +1164,6 @@ export default function QuoteForm() {
     setAuthorName(user.name || user.username);
     setAuthorId(null);
     setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
-    setMarkup(defaultMarkup);
     setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
   };
 
@@ -1205,8 +1172,7 @@ export default function QuoteForm() {
     if (product) {
       setItems(prevItems => {
         const newItems = [...prevItems];
-        const currentMarkup = workflowVisibility.markupCalculation ? markup : 0;
-        const newUnitPrice = product.unit_price * (1 + currentMarkup / 100);
+        const newUnitPrice = product.unit_price * (1 + markup / 100);
         newItems[index] = {
           ...newItems[index],
           product_id: product.id,
@@ -1288,8 +1254,7 @@ export default function QuoteForm() {
           newItems[index].manual_price = Math.round(value * 100) / 100;
         } else {
           const orig = newItems[index].original_price;
-          const currentMarkup = workflowVisibility.markupCalculation ? markup : 0;
-          newItems[index].unit_price = orig !== undefined ? Math.round(orig * (1 + currentMarkup / 100) * 100) / 100 : 0;
+          newItems[index].unit_price = orig !== undefined ? Math.round(orig * (1 + markup / 100) * 100) / 100 : 0;
           newItems[index].manual_price = undefined;
         }
       } else if (field === 'unit_price') {
@@ -1424,10 +1389,6 @@ export default function QuoteForm() {
       author_name: authorName,
       author_id: authorId,
       shared_with: sharedWith,
-      watermark_text: watermarkText,
-      watermark_type: watermarkType,
-      hide_prices: hidePrices,
-      manual_total: manualTotal !== '' ? Number(manualTotal) : null,
       items: items.filter(item => item.description.trim() !== '').map(item => ({
         product_id: item.product_id,
         description: item.description,
@@ -1520,7 +1481,6 @@ export default function QuoteForm() {
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
         bankDetails, bankDetailsAr, footer, footerAr, customFields,
-        watermarkText, watermarkType, hidePrices, manualTotal,
         savedAt: new Date().toISOString(),
       }));
     }
@@ -1535,7 +1495,6 @@ export default function QuoteForm() {
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
         bankDetails, bankDetailsAr, footer, footerAr, customFields,
-        watermarkText, watermarkType, hidePrices, manualTotal,
         savedAt: new Date().toISOString(),
       };
 
@@ -1740,12 +1699,12 @@ export default function QuoteForm() {
     window.print();
   };
 
-  const handleServerPDF = async (includeStamp: boolean = false) => {
+  const handleServerPDF = async () => {
     if (!quoteId) return alert('Please save the quote first before exporting.');
     setIsGeneratingServerPDF(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`/api/quotes/${quoteId}/pdf${includeStamp ? '?stamp=true' : ''}`, {
+      const response = await fetch(`/api/quotes/${quoteId}/pdf`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -1757,10 +1716,7 @@ export default function QuoteForm() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      const customerName = (selectedCustomer?.name || 'Unknown')
-        .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
-        .trim();
-      a.download = `${customerName}-${quoteId}${includeStamp ? '-stamped' : ''}.pdf`;
+      a.download = `${quoteId}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1875,7 +1831,7 @@ export default function QuoteForm() {
           });
 
 
-          // Keep min-w-[1350px] intact
+            // Keep min-w-[1350px] intact
 
 
 
@@ -2168,13 +2124,9 @@ export default function QuoteForm() {
             (tableOverflowContainer as HTMLElement).style.width = '100%';
           }
 
-          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-"]');
+          const gridRows = clonedDoc.querySelectorAll('div[class*="grid-cols-[48px_1fr_64px_64px_110px_110px]"]');
           gridRows.forEach((el: any) => {
-            if (el.className.includes('grid-cols-[48px_1fr_64px_64px]')) {
-              el.style.gridTemplateColumns = '48px 1fr 64px 64px';
-            } else if (el.className.includes('grid-cols-[48px_1fr_64px_64px_110px_110px]')) {
-              el.style.gridTemplateColumns = '48px 1fr 64px 64px 110px 110px';
-            }
+            el.style.gridTemplateColumns = '48px 1fr 64px 64px 110px 110px';
             el.style.width = '100%';
             el.style.margin = '0 auto';
             el.style.display = 'grid';
@@ -2185,9 +2137,7 @@ export default function QuoteForm() {
           const clonedRows = clonedDoc.querySelectorAll('div[data-row-index]');
           clonedRows.forEach((clonedRow: any, rIdx: number) => {
             const cells = clonedRow.children[0]?.children;
-            if (!cells) return;
-            const expectedCellsCount = hidePrices ? 4 : 6;
-            if (cells.length < expectedCellsCount) return;
+            if (!cells || cells.length < 6) return;
 
             const originalRow = printRef.current?.querySelectorAll('div[data-row-index]')[rIdx];
             const originalCells = originalRow?.children[0]?.children;
@@ -2543,10 +2493,10 @@ export default function QuoteForm() {
   };
 
   return (
-    <div className="flex flex-col gap-4 dark:text-gray-100">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 py-3.5 px-5 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
+    <div className="flex flex-col gap-6 dark:text-gray-100">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
         <div className="flex items-center gap-4">
-          <div className="bg-indigo-100 dark:bg-indigo-900/40 p-2.5 rounded-xl text-indigo-700 dark:text-indigo-400">
+          <div className="bg-indigo-100 dark:bg-indigo-900/40 p-3 rounded-xl text-indigo-700 dark:text-indigo-400">
             <FileText size={24} />
           </div>
           <div>
@@ -2629,162 +2579,21 @@ export default function QuoteForm() {
           <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
             <FileSpreadsheet size={18} /> Export Excel
           </button>
-          {/* Primary Vector PDF Export (React PDF) */}
-          <button
-            onClick={() => handleServerPDF(false)}
-            disabled={isGeneratingServerPDF}
-            className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 font-semibold"
-            title="Download high-fidelity vector PDF generated on server"
-          >
-            {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF
+          <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
+            <Download size={18} /> Export PDF
           </button>
-
-          {/* Primary Vector PDF Export + Stamp */}
+          {<button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
+            {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (React)
+          </button>}
           {stampUrl && (
-            <button
-              onClick={() => handleServerPDF(true)}
-              disabled={isGeneratingServerPDF}
-              className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50 font-semibold"
-              title="Download high-fidelity vector PDF with official company stamp"
-            >
-              {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF + Stamp
+            <button onClick={handleExportPDFWithStamp} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors" title="Export PDF with company stamp">
+              <Download size={18} /> Export PDF + Stamp
             </button>
-          )}
-
-          {/* Fallback Legacy HTML2Canvas Exports (Only if toggled in Settings) */}
-          {enableLegacyPdfExport && (
-            <>
-              <button
-                onClick={handleExportPDF}
-                className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors font-medium"
-                title="Legacy html2canvas fallback export"
-              >
-                <Download size={18} /> Export PDF (Legacy)
-              </button>
-              {stampUrl && (
-                <button
-                  onClick={handleExportPDFWithStamp}
-                  className="flex items-center gap-2 px-4 py-2 text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors font-medium"
-                  title="Legacy html2canvas fallback export with stamp"
-                >
-                  <Download size={18} /> Export PDF + Stamp (Legacy)
-                </button>
-              )}
-            </>
           )}
         </div>
       </div>
 
-      {/* ── WATERMARK OPTION CONTROL PANEL ────────────────────────────────────── */}
-      {workflowVisibility.watermark && (user.role === 'admin' || user.permissions?.canUseWatermark) && (
-        <div className="mb-4 p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm flex flex-wrap items-center gap-4 transition-all">
-          <div className="flex items-center gap-2">
-            <span className="p-1.5 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 009 11c0-1.28-.203-2.512-.578-3.668m-2.9 8.892A13.947 13.947 0 013 12c0-1.705.307-3.338.873-4.848M13.5 12a4.5 4.5 0 00-4.5-4.5m4.5 4.5A4.5 4.5 0 009 13.5" />
-              </svg>
-            </span>
-            <span className="font-semibold text-gray-700 dark:text-gray-200 text-sm">Document Watermark Settings:</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-500 dark:text-gray-400">Layout Style:</label>
-            <select
-              value={watermarkType}
-              onChange={(e) => setWatermarkType(e.target.value)}
-              className="text-xs bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white rounded-lg p-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-            >
-              <option value="none">No Watermark</option>
-              <option value="center">Centered Diagonal Watermark</option>
-              <option value="multi">Multi-Diagonal Full Page Watermark</option>
-            </select>
-          </div>
-
-          {watermarkType !== 'none' && (
-            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-              <label className="text-xs text-gray-500 dark:text-gray-400 shrink-0">Custom Text:</label>
-              <input
-                type="text"
-                value={watermarkText}
-                onChange={(e) => setWatermarkText(e.target.value)}
-                placeholder="e.g. PAID, DRAFT, AJNETWORK"
-                className="text-xs bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white rounded-lg p-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none flex-1"
-              />
-              <div className="flex gap-1.5 shrink-0">
-                {['PAID', 'DRAFT', 'AJNETWORK'].map((preset) => (
-                  <button
-                    key={preset}
-                    onClick={() => setWatermarkText(preset)}
-                    className={`px-2 py-1 text-[10px] font-bold rounded transition-colors ${watermarkText === preset
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-                      }`}
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── PRICING CONTROL PANEL ────────────────────────────────────────────── */}
-      {(user.role === 'admin' || user.permissions?.canUsePricingControls) && (
-        <div className="mb-4 p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm flex flex-wrap items-center gap-4 transition-all">
-          <div className="flex items-center gap-2">
-            <span className="p-1.5 bg-violet-50 dark:bg-violet-950/30 text-violet-600 dark:text-violet-400 rounded-lg">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            </span>
-            <span className="font-semibold text-gray-700 dark:text-gray-200 text-sm">Pricing Controls:</span>
-          </div>
-
-          {/* Hide Prices Toggle */}
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <div className="relative">
-              <input
-                type="checkbox"
-                className="sr-only"
-                checked={hidePrices}
-                onChange={(e) => setHidePrices(e.target.checked)}
-              />
-              <div className={`w-9 h-5 rounded-full transition-colors ${hidePrices ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`} />
-              <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${hidePrices ? 'translate-x-4' : 'translate-x-0'}`} />
-            </div>
-            <span className="text-sm text-gray-600 dark:text-gray-300">Hide Unit &amp; Net Prices on PDF</span>
-          </label>
-
-          {/* Manual Grand Total */}
-          <div className="flex items-center gap-2 flex-1 min-w-[240px]">
-            <label className="text-xs text-gray-500 dark:text-gray-400 shrink-0 font-medium">Manual Grand Total (SAR):</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={manualTotal}
-              onChange={(e) => setManualTotal(e.target.value === '' ? '' : parseFloat(e.target.value))}
-              placeholder="Leave blank to use calculated total"
-              className="text-xs bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white rounded-lg p-2 focus:ring-violet-500 focus:border-violet-500 outline-none flex-1"
-            />
-            {manualTotal !== '' && (
-              <button
-                onClick={() => setManualTotal('')}
-                className="px-2 py-1 text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 rounded transition-colors"
-              >
-                ✕ Clear
-              </button>
-            )}
-          </div>
-
-          {manualTotal !== '' && (
-            <div className="text-xs text-violet-700 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/30 rounded-lg px-3 py-1.5 font-medium">
-              ⚡ Override active — PDF will show SAR {Number(manualTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })} as total
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col xl:flex-row gap-4">
+      <div className="flex flex-col xl:flex-row gap-6">
         {/* Printable Quote Form */}
         <div
           ref={printRef}
@@ -3006,7 +2815,7 @@ export default function QuoteForm() {
                 */}
                   <div
                     ref={headerRef}
-                    className={`grid ${hidePrices ? 'grid-cols-[48px_1fr_64px_64px]' : 'grid-cols-[48px_1fr_64px_64px_110px_110px]'} border-b-2 font-bold text-base text-center print:${hidePrices ? 'grid-cols-[48px_1fr_64px_64px]' : 'grid-cols-[48px_1fr_64px_64px_110px_110px]'}`}
+                    className="grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b-2 font-bold text-base text-center print:grid-cols-[48px_1fr_64px_64px_110px_110px]"
                     style={{ backgroundColor: themeColors.headerBg, color: themeColors.headerText, borderColor: '#1f2937' }}
                   >
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">ITEM</div>
@@ -3014,13 +2823,9 @@ export default function QuoteForm() {
                       DESCRIPTION
                     </div>
                     <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">QTY</div>
-                    <div className={`pt-0 pb-3 px-1 ${hidePrices ? '' : 'border-r border-gray-800'} h-full`}>UNIT</div>
-                    {!hidePrices && (
-                      <>
-                        <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
-                        <div className="pt-0 pb-3 px-2 h-full">NET PRICE</div>
-                      </>
-                    )}
+                    <div className="pt-0 pb-3 px-1 border-r border-gray-800 h-full">UNIT</div>
+                    <div className="pt-0 pb-3 px-2 border-r border-gray-800 h-full">UNIT PRICE</div>
+                    <div className="pt-0 pb-3 px-2 h-full">NET PRICE</div>
                   </div>
                   <AnimatePresence>
                     {items.map((item, index) => (
@@ -3039,10 +2844,10 @@ export default function QuoteForm() {
                       >
                         <div
                           ref={el => rowRefs.current[index] = el}
-                          className={`flex-1 grid ${hidePrices ? 'grid-cols-[48px_1fr_64px_64px]' : 'grid-cols-[48px_1fr_64px_64px_110px_110px]'} border-b border-gray-300 last:border-b-0 text-base items-stretch print:items-stretch transition-opacity
+                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-stretch print:items-stretch transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
-                          ${dragIndex === index ? 'opacity-40 bg-gray-100 scale-[0.995] shadow-inner border-y border-gray-300' : 'opacity-100'}
-                          ${dragOverIndex === index && dragIndex !== index ? 'border-t-[4px] border-t-indigo-500 bg-indigo-50/50 shadow-[0_-4px_6px_-2px_rgba(99,102,241,0.2)]' : ''}
+                          ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
+                          ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
                         `}
                           style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
                           <div
@@ -3190,7 +2995,7 @@ export default function QuoteForm() {
                               min="1"
                             />
                           </div>
-                          <div className={`px-1 py-0.5 ${hidePrices ? '' : 'border-r border-gray-300'} h-full flex items-center justify-center`}>
+                          <div className="px-1 py-0.5 border-r border-gray-300 h-full flex items-center justify-center">
                             <input
                               type="text"
                               list="unit-suggestions"
@@ -3199,34 +3004,30 @@ export default function QuoteForm() {
                               onChange={e => updateItem(index, 'unit', e.target.value)}
                             />
                           </div>
-                          {!hidePrices && (
-                            <>
-                              <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center justify-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
-                                <input
-                                  type="text"
-                                  className="w-full text-center text-base font-mono outline-none bg-transparent"
-                                  value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
-                                  onFocus={(e) => {
-                                    e.target.type = 'number';
-                                    e.target.value = item.unit_price ? item.unit_price.toString() : '';
-                                  }}
-                                  onBlur={(e) => {
-                                    e.target.type = 'text';
-                                    e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
-                                  }}
-                                  onChange={e => {
-                                    const val = parseFloat(e.target.value);
-                                    updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
-                                  }}
-                                  min="0"
-                                  step="0.01"
-                                />
-                              </div>
-                              <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
-                                <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                              </div>
-                            </>
-                          )}
+                          <div className={`px-2 py-0.5 border-r border-gray-300 h-full flex items-center justify-center font-mono text-base ${item.unit_price === 0 || (item.original_price !== undefined && item.unit_price < item.original_price) ? 'text-amber-600' : ''}`}>
+                            <input
+                              type="text"
+                              className="w-full text-center text-base font-mono outline-none bg-transparent"
+                              value={item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
+                              onFocus={(e) => {
+                                e.target.type = 'number';
+                                e.target.value = item.unit_price ? item.unit_price.toString() : '';
+                              }}
+                              onBlur={(e) => {
+                                e.target.type = 'text';
+                                e.target.value = item.unit_price ? item.unit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+                              }}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateItem(index, 'unit_price', isNaN(val) ? 0 : val);
+                              }}
+                              min="0"
+                              step="0.01"
+                            />
+                          </div>
+                          <div className={`px-2 py-0.5 font-mono font-medium text-base h-full flex items-center justify-center ${item.unit_price === 0 ? 'text-amber-600' : ''}`}>
+                            <span className="w-full text-center">{item.net_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </div>
                         </div>
 
                         {/* Controls — always visible, note + trash, outside grid */}
@@ -3567,10 +3368,10 @@ export default function QuoteForm() {
                   </div>
                 </div>
                 <div className="grid grid-cols-2 border-gray-300 p-2 pt-0 pb-3 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
-                  <div className="font-bold flex items-center">TOTAL PACKAGE</div>
-                  <div className="flex justify-between items-center font-mono font-bold text-md rounded px-3 py-1.5 bg-[#97F2B7] text-black">
+                  <div className="font-bold">TOTAL PACKAGE</div>
+                  <div className="flex justify-between items-center font-mono font-bold text-md rounded-md bg-green-400 text-black pt-0 pb-3">
                     <span className="mr-2">SAR</span>
-                    <span>{(manualTotal !== '' ? Number(manualTotal) : grandTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>
               </div>
@@ -3842,7 +3643,7 @@ export default function QuoteForm() {
         {(() => {
           const u = JSON.parse(localStorage.getItem('user') || '{}');
           const canOverride = u.role === 'admin' || !!u.permissions?.canOverridePrice;
-          if (!canOverride || workflowVisibility.markupCalculation === false) return null;
+          if (!canOverride) return null;
 
           return (
             <div className="w-[305px] shrink-0 print:hidden hidden xl:flex flex-col pt-8" data-light-panel="true">

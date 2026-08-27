@@ -330,19 +330,12 @@ addColumnIfNotExists('users', 'permissions', 'TEXT DEFAULT "{}"');
 addColumnIfNotExists('users', 'name', 'TEXT');
 addColumnIfNotExists('quotes', 'version', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'draft_data', 'TEXT');
-addColumnIfNotExists('quotes', 'watermark_text', "TEXT DEFAULT 'PAID'");
-addColumnIfNotExists('quotes', 'watermark_type', "TEXT DEFAULT 'none'");
-addColumnIfNotExists('quotes', 'hide_prices', 'INTEGER DEFAULT 0');
-addColumnIfNotExists('quotes', 'manual_total', 'REAL');
 addColumnIfNotExists('activity_log', 'details', 'TEXT'); // stores JSON array of field changes
 addColumnIfNotExists('products', 'item_code', 'TEXT');
 addColumnIfNotExists('products', 'supplier_name', 'TEXT');
 addColumnIfNotExists('quote_items', 'item_code', 'TEXT');
 addColumnIfNotExists('quote_items', 'supplier_name', 'TEXT');
 addColumnIfNotExists('quote_items', 'type', "TEXT DEFAULT 'item'");
-addColumnIfNotExists('quotes', 'deleted_at', 'TEXT');
-addColumnIfNotExists('quotes', 'deleted_by', 'TEXT');
-addColumnIfNotExists('quotes', 'retain_forever', 'INTEGER DEFAULT 0');
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -406,37 +399,6 @@ const cleanupLogs = () => {
 };
 // Run cleanup on startup
 cleanupLogs();
-
-// ── RECYCLE BIN CLEANUP ────────────────────────────────────────────────────────
-const cleanupRecycleBin = () => {
-  try {
-    const settingRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('recycleBinDays') as { value: string } | undefined;
-    const days = settingRow ? parseInt(settingRow.value, 10) : 30;
-    if (days > 0) {
-      const expirationDate = new Date();
-      expirationDate.setDate(expirationDate.getDate() - days);
-      const toDelete = db.prepare('SELECT quote_id FROM quotes WHERE deleted_at IS NOT NULL AND deleted_at < ? AND retain_forever = 0').all(expirationDate.toISOString()) as { quote_id: string }[];
-      
-      if (toDelete.length > 0) {
-        db.transaction(() => {
-          const deleteItems = db.prepare('DELETE FROM quote_items WHERE quote_id = ?');
-          const deleteLogs = db.prepare('DELETE FROM activity_log WHERE quote_id = ?');
-          const deleteQuote = db.prepare('DELETE FROM quotes WHERE quote_id = ?');
-          for (const row of toDelete) {
-            deleteItems.run(row.quote_id);
-            deleteLogs.run(row.quote_id);
-            deleteQuote.run(row.quote_id);
-          }
-        })();
-        console.log(`🗑️  Cleaned up ${toDelete.length} expired item(s) from recycle bin.`);
-      }
-    }
-  } catch (e) {
-    console.error('Failed to cleanup recycle bin:', e);
-  }
-};
-cleanupRecycleBin();
-setInterval(cleanupRecycleBin, 24 * 60 * 60 * 1000); // Run daily
 
 // ── SESSION CLEANUP: remove expired sessions every hour ──────────────────────
 // Prevents the sessions table from growing unbounded. Runs on startup and
@@ -641,10 +603,6 @@ const QuoteSchema = z.object({
     canEditUsers: z.array(z.number().int()).optional().default([]),
     canEditGroups: z.array(z.number().int()).optional().default([]),
   }).optional(),
-  watermark_text: z.string().max(200).optional().default('PAID'),
-  watermark_type: z.enum(['none', 'center', 'multi']).optional().default('none'),
-  hide_prices: z.boolean().optional().default(false),
-  manual_total: z.number().nullable().optional(),
   force: z.boolean().optional(),
 });
 
@@ -735,14 +693,10 @@ app.post('/api/me/profile', requireAuth, async (req, res) => {
 
 // ── Self-service: Change own password ─────────────────────────────────────────
 // Any authenticated user can change their OWN password by proving they know
-// the current one. Must have canChangePassword permission or be admin.
+// the current one. No admin privilege required.
 app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema), async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const currentUser = (req as any).user;
-
-  if (currentUser.role !== 'admin' && !currentUser.permissions?.canChangePassword) {
-    return res.status(403).json({ error: 'Permission denied to change password. Please contact your administrator.' });
-  }
 
   try {
     const row = db.prepare('SELECT password FROM users WHERE id = ?').get(currentUser.id) as { password: string } | undefined;
@@ -1037,7 +991,6 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
-          WHERE q.deleted_at IS NULL
           ORDER BY q.id DESC
         `).all()
       : (() => {
@@ -1046,7 +999,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
             FROM quotes q 
             LEFT JOIN customers c ON q.customer_id = c.id
             LEFT JOIN users u ON q.author_id = u.id
-            WHERE q.author_id = ? AND q.deleted_at IS NULL
+            WHERE q.author_id = ?
             ORDER BY q.id DESC
           `).all(currentUser.id) as any[];
 
@@ -1056,7 +1009,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
             FROM quotes q 
             LEFT JOIN customers c ON q.customer_id = c.id
             LEFT JOIN users u ON q.author_id = u.id
-            WHERE q.author_id != ? AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '') AND q.deleted_at IS NULL
+            WHERE q.author_id != ? AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '')
             ORDER BY q.id DESC
           `).all(currentUser.id) as any[];
 
@@ -1100,7 +1053,7 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
     FROM quotes q
     LEFT JOIN customers c ON q.customer_id = c.id
     LEFT JOIN users u ON q.author_id = u.id
-    WHERE q.quote_id = ? AND q.deleted_at IS NULL
+    WHERE q.quote_id = ?
   `).get(req.params.quote_id) as any;
   if (!quote) return res.status(404).json({ error: 'Quote not found' });
 
@@ -1136,7 +1089,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       LEFT JOIN users u ON q.author_id = u.id
-      WHERE q.quote_id = ? AND q.deleted_at IS NULL
+      WHERE q.quote_id = ?
     `).get(req.params.quote_id) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
@@ -1192,8 +1145,6 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       discountTotal: quote.discount || 0,
       taxTotal: quote.tax || 0,
       total: quote.grand_total || 0,
-      hidePrices: !!quote.hide_prices,
-      manualTotal: quote.manual_total != null ? Number(quote.manual_total) : undefined,
       customer: {
         company: quote.customer_name || "",
         contactName: quote.customer_contact || "",
@@ -1212,8 +1163,6 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         unitPrice: it.unit_price || 0,
         discount: 0,
       })),
-      watermarkText: quote.watermark_text || "",
-      watermarkType: quote.watermark_type || "none",
     };
 
     // Load custom themes or settings
@@ -1225,8 +1174,6 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
 
     // Determine document type for the PDF component
     const isInvoice = (quote.type || '').toLowerCase().includes('invoice');
-
-    const showStamp = req.query.stamp === 'true';
 
     const pdfSettings = {
       companyName: "AJ Network Solutions", // default fallback
@@ -1249,10 +1196,6 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       pdfHeaderTextColor: settingsMap.pdfHeaderTextColor || '#ffffff',
       pdfTableBgColor: settingsMap.pdfTableBgColor || brandColor,
       pdfTableTextColor: settingsMap.pdfTableTextColor || '#18181b',
-      stampUrl: settingsMap.stampImage || null,
-      stampSize: settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 140,
-      stampOffsetX: settingsMap.stampOffsetX ? parseInt(settingsMap.stampOffsetX, 10) : 0,
-      stampOffsetY: settingsMap.stampOffsetY ? parseInt(settingsMap.stampOffsetY, 10) : 0,
     };
 
     const buffer = await renderToBuffer(
@@ -1260,7 +1203,6 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         quote: pdfQuote,
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
-        showStamp,
       })
     );
 
@@ -1295,7 +1237,7 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
     SELECT q.*, c.name as customer_name 
     FROM quotes q 
     LEFT JOIN customers c ON q.customer_id = c.id
-    WHERE q.quote_id LIKE ? AND q.deleted_at IS NULL
+    WHERE q.quote_id LIKE ? 
     ORDER BY q.quote_id ASC
   `).all(`${baseId}%`) as any[];
 
@@ -1421,7 +1363,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    author_name, author_id, shared_with, version, force, watermark_text, watermark_type
+    author_name, author_id, shared_with, version, force
   } = req.body;
   const shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
   const updated_at = new Date().toISOString();
@@ -1571,8 +1513,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
             custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?,
-            author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL,
-            watermark_text = ?, watermark_type = ?, hide_prices = ?, manual_total = ?
+            author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
@@ -1580,8 +1521,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion,
-          watermark_text || 'PAID', watermark_type || 'none', req.body.hide_prices ? 1 : 0, req.body.manual_total ?? null, quote_id
+          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion, quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
 
@@ -1596,16 +1536,14 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version,
-            watermark_text, watermark_type, hide_prices, manual_total
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1,
-          watermark_text || 'PAID', watermark_type || 'none', req.body.hide_prices ? 1 : 0, req.body.manual_total ?? null
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1
         );
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
@@ -1632,70 +1570,11 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
   try {
     const currentUser = (req as any).user;
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
+    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
     if (!canSeeAll && quote.author_id !== currentUser.id) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    const actor = currentUser.name || currentUser.username;
-    db.prepare('UPDATE quotes SET deleted_at = ?, deleted_by = ? WHERE quote_id = ?').run(new Date().toISOString(), actor, req.params.quote_id);
-    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(req.params.quote_id, 'Sent to Recycle Bin', actor, new Date().toISOString(), null);
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ── Recycle Bin Routes ────────────────────────────────────────────────────────
-app.get('/api/recycle-bin', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
-  try {
-    const quotes = db.prepare(`
-      SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
-      FROM quotes q 
-      LEFT JOIN customers c ON q.customer_id = c.id
-      LEFT JOIN users u ON q.author_id = u.id
-      WHERE q.deleted_at IS NOT NULL
-      ORDER BY q.deleted_at DESC
-    `).all();
-    res.json(quotes);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/recycle-bin/:quote_id/restore', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
-  try {
-    const currentUser = (req as any).user;
-    const actor = currentUser.name || currentUser.username;
-    const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
-    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
-    
-    db.prepare('UPDATE quotes SET deleted_at = NULL, deleted_by = NULL, retain_forever = 0 WHERE quote_id = ?').run(req.params.quote_id);
-    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(req.params.quote_id, 'Restored from Recycle Bin', actor, new Date().toISOString(), null);
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.patch('/api/recycle-bin/:quote_id/retain', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
-  try {
-    const { retain } = req.body;
-    const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
-    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
-    
-    db.prepare('UPDATE quotes SET retain_forever = ? WHERE quote_id = ?').run(retain ? 1 : 0, req.params.quote_id);
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/recycle-bin/:quote_id', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
-  try {
-    const quote = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
-    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
-    
     db.transaction(() => {
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(req.params.quote_id);
       db.prepare('DELETE FROM activity_log WHERE quote_id = ?').run(req.params.quote_id);
@@ -1746,7 +1625,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       LEFT JOIN users u ON q.author_id = u.id
-      WHERE q.quote_id = ? AND q.deleted_at IS NULL
+      WHERE q.quote_id = ?
     `).get(quoteId) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
@@ -2394,28 +2273,80 @@ app.post('/api/translate', requireAuth, async (req, res) => {
     return chunks;
   };
 
+  const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
   const translateChunk = async (chunk: string, attempt = 0): Promise<string> => {
+    // Strategy 1: Google Chrome Translate API (clients5 - fast & reliable)
+    try {
+      const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=ar&q=${encodeURIComponent(chunk)}`;
+      const response = await fetch(url, {
+        headers: { 'User-Agent': BROWSER_UA },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          if (typeof data[0] === 'string' && data[0].trim()) return data[0].trim();
+          if (Array.isArray(data[0]) && typeof data[0][0] === 'string' && data[0][0].trim()) return data[0][0].trim();
+        }
+      }
+    } catch (err: any) {
+      // Continue to next strategy
+    }
+
+    // Strategy 2: Google Translate GTX Endpoint with browser UA
     try {
       const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(chunk)}`;
-      const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      const data = await response.json();
-      let result = '';
-      if (data && data[0]) {
-        data[0].forEach((segment: any) => { if (segment[0]) result += segment[0]; });
+      const response = await fetch(url, {
+        headers: { 'User-Agent': BROWSER_UA },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await response.json();
+          let result = '';
+          if (data && data[0]) {
+            data[0].forEach((segment: any) => { if (segment[0]) result += segment[0]; });
+          }
+          if (result.trim()) return result.trim();
+        }
       }
-      // Retry on empty result (up to 3 attempts)
-      if (!result.trim() && attempt < 2) {
-        await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
-        return translateChunk(chunk, attempt + 1);
-      }
-      return result.trim();
     } catch (err: any) {
-      if (attempt < 2) {
-        await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
-        return translateChunk(chunk, attempt + 1);
-      }
-      throw err;
+      // Continue to next strategy
     }
+
+    // Strategy 3: AI Translation fallback (OpenRouter) if configured
+    if (process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY !== 'dummy_key_to_prevent_startup_crash') {
+      try {
+        const aiResponse = await openai.chat.completions.create({
+          model: 'openrouter/free',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a professional English-to-Arabic translator. Translate the given text to Modern Standard Arabic accurately and concisely. Return ONLY the Arabic translation without explanation, markdown quotes, or notes.'
+            },
+            {
+              role: 'user',
+              content: chunk
+            }
+          ],
+          temperature: 0.2,
+        });
+        const aiText = aiResponse.choices[0]?.message?.content?.trim();
+        if (aiText) return aiText;
+      } catch (err: any) {
+        // Fall through to retry/error
+      }
+    }
+
+    // Retry with backoff if attempts remaining
+    if (attempt < 2) {
+      await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+      return translateChunk(chunk, attempt + 1);
+    }
+
+    throw new Error('Translation failed across all translation backends.');
   };
 
   try {
