@@ -783,7 +783,10 @@ export default function QuoteForm() {
     try {
       const res = await fetch('/api/translate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
         body: JSON.stringify({ text })
       });
       if (res.ok) {
@@ -800,7 +803,10 @@ export default function QuoteForm() {
     try {
       const res = await fetch('/api/translate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
         body: JSON.stringify({ text })
       });
       if (res.ok) {
@@ -893,7 +899,10 @@ export default function QuoteForm() {
       try {
         const res = await fetch('/api/translate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
           body: JSON.stringify({ text })
         });
         if (res.ok) {
@@ -929,7 +938,10 @@ export default function QuoteForm() {
       try {
         const res = await fetch('/api/translate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
           body: JSON.stringify({ text: note })
         });
         if (res.ok) {
@@ -1158,7 +1170,7 @@ export default function QuoteForm() {
     setDuration('1-2 Working Days');
     setDurationAr('أيام عمل 2-1');
     setBankDetails('ALINMA BANK - Account: 68206662020000\nIBAN: SA0305000068206662020000 ABDULMOSHIN\nABDULAZIZ AL-JABR TRADING CO.');
-    setBankDetailsAr('');
+    setBankDetailsAr('بنك الإنماء - الحساب: 68206662020000\nالأيبان: SA0305000068206662020000 عبدالمحسن\nعبدالعزيز الجبر للتجارة');
     setFooter('Thank you for your business!');
     setFooterAr('شكرا لتعاملكم معنا!');
     setAuthorName(user.name || user.username);
@@ -1699,12 +1711,12 @@ export default function QuoteForm() {
     window.print();
   };
 
-  const handleServerPDF = async () => {
+  const handleServerPDF = async (includeStamp: boolean = false) => {
     if (!quoteId) return alert('Please save the quote first before exporting.');
     setIsGeneratingServerPDF(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`/api/quotes/${quoteId}/pdf`, {
+      const response = await fetch(`/api/quotes/${quoteId}/pdf${includeStamp ? '?stamp=true' : ''}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -1716,7 +1728,10 @@ export default function QuoteForm() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${quoteId}.pdf`;
+      const customerName = (selectedCustomer?.name || 'Unknown')
+        .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
+        .trim();
+      a.download = `${customerName}-${quoteId}${includeStamp ? '-stamped' : ''}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -2582,12 +2597,12 @@ export default function QuoteForm() {
           <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
           </button>
-          {<button onClick={handleServerPDF} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
+          <button onClick={() => handleServerPDF(false)} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
             {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (React)
-          </button>}
+          </button>
           {stampUrl && (
-            <button onClick={handleExportPDFWithStamp} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors" title="Export PDF with company stamp">
-              <Download size={18} /> Export PDF + Stamp
+            <button onClick={() => handleServerPDF(true)} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors disabled:opacity-50 font-semibold" title="Download high-fidelity vector PDF with official company stamp">
+              {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF + Stamp
             </button>
           )}
         </div>
@@ -3390,13 +3405,13 @@ export default function QuoteForm() {
                   <img
                     src={stampUrl}
                     alt="Company Stamp"
+                    className="object-contain opacity-90 transition-all duration-300"
                     style={{
-                      display: 'block',
+                      width: `${stampSize}px`,
+                      height: `${stampSize}px`,
                       maxWidth: `${stampSize}px`,
                       maxHeight: `${stampSize}px`,
-                      width: 'auto',
-                      height: 'auto',
-                      opacity: 0.9,
+                      display: 'block',
                     }}
                   />
                 </div>
