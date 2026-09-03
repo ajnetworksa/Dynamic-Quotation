@@ -1174,6 +1174,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
 
     // Determine document type for the PDF component
     const isInvoice = (quote.type || '').toLowerCase().includes('invoice');
+    const showStamp = req.query.stamp === 'true';
 
     const pdfSettings = {
       companyName: "AJ Network Solutions", // default fallback
@@ -1196,6 +1197,10 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       pdfHeaderTextColor: settingsMap.pdfHeaderTextColor || '#ffffff',
       pdfTableBgColor: settingsMap.pdfTableBgColor || brandColor,
       pdfTableTextColor: settingsMap.pdfTableTextColor || '#18181b',
+      stampUrl: settingsMap.stampImage || null,
+      stampSize: settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 140,
+      stampOffsetX: settingsMap.stampOffsetX ? parseInt(settingsMap.stampOffsetX, 10) : 0,
+      stampOffsetY: settingsMap.stampOffsetY ? parseInt(settingsMap.stampOffsetY, 10) : 0,
     };
 
     const buffer = await renderToBuffer(
@@ -1203,6 +1208,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         quote: pdfQuote,
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
+        showStamp,
       })
     );
 
@@ -1727,6 +1733,35 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
   }
 });
 
+// ── Single Quote Status Update (Kanban & Quick Status) ────────────────────────
+const handleSingleQuoteStatus = (req: express.Request, res: express.Response) => {
+  const { status } = req.body;
+  const quoteIdentifier = req.params.quote_id;
+  if (!status || !quoteIdentifier) return res.status(400).json({ error: 'status and quote_id required' });
+  const actor = (req as any).user?.username || 'system';
+  const ts = new Date().toISOString();
+  try {
+    const isNumeric = /^\d+$/.test(quoteIdentifier);
+    const existing = isNumeric
+      ? db.prepare('SELECT quote_id FROM quotes WHERE id = ? OR quote_id = ?').get(Number(quoteIdentifier), quoteIdentifier) as any
+      : db.prepare('SELECT quote_id FROM quotes WHERE quote_id = ?').get(quoteIdentifier) as any;
+
+    if (!existing) return res.status(404).json({ error: 'Quote not found' });
+    const targetQuoteId = existing.quote_id;
+
+    db.transaction(() => {
+      db.prepare('UPDATE quotes SET status = ?, updated_at = ? WHERE quote_id = ?').run(status, ts, targetQuoteId);
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(targetQuoteId, `Status changed to ${status}`, actor, ts);
+    })();
+
+    res.json({ success: true, quote_id: targetQuoteId, status });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+};
+app.post('/api/quotes/:quote_id/status', requireAuth, handleSingleQuoteStatus);
+app.patch('/api/quotes/:quote_id/status', requireAuth, handleSingleQuoteStatus);
+
 // ── Follow-up ─────────────────────────────────────────────────────────────────
 app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema), (req, res) => {
   const { followup_date, followup_note } = req.body;
@@ -2250,7 +2285,7 @@ app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), v
 
 // ── Translation API ───────────────────────────────────────────────────────────
 // Proxies to Google Translate with chunking + retry for reliability.
-app.post('/api/translate', requireAuth, async (req, res) => {
+app.post('/api/translate', async (req, res) => {
   const { text } = req.body;
   if (!text) return res.json({ translation: '' });
 
@@ -2400,7 +2435,7 @@ app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) 
     ];
 
     const response = await openai.chat.completions.create({
-      model: "google/gemma-4-31b-it:free", // Free multimodal model with vision support
+      model: "openrouter/auto",
       // @ts-ignore
       messages: messages,
       temperature: 0.1,
@@ -2562,7 +2597,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
 
     // Phase 1: Generate SQL formulation
     const sqlResponse = await openai.chat.completions.create({
-      model: "openrouter/free",
+      model: "openrouter/auto",
       messages: [
         {
           role: "system",
@@ -2584,7 +2619,29 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
     if (cleanedQuery.endsWith('```')) cleanedQuery = cleanedQuery.replace(/```$/, '');
     cleanedQuery = cleanedQuery.trim();
 
-    // --- Critical Security Guardrails ---
+    // --- Check if question is conversational vs database query ---
+    if (cleanedQuery === 'INVALID' || cleanedQuery === 'NO_SQL_NEEDED' || !cleanedQuery.toUpperCase().startsWith('SELECT')) {
+      // General conversational fallback
+      const conversationalResponse = await openai.chat.completions.create({
+        model: "openrouter/auto",
+        messages: [
+          {
+            role: "system",
+            content: "You are the AI Assistant for the AJ Network Solutions Dynamic Quotation System. You help users manage quotations, calculate costs, view sales analytics, look up customer records, and review line items. Be professional, concise, and helpful. If the user asks what you can do, summarize your capabilities."
+          },
+          { role: "user", content: question }
+        ],
+        temperature: 0.5,
+      });
+
+      return res.json({
+        answer: conversationalResponse.choices[0]?.message?.content?.replace(/<think>[\s\S]*?<\/think>/gi, '')?.trim() || "Hello! How can I assist you with your quotations and database today?",
+        data: [],
+        query: ""
+      });
+    }
+
+    // --- Critical Security Guardrails for SQL Queries ---
     const forbiddenPatterns = [
       /users/i, /settings/i, /activity_log/i,
       /sqlite_master/i, /sqlite_schema/i, /sqlite_temp/i,
@@ -2593,8 +2650,6 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
     ];
 
     if (
-      cleanedQuery === 'INVALID' ||
-      !cleanedQuery.toUpperCase().startsWith('SELECT') ||
       forbiddenPatterns.some(p => p.test(cleanedQuery)) ||
       (!canSeeAll && !cleanedQuery.includes(`author_id = ${currentUser.id}`))
     ) {
@@ -2614,7 +2669,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
 
     // Phase 2: Natural Language Summary of Results
     const summaryResponse = await openai.chat.completions.create({
-      model: "openrouter/free",
+      model: "openrouter/auto",
       messages: [
         {
           role: "system",
@@ -2629,7 +2684,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
     });
 
     res.json({
-      answer: summaryResponse.choices[0]?.message?.content?.trim(),
+      answer: summaryResponse.choices[0]?.message?.content?.replace(/<think>[\s\S]*?<\/think>/gi, '')?.trim(),
       data: rows,
       query: cleanedQuery
     });
