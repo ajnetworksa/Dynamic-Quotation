@@ -619,6 +619,29 @@ export default function App() {
       setUser(JSON.parse(localStorage.getItem('user') || 'null'));
     };
     window.addEventListener('auth-change', handleAuthChange);
+
+    // Sync fresh user data and updated permissions from backend
+    const token = localStorage.getItem('token');
+    if (token) {
+      fetch('/api/me', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(res => {
+          if (res.ok) return res.json();
+          if (res.status === 401) {
+            handleLogout();
+          }
+          return null;
+        })
+        .then(freshUser => {
+          if (freshUser) {
+            localStorage.setItem('user', JSON.stringify(freshUser));
+            setUser(freshUser);
+          }
+        })
+        .catch(() => {});
+    }
+
     return () => window.removeEventListener('auth-change', handleAuthChange);
   }, []);
 

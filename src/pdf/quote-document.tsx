@@ -86,6 +86,8 @@ export type PdfQuote = {
   bankDetailsAr?: string | null;
   subtotal: number;
   discountTotal: number;
+  discountRate?: number;
+  discountType?: 'amount' | 'percentage' | 'both';
   taxTotal: number;
   total: number;
   customer: PdfCustomer;
@@ -668,7 +670,7 @@ export function QuotePdfDocument({
                 </View>
                 {quote.discountTotal > 0 ? (
                   <View style={styles.totalRow}>
-                    <Text style={{ fontWeight: "bold" }}>DISCOUNT</Text>
+                    <Text style={{ fontWeight: "bold" }}>DISCOUNT{quote.discountRate ? ` (${quote.discountRate}%)` : ''}</Text>
                     <Text>-{quote.currency} {fmt(quote.discountTotal)}</Text>
                   </View>
                 ) : null}

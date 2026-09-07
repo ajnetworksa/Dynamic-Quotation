@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server } from 'lucide-react';
+import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 const APP_VERSION = '1.3.1';
@@ -84,6 +84,10 @@ export default function Settings() {
   // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
   const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
   const [rowReorderStatus, setRowReorderStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // Discount Calculation Mode: 'amount' = Direct SAR amount, 'percentage' = Percentage % of Subtotal, 'both' = Show and allow both
+  const [discountMode, setDiscountMode] = useState<'amount' | 'percentage' | 'both'>('amount');
+  const [discountModeStatus, setDiscountModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // PDF Generation Engine
   const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
@@ -196,6 +200,11 @@ export default function Settings() {
     fetch('/api/settings/rowReorderMode')
       .then(res => res.json())
       .then(data => { if (data.value) setRowReorderMode(data.value as 'click' | 'drag'); })
+      .catch(console.error);
+
+    fetch('/api/settings/discountMode')
+      .then(res => res.json())
+      .then(data => { if (data.value) setDiscountMode(data.value as 'amount' | 'percentage' | 'both'); })
       .catch(console.error);
 
     fetch('/api/settings/pdfSystem')
@@ -628,6 +637,21 @@ export default function Settings() {
       setRowReorderStatus('error');
     }
     setTimeout(() => setRowReorderStatus('idle'), 2000);
+  };
+
+  const handleDiscountModeToggle = async (val: 'amount' | 'percentage' | 'both') => {
+    setDiscountMode(val);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key: 'discountMode', value: val })
+      });
+      setDiscountModeStatus('success');
+    } catch {
+      setDiscountModeStatus('error');
+    }
+    setTimeout(() => setDiscountModeStatus('idle'), 2000);
   };
 
   const handlePdfSystemToggle = async (val: 'client' | 'server') => {
@@ -2039,6 +2063,75 @@ export default function Settings() {
           <div className="flex flex-col items-center gap-1 shrink-0">
             {rowReorderStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
             {rowReorderStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* Discount Calculation Mode */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+            <Percent size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Discount Calculation Mode</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Select how discounts are entered and calculated in the Quotation form</p>
+          </div>
+        </div>
+        <div className="p-6 flex items-center justify-between gap-8">
+          <div className="space-y-3 flex-1">
+            <div
+              onClick={() => handleDiscountModeToggle('amount')}
+              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                discountMode === 'amount' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                discountMode === 'amount' ? 'border-indigo-500' : 'border-gray-300'
+              }`}>
+                {discountMode === 'amount' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+              </div>
+              <div>
+                <p className="font-semibold text-gray-800">Direct Amount (SAR)</p>
+                <p className="text-sm text-gray-500 mt-0.5">Discount is entered directly as a fixed currency amount in SAR (e.g. SAR 500.00).</p>
+              </div>
+            </div>
+            <div
+              onClick={() => handleDiscountModeToggle('percentage')}
+              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                discountMode === 'percentage' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                discountMode === 'percentage' ? 'border-indigo-500' : 'border-gray-300'
+              }`}>
+                {discountMode === 'percentage' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+              </div>
+              <div>
+                <p className="font-semibold text-gray-800">Percentage (%)</p>
+                <p className="text-sm text-gray-500 mt-0.5">Discount is entered as a percentage (e.g. 10%). The system automatically calculates the SAR reduction based on the Subtotal.</p>
+              </div>
+            </div>
+            <div
+              onClick={() => handleDiscountModeToggle('both')}
+              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                discountMode === 'both' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                discountMode === 'both' ? 'border-indigo-500' : 'border-gray-300'
+              }`}>
+                {discountMode === 'both' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+              </div>
+              <div>
+                <p className="font-semibold text-gray-800">Both (Percentage &amp; Amount)</p>
+                <p className="text-sm text-gray-500 mt-0.5">Displays both the percentage (%) input and the direct SAR amount simultaneously. Editing either input automatically recalculates the other.</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            {discountModeStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
+            {discountModeStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
           </div>
         </div>
       </div>
