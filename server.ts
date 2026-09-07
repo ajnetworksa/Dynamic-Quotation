@@ -322,6 +322,8 @@ addColumnIfNotExists('quotes', 'followup_date', 'TEXT');
 addColumnIfNotExists('quotes', 'followup_note', 'TEXT');
 addColumnIfNotExists('quotes', 'quote_note', 'TEXT');
 addColumnIfNotExists('quotes', 'markup', 'REAL DEFAULT 8');
+addColumnIfNotExists('quotes', 'discount_rate', 'REAL DEFAULT 0');
+addColumnIfNotExists('quotes', 'discount_type', 'TEXT DEFAULT "amount"');
 addColumnIfNotExists('quote_items', 'original_price', 'REAL');
 addColumnIfNotExists('quote_items', 'manual_price', 'REAL');
 addColumnIfNotExists('quote_items', 'internal_note', 'TEXT');
@@ -564,6 +566,8 @@ const QuoteSchema = z.object({
   subject: z.string().max(500).optional(),
   subject_ar: z.string().max(500).optional(),
   discount: z.number().nonnegative().optional().default(0),
+  discount_rate: z.number().min(0).max(100).optional().default(0),
+  discount_type: z.enum(['amount', 'percentage', 'both']).optional().default('amount'),
   subtotal: z.number().nonnegative(),
   tax: z.number().nonnegative(),
   grand_total: z.number().nonnegative(),
@@ -717,7 +721,7 @@ app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema),
 // ── Users Management ─────────────────────────────────────────────────────────
 app.get('/api/users', requireAuth, (req, res) => {
   const user = (req as any).user;
-  if (user.role !== 'admin' && !user.permissions?.canManageUsers && !user.permissions?.canChangeAuthor) {
+  if (user.role !== 'admin' && !user.permissions?.canManageUsers && !user.permissions?.canChangeAuthor && !user.permissions?.canShareQuote && !user.permissions?.canEditSharedQuote) {
     return res.status(403).json({ error: 'Access denied' });
   }
   const users = db.prepare('SELECT id, username, name, role, permissions FROM users').all() as any[];
@@ -785,7 +789,7 @@ app.delete('/api/users/:id', requireAuth, requirePermission('canManageUsers'), (
 // all its permissions are applied in one click (they can still tweak after).
 app.get('/api/permission-groups', requireAuth, (req, res) => {
   const user = (req as any).user;
-  if (user.role !== 'admin' && !user.permissions?.canManageUsers && !user.permissions?.canShareQuote && !user.permissions?.canChangeAuthor) {
+  if (user.role !== 'admin' && !user.permissions?.canManageUsers && !user.permissions?.canShareQuote && !user.permissions?.canEditSharedQuote && !user.permissions?.canChangeAuthor) {
     return res.status(403).json({ error: 'Access denied' });
   }
   const groups = db.prepare('SELECT * FROM permission_groups ORDER BY name ASC').all() as any[];
@@ -1143,6 +1147,8 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       bankDetailsAr: quote.bank_details_ar || "",
       subtotal: quote.subtotal || 0,
       discountTotal: quote.discount || 0,
+      discountRate: quote.discount_rate || 0,
+      discountType: (quote.discount_type as 'amount' | 'percentage' | 'both') || 'amount',
       taxTotal: quote.tax || 0,
       total: quote.grand_total || 0,
       customer: {
@@ -1365,7 +1371,7 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
 
 app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
   const {
-    quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, items,
+    quote_id, date, customer_id, subject, subject_ar, discount, discount_rate, discount_type, subtotal, tax, grand_total, items,
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
@@ -1514,7 +1520,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
 
         db.prepare(`
           UPDATE quotes SET 
-            date = ?, customer_id = ?, subject = ?, subject_ar = ?, discount = ?, subtotal = ?, tax = ?, grand_total = ?, updated_at = ?,
+            date = ?, customer_id = ?, subject = ?, subject_ar = ?, discount = ?, discount_rate = ?, discount_type = ?, subtotal = ?, tax = ?, grand_total = ?, updated_at = ?,
             note_header = ?, note = ?, note_ar = ?, payment = ?, payment_ar = ?, warranty = ?, warranty_ar = ?, 
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
@@ -1522,7 +1528,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL
           WHERE quote_id = ?
         `).run(
-          date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
+          date, customer_id, subject, subject_ar, discount || 0, discount_rate || 0, discount_type || 'amount', subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
@@ -1538,14 +1544,14 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       } else {
         db.prepare(`
           INSERT INTO quotes (
-            quote_id, date, customer_id, subject, subject_ar, discount, subtotal, tax, grand_total, updated_at,
+            quote_id, date, customer_id, subject, subject_ar, discount, discount_rate, discount_type, subtotal, tax, grand_total, updated_at,
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
             custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
-          quote_id, date, customer_id, subject, subject_ar, discount || 0, subtotal, tax, grand_total, updated_at,
+          quote_id, date, customer_id, subject, subject_ar, discount || 0, discount_rate || 0, discount_type || 'amount', subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,

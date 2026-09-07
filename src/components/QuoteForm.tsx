@@ -180,6 +180,9 @@ export default function QuoteForm() {
   const [items, setItems] = useState<QuoteItem[]>([]);
   const [itemsHistory, setItemsHistory] = useState<QuoteItem[][]>([]);
   const [discount, setDiscount] = useState(0);
+  const [discountRate, setDiscountRate] = useState(0);
+  const [discountMode, setDiscountMode] = useState<'amount' | 'percentage' | 'both'>('amount');
+  const lastDiscountEditedRef = useRef<'rate' | 'amount'>('amount');
   const [status, setStatus] = useState('Draft');
   const [type, setType] = useState('Quotation');
   const [version, setVersion] = useState(1);
@@ -404,7 +407,7 @@ export default function QuoteForm() {
       const dbProducts = await fetchProducts();
       await fetchSuppliers();
       fetchLogo();
-      if (user.role === 'admin' || user.permissions?.canChangeAuthor || user.permissions?.canShareQuote) {
+      if (user.role === 'admin' || user.permissions?.canChangeAuthor || user.permissions?.canShareQuote || user.permissions?.canEditSharedQuote) {
         fetch('/api/users')
           .then(res => res.json())
           .then(data => { if (Array.isArray(data)) setUsersList(data); })
@@ -666,6 +669,12 @@ export default function QuoteForm() {
       if (resPdf.ok) {
         const d = await resPdf.json();
         if (d.value) setPdfSystem(d.value as 'client' | 'server');
+      }
+
+      const resDiscountMode = await fetch('/api/settings/discountMode');
+      if (resDiscountMode.ok) {
+        const d = await resDiscountMode.json();
+        if (d.value) setDiscountMode(d.value as 'amount' | 'percentage' | 'both');
       }
     } catch (e) {
       console.error('Failed to fetch settings', e);
@@ -986,6 +995,10 @@ export default function QuoteForm() {
       setNoteHeader(parsedDraft?.noteHeader || data.note_header || 'NOTE:');
       setNote(parsedDraft?.note || data.note || 'Any additional work|device will be considered Change Order\nInternet source is provided by the OWNER');
       setNoteAr(parsedDraft?.noteAr || data.note_ar || 'سيتم اعتبار أي عمل إضافي | جهاز بمثابة أمر تغيير\nيتم توفير مصدر الإنترنت من قبل المالك');
+      const loadedMode = parsedDraft?.discount_type || data.discount_type || 'amount';
+      const loadedRate = parsedDraft?.discount_rate !== undefined ? parsedDraft.discount_rate : (data.discount_rate || 0);
+      setDiscountMode(loadedMode);
+      setDiscountRate(loadedRate);
       setDiscount(parsedDraft?.discount !== undefined ? parsedDraft.discount : (data.discount || 0));
       setStatus(data.status || 'Draft');
       setType(data.type || 'Quotation');
@@ -1154,6 +1167,11 @@ export default function QuoteForm() {
     setSubjectAr('');
     setNoteHeader('NOTE:');
     setDiscount(0);
+    setDiscountRate(0);
+    fetch('/api/settings/discountMode')
+      .then(res => res.json())
+      .then(d => { if (d.value) setDiscountMode(d.value as 'amount' | 'percentage' | 'both'); })
+      .catch(() => {});
     setStatus('Draft');
     setType('Quotation');
     setVatRate(15);
@@ -1358,6 +1376,22 @@ export default function QuoteForm() {
       markupProfit += (saleTotal - itemBaseTotal);
     }
   });
+
+  useEffect(() => {
+    if (discountMode === 'percentage') {
+      const computed = Number(((subtotal * (discountRate || 0)) / 100).toFixed(2));
+      setDiscount(computed);
+    } else if (discountMode === 'both') {
+      if (lastDiscountEditedRef.current === 'rate') {
+        const computed = Number(((subtotal * (discountRate || 0)) / 100).toFixed(2));
+        setDiscount(computed);
+      } else {
+        const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
+        setDiscountRate(rate);
+      }
+    }
+  }, [subtotal, discountRate, discountMode]);
+
   const discountedSubtotal = Math.max(0, subtotal - discount);
   const tax = discountedSubtotal * (vatRate / 100);
   const grandTotal = discountedSubtotal + tax;
@@ -1371,6 +1405,8 @@ export default function QuoteForm() {
       subject,
       subject_ar: subjectAr,
       discount,
+      discount_rate: discountRate,
+      discount_type: discountMode,
       subtotal,
       tax,
       grand_total: grandTotal,
@@ -1488,7 +1524,7 @@ export default function QuoteForm() {
 
     if (isMeaningful) {
       localStorage.setItem(DRAFT_KEY, JSON.stringify({
-        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName, authorId,
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup, authorName, authorId,
         selectedCustomerId, selectedCustomer, customerSearch,
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1502,7 +1538,7 @@ export default function QuoteForm() {
       if (document.visibilityState !== 'visible' || !isMeaningful) return;
 
       const draft = {
-        quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate, markup, authorName, authorId,
+        quoteId, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup, authorName, authorId,
         selectedCustomerId, selectedCustomer, customerSearch,
         note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
         manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1529,7 +1565,7 @@ export default function QuoteForm() {
 
     const timer = setInterval(save, 30000);
     return () => clearInterval(timer);
-  }, [quoteId, date, expiryDate, subject, subjectAr, items, discount, vatRate,
+  }, [quoteId, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate,
     note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
     manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
     bankDetails, bankDetailsAr, footer, footerAr, customFields, recallQuoteId,
@@ -1550,6 +1586,8 @@ export default function QuoteForm() {
       if (d.customerSearch !== undefined) setCustomerSearch(d.customerSearch);
       if (d.items?.length) setItems(d.items);
       if (d.discount) setDiscount(d.discount);
+      if (d.discountRate !== undefined) setDiscountRate(d.discountRate);
+      if (d.discountMode !== undefined) setDiscountMode(d.discountMode);
       if (d.vatRate !== undefined) setVatRate(d.vatRate);
       if (d.markup !== undefined) setMarkup(d.markup);
       if (d.authorName !== undefined) setAuthorName(d.authorName);
@@ -2353,7 +2391,7 @@ export default function QuoteForm() {
         ];
       }),
       ['', '', '', '', '', 'SUBTOTAL', subtotal, '', '', '', '', '', 'B.TOTAL', baseTotal],
-      ['', '', '', '', '', 'DISCOUNT', discount],
+      ['', '', '', '', '', (discountMode === 'percentage' || discountMode === 'both') && discountRate > 0 ? `DISCOUNT (${discountRate}%)` : 'DISCOUNT', discount],
       ['', '', '', '', '', 'VAT (15%)', tax],
       ['', '', '', '', '', 'TOTAL PACKAGE', grandTotal, '', '', '', '', '', 'TTL PROFIT', markupProfit],
       [''],
@@ -3351,18 +3389,75 @@ export default function QuoteForm() {
                   </div>
                 </div>
                 <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
-                  <div className="font-bold flex items-center whitespace-nowrap">DISCOUNT <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span></div>
+                  <div className="font-bold flex items-center whitespace-nowrap">
+                    DISCOUNT
+                    {discountMode === 'percentage' || discountMode === 'both' ? (
+                      <>
+                        <input
+                          type="number"
+                          className="w-11 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none font-bold"
+                          value={discountRate || ''}
+                          onChange={e => {
+                            lastDiscountEditedRef.current = 'rate';
+                            const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                            setDiscountRate(val);
+                            setDiscount(Number(((subtotal * val) / 100).toFixed(2)));
+                          }}
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          placeholder="0"
+                        />%
+                      </>
+                    ) : (
+                      <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextMode: 'amount' | 'percentage' | 'both' =
+                          discountMode === 'amount' ? 'percentage' :
+                          discountMode === 'percentage' ? 'both' : 'amount';
+                        setDiscountMode(nextMode);
+                        if (nextMode === 'percentage' || nextMode === 'both') {
+                          lastDiscountEditedRef.current = 'rate';
+                          const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
+                          setDiscountRate(rate);
+                        } else {
+                          lastDiscountEditedRef.current = 'amount';
+                          setDiscountRate(0);
+                        }
+                      }}
+                      className="ml-1.5 px-1 py-0.5 text-[10px] font-bold rounded bg-gray-200 hover:bg-indigo-100 hover:text-indigo-700 transition-colors print:hidden"
+                      title={
+                        discountMode === 'amount' ? "Switch to Percentage (%)" :
+                        discountMode === 'percentage' ? "Switch to Both (% & SAR)" :
+                        "Switch to Direct Amount (SAR)"
+                      }
+                    >
+                      {discountMode === 'amount' ? 'SAR' : discountMode === 'percentage' ? '%' : 'BOTH'}
+                    </button>
+                  </div>
                   <div className="flex justify-between items-center font-mono">
                     <span>SAR</span>
-                    <input
-                      type="number"
-                      className="w-full max-w-[100px] text-right outline-none bg-transparent ml-2"
-                      value={discount || ''}
-                      onChange={e => setDiscount(parseFloat(e.target.value) || 0)}
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                    />
+                    {discountMode === 'percentage' ? (
+                      <span className="font-bold">{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    ) : (
+                      <input
+                        type="number"
+                        className="w-full max-w-[100px] text-right outline-none bg-transparent ml-2 font-bold"
+                        value={discount || ''}
+                        onChange={e => {
+                          lastDiscountEditedRef.current = 'amount';
+                          const val = Math.max(0, parseFloat(e.target.value) || 0);
+                          setDiscount(val);
+                          setDiscountRate(subtotal > 0 ? Number(((val / subtotal) * 100).toFixed(2)) : 0);
+                        }}
+                        min="0"
+                        step="0.01"
+                        placeholder="0.00"
+                      />
+                    )}
                   </div>
                 </div>
                 <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
@@ -3455,7 +3550,7 @@ export default function QuoteForm() {
           )}
 
           {/* Share With Panel — independent of Prepared By visibility */}
-          {workflowVisibility.shareWith && (user.role === 'admin' || user.permissions?.canShareQuote) && (
+          {workflowVisibility.shareWith && (user.role === 'admin' || user.permissions?.canShareQuote || user.permissions?.canEditSharedQuote) && (
             <div className="mt-4 print:hidden border-t border-gray-100 pt-4">
               <button
                 onClick={() => setShowSharePanel(p => !p)}
@@ -3529,7 +3624,7 @@ export default function QuoteForm() {
                     <div>
                       <p className="text-[10px] font-bold text-gray-500 uppercase mb-2">Individual Users</p>
                       <div className="flex flex-col gap-2">
-                        {usersList.filter(u => u.id !== (authorId || user.id)).map(u => {
+                        {usersList.filter(u => u.id !== user.id && (!authorId || u.id !== authorId)).map(u => {
                           const checked = sharedWith.users.includes(u.id);
                           const canEdit = sharedWith.canEditUsers.includes(u.id);
                           return (
