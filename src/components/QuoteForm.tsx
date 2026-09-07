@@ -3388,76 +3388,103 @@ export default function QuoteForm() {
                     <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>
-                <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
-                  <div className="font-bold flex items-center whitespace-nowrap">
-                    DISCOUNT
-                    {discountMode === 'percentage' || discountMode === 'both' ? (
-                      <>
-                        <input
-                          type="number"
-                          className="w-11 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none font-bold"
-                          value={discountRate || ''}
-                          onChange={e => {
-                            lastDiscountEditedRef.current = 'rate';
-                            const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
-                            setDiscountRate(val);
-                            setDiscount(Number(((subtotal * val) / 100).toFixed(2)));
+                <div className={`border-b border-gray-300 p-2 pt-1.5 pb-2 text-base hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
+                  {/* Screen View: 2 lines to give inputs full width and prevent overlapping */}
+                  <div className="print:hidden">
+                    {/* Line 1: Title and Mode Toggle Badge */}
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold flex items-center gap-1.5">
+                        <span>DISCOUNT</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextMode: 'amount' | 'percentage' | 'both' =
+                              discountMode === 'amount' ? 'percentage' :
+                              discountMode === 'percentage' ? 'both' : 'amount';
+                            setDiscountMode(nextMode);
+                            if (nextMode === 'percentage' || nextMode === 'both') {
+                              lastDiscountEditedRef.current = 'rate';
+                              const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
+                              setDiscountRate(rate);
+                            } else {
+                              lastDiscountEditedRef.current = 'amount';
+                              setDiscountRate(0);
+                            }
                           }}
-                          min="0"
-                          max="100"
-                          step="0.1"
-                          placeholder="0"
-                        />%
-                      </>
-                    ) : (
-                      <span className="ml-1 text-xs text-gray-400 font-normal print:hidden">(Edit)</span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextMode: 'amount' | 'percentage' | 'both' =
-                          discountMode === 'amount' ? 'percentage' :
-                          discountMode === 'percentage' ? 'both' : 'amount';
-                        setDiscountMode(nextMode);
-                        if (nextMode === 'percentage' || nextMode === 'both') {
-                          lastDiscountEditedRef.current = 'rate';
-                          const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
-                          setDiscountRate(rate);
-                        } else {
-                          lastDiscountEditedRef.current = 'amount';
-                          setDiscountRate(0);
-                        }
-                      }}
-                      className="ml-1.5 px-1 py-0.5 text-[10px] font-bold rounded bg-gray-200 hover:bg-indigo-100 hover:text-indigo-700 transition-colors print:hidden"
-                      title={
-                        discountMode === 'amount' ? "Switch to Percentage (%)" :
-                        discountMode === 'percentage' ? "Switch to Both (% & SAR)" :
-                        "Switch to Direct Amount (SAR)"
-                      }
-                    >
-                      {discountMode === 'amount' ? 'SAR' : discountMode === 'percentage' ? '%' : 'BOTH'}
-                    </button>
+                          className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-gray-200 hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
+                          title={
+                            discountMode === 'amount' ? "Switch to Percentage (%)" :
+                            discountMode === 'percentage' ? "Switch to Both (% & SAR)" :
+                            "Switch to Direct Amount (SAR)"
+                          }
+                        >
+                          {discountMode === 'amount' ? 'SAR' : discountMode === 'percentage' ? '%' : 'BOTH'}
+                        </button>
+                      </div>
+                      <span className="text-[11px] text-gray-400 font-normal">
+                        {discountMode === 'both' ? '(% & SAR)' : discountMode === 'percentage' ? '(Percentage %)' : '(Direct SAR)'}
+                      </span>
+                    </div>
+
+                    {/* Line 2: Percentage on the left, SAR on the right */}
+                    <div className="flex items-center justify-between font-mono mt-1.5">
+                      <div>
+                        {discountMode === 'percentage' || discountMode === 'both' ? (
+                          <div className="flex items-center text-sm">
+                            <input
+                              type="number"
+                              className="w-12 text-center outline-none bg-white border border-gray-300 rounded px-1 py-0.5 font-bold text-sm focus:border-indigo-500 shadow-sm"
+                              value={discountRate || ''}
+                              onChange={e => {
+                                lastDiscountEditedRef.current = 'rate';
+                                const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                setDiscountRate(val);
+                                setDiscount(Number(((subtotal * val) / 100).toFixed(2)));
+                              }}
+                              min="0"
+                              max="100"
+                              step="0.1"
+                              placeholder="0"
+                            />
+                            <span className="ml-1 font-bold text-gray-600">%</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">SAR only</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span>SAR</span>
+                        {discountMode === 'percentage' ? (
+                          <span className="font-bold">{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        ) : (
+                          <input
+                            type="number"
+                            className="w-24 text-right outline-none bg-white border border-gray-300 rounded px-1.5 py-0.5 font-bold text-sm focus:border-indigo-500 shadow-sm"
+                            value={discount || ''}
+                            onChange={e => {
+                              lastDiscountEditedRef.current = 'amount';
+                              const val = Math.max(0, parseFloat(e.target.value) || 0);
+                              setDiscount(val);
+                              setDiscountRate(subtotal > 0 ? Number(((val / subtotal) * 100).toFixed(2)) : 0);
+                            }}
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                          />
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex justify-between items-center font-mono">
-                    <span>SAR</span>
-                    {discountMode === 'percentage' ? (
-                      <span className="font-bold">{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    ) : (
-                      <input
-                        type="number"
-                        className="w-full max-w-[100px] text-right outline-none bg-transparent ml-2 font-bold"
-                        value={discount || ''}
-                        onChange={e => {
-                          lastDiscountEditedRef.current = 'amount';
-                          const val = Math.max(0, parseFloat(e.target.value) || 0);
-                          setDiscount(val);
-                          setDiscountRate(subtotal > 0 ? Number(((val / subtotal) * 100).toFixed(2)) : 0);
-                        }}
-                        min="0"
-                        step="0.01"
-                        placeholder="0.00"
-                      />
-                    )}
+
+                  {/* Print View: Clean single row matching Subtotal / VAT table layout */}
+                  <div className="hidden print:grid print:grid-cols-2 text-base items-center">
+                    <div className="font-bold">
+                      DISCOUNT {(discountMode === 'percentage' || discountMode === 'both') && discountRate > 0 ? `(${discountRate}%)` : ''}
+                    </div>
+                    <div className="flex justify-between items-center font-mono font-bold">
+                      <span>SAR</span>
+                      <span>{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
                   </div>
                 </div>
                 <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
