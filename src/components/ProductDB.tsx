@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2, CheckSquare, Square } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2, CheckSquare, Square, Languages } from 'lucide-react';
 
 interface Product {
   id: number;
@@ -20,6 +20,9 @@ export default function ProductDB() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [lastTranslatedDesc, setLastTranslatedDesc] = useState('');
+  const [translationMode, setTranslationMode] = useState<'manual' | 'auto'>(() => {
+    return (localStorage.getItem('translationMode') as 'manual' | 'auto') || 'manual';
+  });
   const [showPriceSync, setShowPriceSync] = useState(false);
   const [syncData, setSyncData] = useState<{ id?: number; description: string; current_price: number; new_price: number; match_type: 'exact' | 'fuzzy' | 'none' }[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -34,6 +37,15 @@ export default function ProductDB() {
   useEffect(() => { 
     fetchProducts(); 
     fetchSuppliers();
+    fetch('/api/settings/translationMode')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) {
+          setTranslationMode(data.value as 'manual' | 'auto');
+          localStorage.setItem('translationMode', data.value);
+        }
+      })
+      .catch(console.error);
   }, []);
 
   const fetchSuppliers = async () => {
@@ -154,6 +166,7 @@ export default function ProductDB() {
   };
 
   useEffect(() => {
+    if (translationMode !== 'auto') return;
     const desc = editForm.description || '';
     if (!desc || desc === lastTranslatedDesc) return;
 
@@ -582,12 +595,26 @@ export default function ProductDB() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white resize-y"
                   value={editForm.description || ''}
                   onChange={e => setEditForm(m => ({ ...m, description: e.target.value }))}
-                  onBlur={e => handleAutoTranslate(e.target.value)}
+                  onBlur={e => {
+                    if (translationMode === 'auto') {
+                      handleAutoTranslate(e.target.value);
+                    }
+                  }}
                   rows={Math.max(2, Math.min(6, Math.ceil((editForm.description || '').length / 45)))}
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name (Arabic)</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-gray-500">Product Name (Arabic)</label>
+                  <button
+                    type="button"
+                    onClick={() => handleAutoTranslate(editForm.description || '')}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 hover:underline"
+                    title="Translate English product name to Arabic"
+                  >
+                    <Languages size={12} /> Translate
+                  </button>
+                </div>
                 <textarea
                   dir="rtl"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right text-gray-900 bg-white resize-y"

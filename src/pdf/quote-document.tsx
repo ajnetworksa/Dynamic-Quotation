@@ -92,6 +92,15 @@ export type PdfQuote = {
   total: number;
   customer: PdfCustomer;
   lines: PdfLine[];
+  showNote?: boolean;
+  showPayment?: boolean;
+  showWarranty?: boolean;
+  showManpower?: boolean;
+  showMobilization?: boolean;
+  showDuration?: boolean;
+  showBankDetails?: boolean;
+  showCustomField?: boolean;
+  customFields?: Array<{ id?: string; header?: string; value?: string; valueAr?: string }>;
 };
 
 export function lineNetPrice(line: PdfLine): number {
@@ -192,28 +201,45 @@ export function buildPdfTermRows(
   quote: PdfQuote,
   settings: PdfSettings
 ): PdfTermRow[] {
-  const rows = [
-    { label: "PAYMENT", en: quote.payment ?? settings.pdfPayment, ar: quote.paymentAr },
-    { label: "WARRANTY", en: quote.warranty ?? settings.pdfWarranty, ar: quote.warrantyAr },
-    { label: "MANPOWER", en: quote.manpower ?? settings.pdfManpower, ar: quote.manpowerAr },
-    { label: "MOBILIZATION", en: quote.mobilization ?? settings.pdfMobilization, ar: quote.mobilizationAr },
-    { label: "DURATION", en: quote.duration ?? settings.pdfDuration, ar: quote.durationAr },
+  const candidateRows: Array<{ label: string; en?: string | null; ar?: string | null; visible?: boolean }> = [
+    { label: "PAYMENT", en: quote.payment ?? settings.pdfPayment, ar: quote.paymentAr, visible: quote.showPayment !== false },
+    { label: "WARRANTY", en: quote.warranty ?? settings.pdfWarranty, ar: quote.warrantyAr, visible: quote.showWarranty !== false },
+    { label: "MANPOWER", en: quote.manpower ?? settings.pdfManpower, ar: quote.manpowerAr, visible: quote.showManpower !== false },
+    { label: "MOBILIZATION", en: quote.mobilization ?? settings.pdfMobilization, ar: quote.mobilizationAr, visible: quote.showMobilization !== false },
+    { label: "DURATION", en: quote.duration ?? settings.pdfDuration, ar: quote.durationAr, visible: quote.showDuration !== false },
   ];
-  const mapped = rows
-    .filter((r) => r.en || r.ar)
+  const mapped = candidateRows
+    .filter((r) => r.visible && (r.en || r.ar))
     .map((r) => {
       const parts = getBilingualParts(r.en, r.ar);
       return { label: r.label, en: parts.en, ar: parts.ar };
     });
 
-  // Append Bank Details if available
-  const bank = getBilingualParts(quote.bankDetails, quote.bankDetailsAr);
-  if (bank.en || bank.ar) {
-    mapped.push({
-      label: "BANK DETAILS",
-      en: bank.en || "",
-      ar: bank.ar || "",
-    });
+  // Append Bank Details if enabled and available
+  if (quote.showBankDetails !== false) {
+    const bank = getBilingualParts(quote.bankDetails, quote.bankDetailsAr);
+    if (bank.en || bank.ar) {
+      mapped.push({
+        label: "BANK DETAILS",
+        en: bank.en || "",
+        ar: bank.ar || "",
+      });
+    }
+  }
+
+  // Append Custom Fields if enabled and available
+  if (quote.showCustomField !== false && Array.isArray(quote.customFields)) {
+    for (const cf of quote.customFields) {
+      if (cf.value || cf.valueAr) {
+        const label = (cf.header || "CUSTOM FIELD:").replace(/:$/, "").trim();
+        const parts = getBilingualParts(cf.value, cf.valueAr);
+        mapped.push({
+          label: label || "CUSTOM FIELD",
+          en: parts.en || "",
+          ar: parts.ar || "",
+        });
+      }
+    }
   }
 
   return mapped;
@@ -370,8 +396,22 @@ function fmt(n: number) {
 }
 function fmtDate(d: Date | string | null | undefined) {
   if (!d) return "—";
-  const dt = typeof d === "string" ? new Date(d) : d;
-  return dt.toISOString().slice(0, 10);
+  try {
+    if (typeof d === "string") {
+      const s = d.trim();
+      if (!s) return "—";
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+      const dt = new Date(s);
+      if (isNaN(dt.getTime())) return s;
+      return dt.toISOString().slice(0, 10);
+    }
+    if (d instanceof Date && !isNaN(d.getTime())) {
+      return d.toISOString().slice(0, 10);
+    }
+    return "—";
+  } catch {
+    return typeof d === "string" ? d : "—";
+  }
 }
 
 // ── COMPONENT ─────────────────────────────────────────────────────────────────
@@ -639,27 +679,31 @@ export function QuotePdfDocument({
         <View style={{ marginTop: 6 }}>
           <View style={{ flexDirection: "row", gap: 10 }}>
             {/* Note box */}
-            <View style={styles.noteBox}>
-              <View style={{ flexDirection: "row", gap: 4 }}>
-                <Text style={{ fontWeight: "bold", minWidth: 38 }}>NOTE:</Text>
-                <View style={{ flex: 1, flexDirection: "row", gap: 6 }}>
-                  {/* English lines */}
-                  <View style={{ flex: 1 }}>
-                    {noteItems.map((item, idx) => (
-                      <Text key={idx} style={{ fontSize: 7.5, marginBottom: 1 }}>{item.en}</Text>
-                    ))}
-                  </View>
-                  {/* Arabic lines */}
-                  {noteItems.some((n) => n.ar) ? (
+            {quote.showNote !== false && (quote.notes || quote.notesAr) ? (
+              <View style={styles.noteBox}>
+                <View style={{ flexDirection: "row", gap: 4 }}>
+                  <Text style={{ fontWeight: "bold", minWidth: 38 }}>NOTE:</Text>
+                  <View style={{ flex: 1, flexDirection: "row", gap: 6 }}>
+                    {/* English lines */}
                     <View style={{ flex: 1 }}>
                       {noteItems.map((item, idx) => (
-                        <Text key={idx} style={{ fontSize: 7.5, textAlign: "right", marginBottom: 1 }}>{item.ar}</Text>
+                        <Text key={idx} style={{ fontSize: 7.5, marginBottom: 1 }}>{item.en}</Text>
                       ))}
                     </View>
-                  ) : null}
+                    {/* Arabic lines */}
+                    {noteItems.some((n) => n.ar) ? (
+                      <View style={{ flex: 1 }}>
+                        {noteItems.map((item, idx) => (
+                          <Text key={idx} style={{ fontSize: 7.5, textAlign: "right", marginBottom: 1 }}>{item.ar}</Text>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
                 </View>
               </View>
-            </View>
+            ) : (
+              <View style={{ flex: 1 }} />
+            )}
 
             {/* Totals box */}
             <View style={{ position: "relative" }}>

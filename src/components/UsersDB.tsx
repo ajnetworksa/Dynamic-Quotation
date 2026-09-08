@@ -11,6 +11,7 @@ interface Permissions {
   canOverridePrice?: boolean;
   canViewRevenue?: boolean;
   canViewAllQuotes?: boolean;
+  canViewQuotesFrom?: number[];
   canViewCreatedBy?: boolean;
   canViewHistory?: boolean;
   canChangePassword?: boolean;
@@ -73,10 +74,12 @@ function PermissionToggles({
   perms,
   role,
   onChange,
+  hideQuoteVis,
 }: {
   perms: Permissions;
   role: string;
   onChange: (key: keyof Permissions) => void;
+  hideQuoteVis?: boolean;
 }) {
   if (role === 'admin') {
     return (
@@ -85,11 +88,15 @@ function PermissionToggles({
       </span>
     );
   }
+  const permsToDisplay = hideQuoteVis
+    ? ALL_PERMISSIONS.filter(p => p.key !== 'canViewAllQuotes')
+    : ALL_PERMISSIONS;
+
   return (
     <div className="flex flex-col gap-2 mt-1">
       <p className="text-xs text-gray-500 font-medium mb-1">Feature Access:</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        {ALL_PERMISSIONS.map(p => {
+        {permsToDisplay.map(p => {
           const checked = !!perms?.[p.key];
           return (
             <label
@@ -110,12 +117,37 @@ function PermissionToggles({
 }
 
 // ── Permission Badges (display only) ─────────────────────────────────────────
-function PermissionBadges({ perms, role }: { perms: Permissions; role: string }) {
+function PermissionBadges({ perms, role, allUsers }: { perms: Permissions; role: string; allUsers?: AppUser[] }) {
   if (role === 'admin') return <span className="px-2 py-1 rounded text-[10px] font-bold bg-purple-100 text-purple-700 uppercase">All Access</span>;
-  const granted = ALL_PERMISSIONS.filter(p => perms?.[p.key]);
-  if (granted.length === 0) return <span className="text-xs text-gray-400 italic">No extras granted</span>;
+  
+  let visBadge = null;
+  if (perms?.canViewAllQuotes) {
+    visBadge = (
+      <span className="flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full cursor-help" title="Can view all quotations across all users">
+        <Eye size={12} /> All Quotes
+      </span>
+    );
+  } else if (perms?.canViewQuotesFrom && perms.canViewQuotesFrom.length > 0) {
+    const authorNames = perms.canViewQuotesFrom
+      .map(id => allUsers?.find(u => u.id === id)?.username || `ID:${id}`)
+      .join(', ');
+    visBadge = (
+      <span className="flex items-center gap-1 px-2 py-0.5 bg-sky-100 text-sky-800 text-[10px] font-bold rounded-full cursor-help" title={`Can view quotations by: ${authorNames}`}>
+        <Users size={12} /> View: {authorNames}
+      </span>
+    );
+  } else {
+    visBadge = (
+      <span className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-500 text-[10px] font-medium rounded-full cursor-help" title="Can only view own quotations">
+        <User size={12} /> Own Quotes Only
+      </span>
+    );
+  }
+
+  const granted = ALL_PERMISSIONS.filter(p => p.key !== 'canViewAllQuotes' && perms?.[p.key]);
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap gap-1 items-center">
+      {visBadge}
       {granted.map(p => (
         <span
           key={p.key}
@@ -125,6 +157,7 @@ function PermissionBadges({ perms, role }: { perms: Permissions; role: string })
           {p.icon} {p.label}
         </span>
       ))}
+      {!visBadge && granted.length === 0 && <span className="text-xs text-gray-400 italic">No extras granted</span>}
     </div>
   );
 }
@@ -145,6 +178,7 @@ function UserFormPanel({
   setSelectedGroupId,
   applyGroup,
   togglePerm,
+  allUsers,
 }: {
   title: string;
   onSave: () => void;
@@ -158,7 +192,19 @@ function UserFormPanel({
   setSelectedGroupId: (id: string) => void;
   applyGroup: (groupId: string, currentPerms: Permissions) => Permissions;
   togglePerm: (key: keyof Permissions) => void;
+  allUsers: AppUser[];
 }) {
+  const [specificModeSelected, setSpecificModeSelected] = useState(false);
+
+  // Determine current visibility mode
+  const currentVisMode: 'own' | 'all' | 'specific' = editForm.permissions?.canViewAllQuotes
+    ? 'all'
+    : (editForm.permissions?.canViewQuotesFrom && editForm.permissions.canViewQuotesFrom.length > 0)
+      ? 'specific'
+      : (specificModeSelected ? 'specific' : 'own');
+
+  const otherUsers = allUsers.filter(u => u.id !== isEditing);
+
   return (
     <div className={`p-5 border-b ${bg}`}>
       <h3 className="text-sm font-bold mb-3">{title}</h3>
@@ -212,7 +258,179 @@ function UserFormPanel({
         </div>
       )}
 
-      <PermissionToggles perms={(editForm.permissions || {}) as Permissions} role={editForm.role || 'user'} onChange={togglePerm} />
+      {/* Quotation Visibility Control */}
+      {editForm.role !== 'admin' && (
+        <div className="mb-3 p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <Eye size={15} className="text-indigo-600" />
+              <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Quotation Visibility</span>
+              <span className="text-[11px] text-gray-500 font-normal hidden sm:inline">(Control which quotations this user can view)</span>
+            </div>
+            {currentVisMode === 'specific' && (
+              <div className="flex gap-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allIds = otherUsers.map(u => u.id);
+                    setEditForm(prev => ({
+                      ...prev,
+                      permissions: { ...(prev.permissions || {}), canViewAllQuotes: false, canViewQuotesFrom: allIds }
+                    }));
+                  }}
+                  className="text-indigo-600 font-semibold hover:underline"
+                >
+                  Select All
+                </button>
+                <span className="text-gray-300">|</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditForm(prev => ({
+                      ...prev,
+                      permissions: { ...(prev.permissions || {}), canViewAllQuotes: false, canViewQuotesFrom: [] }
+                    }));
+                  }}
+                  className="text-gray-500 hover:underline"
+                >
+                  Clear All
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <label className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-xs transition-colors ${
+              currentVisMode === 'own'
+                ? 'border-indigo-500 bg-indigo-50 text-indigo-900 font-bold'
+                : 'border-gray-200 bg-white hover:bg-gray-50 text-gray-700'
+            }`}>
+              <input
+                type="radio"
+                name={`quote-vis-${isEditing ?? 'new'}`}
+                checked={currentVisMode === 'own'}
+                onChange={() => {
+                  setSpecificModeSelected(false);
+                  setEditForm(prev => ({
+                    ...prev,
+                    permissions: {
+                      ...(prev.permissions || {}),
+                      canViewAllQuotes: false,
+                      canViewQuotesFrom: [],
+                    }
+                  }));
+                }}
+                className="accent-indigo-600"
+              />
+              <span>👤 Only Own Quotes</span>
+            </label>
+
+            <label className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-xs transition-colors ${
+              currentVisMode === 'all'
+                ? 'border-indigo-500 bg-indigo-50 text-indigo-900 font-bold'
+                : 'border-gray-200 bg-white hover:bg-gray-50 text-gray-700'
+            }`}>
+              <input
+                type="radio"
+                name={`quote-vis-${isEditing ?? 'new'}`}
+                checked={currentVisMode === 'all'}
+                onChange={() => {
+                  setSpecificModeSelected(false);
+                  setEditForm(prev => ({
+                    ...prev,
+                    permissions: {
+                      ...(prev.permissions || {}),
+                      canViewAllQuotes: true,
+                      canViewQuotesFrom: [],
+                    }
+                  }));
+                }}
+                className="accent-indigo-600"
+              />
+              <span>🌐 All Team Quotes</span>
+            </label>
+
+            <label className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-xs transition-colors ${
+              currentVisMode === 'specific'
+                ? 'border-indigo-500 bg-indigo-50 text-indigo-900 font-bold'
+                : 'border-gray-200 bg-white hover:bg-gray-50 text-gray-700'
+            }`}>
+              <input
+                type="radio"
+                name={`quote-vis-${isEditing ?? 'new'}`}
+                checked={currentVisMode === 'specific'}
+                onChange={() => {
+                  setSpecificModeSelected(true);
+                  setEditForm(prev => ({
+                    ...prev,
+                    permissions: {
+                      ...(prev.permissions || {}),
+                      canViewAllQuotes: false,
+                    }
+                  }));
+                }}
+                className="accent-indigo-600"
+              />
+              <span>👥 Specific Users' Quotes</span>
+            </label>
+          </div>
+
+          {/* User selector checklist when specific is selected */}
+          {currentVisMode === 'specific' && (
+            <div className="mt-2.5 p-2.5 bg-sky-50 border border-sky-200 rounded-lg">
+              <p className="text-[11px] font-semibold text-sky-900 mb-2 flex items-center justify-between">
+                <span>Check the users whose quotations this user is allowed to view:</span>
+                <span className="text-[10px] text-sky-700 font-bold">
+                  {(editForm.permissions?.canViewQuotesFrom?.length ?? 0)} selected
+                </span>
+              </p>
+              {otherUsers.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                  {otherUsers.map(u => {
+                    const isChecked = editForm.permissions?.canViewQuotesFrom?.includes(u.id) || false;
+                    return (
+                      <label
+                        key={u.id}
+                        className={`flex items-center gap-2 p-1.5 rounded text-xs border cursor-pointer transition-colors ${
+                          isChecked
+                            ? 'bg-sky-100 border-sky-400 text-sky-950 font-semibold'
+                            : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={e => {
+                            const cur = editForm.permissions?.canViewQuotesFrom || [];
+                            const next = e.target.checked
+                              ? [...cur, u.id]
+                              : cur.filter(id => id !== u.id);
+                            setEditForm(prev => ({
+                              ...prev,
+                              permissions: {
+                                ...(prev.permissions || {}),
+                                canViewAllQuotes: false,
+                                canViewQuotesFrom: next,
+                              }
+                            }));
+                          }}
+                          className="accent-sky-600"
+                        />
+                        <span className="truncate">{u.username}</span>
+                        <span className="text-[9px] text-gray-400 uppercase ml-auto">({u.role})</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">No other users exist to select from.</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <PermissionToggles perms={(editForm.permissions || {}) as Permissions} role={editForm.role || 'user'} onChange={togglePerm} hideQuoteVis={true} />
       <div className="flex gap-2 mt-3">
         <button onClick={onSave} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"><Save size={15} /> Save</button>
         <button onClick={onCancel} className="flex items-center gap-1.5 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 text-sm"><X size={15} /> Cancel</button>
@@ -254,18 +472,34 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
       body: JSON.stringify({ ...editForm, permissions: editForm.permissions || {} }),
     });
     if (res.ok) { setIsAdding(false); setEditForm({}); setSelectedGroupId(''); fetchUsers(); }
-    else { const d = await res.json(); setError(d.error || 'Failed to add user'); }
+    else {
+      const d = await res.json();
+      const msg = d.details && Array.isArray(d.details) && d.details.length > 0
+        ? `${d.error}: ${d.details.join(', ')}`
+        : d.error || 'Failed to add user';
+      setError(msg);
+    }
   };
 
   const handleUpdate = async (id: number) => {
     setError('');
+    const payload: any = { ...editForm, permissions: editForm.permissions || {} };
+    if (!payload.password || payload.password.trim() === '') {
+      delete payload.password;
+    }
     const res = await fetch(`/api/users/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...editForm, permissions: editForm.permissions || {} }),
+      body: JSON.stringify(payload),
     });
     if (res.ok) { setIsEditing(null); setEditForm({}); setSelectedGroupId(''); fetchUsers(); }
-    else { const d = await res.json(); setError(d.error || 'Failed to update user'); }
+    else {
+      const d = await res.json();
+      const msg = d.details && Array.isArray(d.details) && d.details.length > 0
+        ? `${d.error}: ${d.details.join(', ')}`
+        : d.error || 'Failed to update user';
+      setError(msg);
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -313,6 +547,7 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
           setSelectedGroupId={setSelectedGroupId}
           applyGroup={applyGroup}
           togglePerm={togglePerm}
+          allUsers={users}
         />
       )}
       {isEditing !== null && (
@@ -329,6 +564,7 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
           setSelectedGroupId={setSelectedGroupId}
           applyGroup={applyGroup}
           togglePerm={togglePerm}
+          allUsers={users}
         />
       )}
 
@@ -353,7 +589,7 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
                 <td className="p-4">
                   <span className={`px-2 py-1 rounded text-xs font-medium ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'editor' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}>{user.role}</span>
                 </td>
-                <td className="p-4"><PermissionBadges perms={user.permissions} role={user.role} /></td>
+                <td className="p-4"><PermissionBadges perms={user.permissions} role={user.role} allUsers={users} /></td>
                 <td className="p-4 text-right">
                   <div className="flex justify-end gap-2">
                     <button onClick={() => startEdit(user)} className="flex items-center gap-1.5 px-3 py-1.5 text-blue-600 hover:bg-blue-50 rounded-lg text-sm border border-blue-200"><Edit2 size={14} /> Edit</button>
