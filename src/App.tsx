@@ -81,6 +81,10 @@ const PERM_LABELS: Record<string, string> = {
   canPrintQuote: 'Print Quote',
   canViewFeatureAccess: 'View Own Feature Access',
   canUsePriceSync: 'AI Price Sync',
+  canChangeAuthor: 'Change Prepared By',
+  canShareQuote: 'Share Quotes',
+  canEditSharedQuote: 'Edit Shared Quotes',
+  canUndoQuote: 'Undo Timeline Actions',
 };
 
 const PERM_DESCRIPTIONS: Record<string, string> = {
@@ -102,6 +106,10 @@ const PERM_DESCRIPTIONS: Record<string, string> = {
   canPrintQuote: 'Generate and print PDF versions of documents.',
   canViewFeatureAccess: 'See the "Feature Access" list in your profile menu.',
   canUsePriceSync: 'Bulk update product prices using AI to extract data from supplier lists (PDF/Excel).',
+  canChangeAuthor: 'Allow modifying the Prepared By name on quotes.',
+  canShareQuote: 'Allow sharing specific quotes with selected users or groups.',
+  canEditSharedQuote: 'Allow editing and saving quotes that were shared with this user.',
+  canUndoQuote: 'Allow restoring quotes to previous states via the timeline.',
 };
 
 // ── Profile Modal ─────────────────────────────────────────────────────────────

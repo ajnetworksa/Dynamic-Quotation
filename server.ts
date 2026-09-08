@@ -338,6 +338,14 @@ addColumnIfNotExists('products', 'supplier_name', 'TEXT');
 addColumnIfNotExists('quote_items', 'item_code', 'TEXT');
 addColumnIfNotExists('quote_items', 'supplier_name', 'TEXT');
 addColumnIfNotExists('quote_items', 'type', "TEXT DEFAULT 'item'");
+addColumnIfNotExists('quotes', 'show_note', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'show_payment', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'show_warranty', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'show_manpower', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'show_mobilization', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'show_duration', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'show_bank_details', 'INTEGER DEFAULT 1');
+addColumnIfNotExists('quotes', 'show_custom_field', 'INTEGER DEFAULT 0');
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -372,6 +380,31 @@ for (const u of allUsers) {
     const rehashed = bcrypt.hashSync(u.password, BCRYPT_ROUNDS);
     db.prepare('UPDATE users SET password = ? WHERE id = ?').run(rehashed, u.id);
   }
+}
+
+// ── SETTINGS: Ensure default documentTerms setting exists in DB ─────────────────
+const existingTerms = db.prepare('SELECT value FROM settings WHERE key = ?').get('documentTerms') as any;
+if (!existingTerms) {
+  const blankTerms = {
+    noteHeader: 'NOTE:',
+    note: '',
+    noteAr: '',
+    payment: '',
+    paymentAr: '',
+    warranty: '',
+    warrantyAr: '',
+    manpower: '',
+    manpowerAr: '',
+    mobilization: '',
+    mobilizationAr: '',
+    duration: '',
+    durationAr: '',
+    bankDetails: '',
+    bankDetailsAr: '',
+    footer: '',
+    footerAr: ''
+  };
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('documentTerms', JSON.stringify(blankTerms));
 }
 
 // ── SYSTEM LOGGING & GLOBAL ERROR HANDLING ────────────────────────────────────
@@ -522,11 +555,11 @@ const UserCreateSchema = z.object({
   name: z.string().max(128).optional(),
   password: z.string().min(4).max(128),
   role: z.enum(['admin', 'user', 'editor']).default('user'),
-  permissions: z.record(z.string(), z.boolean()).optional().default({}),
+  permissions: z.record(z.string(), z.any()).optional().default({}),
 });
 
 const UserUpdateSchema = UserCreateSchema.extend({
-  password: z.string().min(4).max(128).optional(), // optional on update
+  password: z.string().min(4).max(128).optional().or(z.literal('')), // optional on update or left blank
 });
 
 const ChangePasswordSchema = z.object({
@@ -537,7 +570,8 @@ const ChangePasswordSchema = z.object({
 const PermissionGroupSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional().default(''),
-  permissions: z.record(z.string(), z.boolean()).optional().default({}),
+  permissions: z.record(z.string(), z.any()).optional().default({}),
+  members: z.array(z.number()).optional().default([]),
 });
 
 const QuoteItemSchema = z.object({
@@ -608,6 +642,15 @@ const QuoteSchema = z.object({
     canEditGroups: z.array(z.number().int()).optional().default([]),
   }).optional(),
   force: z.boolean().optional(),
+  is_new: z.boolean().optional(),
+  show_note: z.number().int().optional().default(1),
+  show_payment: z.number().int().optional().default(1),
+  show_warranty: z.number().int().optional().default(1),
+  show_manpower: z.number().int().optional().default(1),
+  show_mobilization: z.number().int().optional().default(1),
+  show_duration: z.number().int().optional().default(1),
+  show_bank_details: z.number().int().optional().default(1),
+  show_custom_field: z.number().int().optional().default(0),
 });
 
 const BulkStatusSchema = z.object({
@@ -952,6 +995,20 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
       }
     }
 
+    // Also scan activity_log so deleted or historical quote IDs are never reused
+    try {
+      const actRows = db.prepare('SELECT quote_id FROM activity_log').all() as { quote_id: string }[];
+      for (const row of actRows) {
+        if (row.quote_id) {
+          const match = row.quote_id.match(regex);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > maxNum) maxNum = num;
+          }
+        }
+      }
+    } catch { }
+
     const nextNum = maxNum > 0 ? maxNum + 1 : 10001;
     const nextId = `${prefix}-${nextNum.toString().padStart(5, '0')}`;
     res.json({ nextId });
@@ -960,13 +1017,45 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
   }
 });
 
+// Helper: check if a quote is visible to currentUser (based on role, canViewAllQuotes, canViewQuotesFrom, or shared_with)
+function isQuoteVisibleToUser(quote: { author_id: number; shared_with?: string | null }, currentUser: any): boolean {
+  if (currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes) return true;
+  if (quote.author_id === currentUser.id) return true;
+
+  const allowedAuthors: number[] = Array.isArray(currentUser.permissions?.canViewQuotesFrom)
+    ? currentUser.permissions.canViewQuotesFrom.filter((id: any) => typeof id === 'number')
+    : [];
+  if (allowedAuthors.includes(quote.author_id)) return true;
+
+  // Check shared_with
+  if (quote.shared_with) {
+    try {
+      const sw = JSON.parse(quote.shared_with);
+      if (Array.isArray(sw.users) && sw.users.includes(currentUser.id)) return true;
+      if (Array.isArray(sw.groups) && sw.groups.length > 0) {
+        const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.groups.map(() => '?').join(',') + ')').all(...sw.groups) as any[];
+        for (const g of groups) {
+          try {
+            if (JSON.parse(g.members || '[]').includes(currentUser.id)) return true;
+          } catch { }
+        }
+      }
+    } catch { }
+  }
+
+  return false;
+}
+
 app.get('/api/quotes', requireAuth, (req, res) => {
   try {
     const currentUser = (req as any).user;
     // Admins always see all quotes.
-    // Non-admins see all quotes only if they have the 'canViewAllQuotes' permission.
-    // Otherwise they are restricted to only the quotes they created.
+    // Non-admins see all quotes if they have 'canViewAllQuotes',
+    // or specific users' quotes if configured in 'canViewQuotesFrom'.
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+    const allowedAuthors: number[] = Array.isArray(currentUser.permissions?.canViewQuotesFrom)
+      ? currentUser.permissions.canViewQuotesFrom.filter((id: any) => typeof id === 'number')
+      : [];
 
     // Helper: check if currentUser is in a quote's shared_with
     const isSharedWith = (sharedWithJson: string | null) => {
@@ -998,34 +1087,37 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           ORDER BY q.id DESC
         `).all()
       : (() => {
-        const owned = db.prepare(`
-            SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
-            FROM quotes q 
-            LEFT JOIN customers c ON q.customer_id = c.id
-            LEFT JOIN users u ON q.author_id = u.id
-            WHERE q.author_id = ?
-            ORDER BY q.id DESC
-          `).all(currentUser.id) as any[];
+          const visibleAuthorIds = [currentUser.id, ...allowedAuthors.filter(id => id !== currentUser.id)];
+          const placeholders = visibleAuthorIds.map(() => '?').join(',');
 
-        // Also fetch quotes shared with this user
-        const all = db.prepare(`
-            SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
-            FROM quotes q 
-            LEFT JOIN customers c ON q.customer_id = c.id
-            LEFT JOIN users u ON q.author_id = u.id
-            WHERE q.author_id != ? AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '')
-            ORDER BY q.id DESC
-          `).all(currentUser.id) as any[];
+          const owned = db.prepare(`
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+              FROM quotes q 
+              LEFT JOIN customers c ON q.customer_id = c.id
+              LEFT JOIN users u ON q.author_id = u.id
+              WHERE q.author_id IN (${placeholders})
+              ORDER BY q.id DESC
+            `).all(...visibleAuthorIds) as any[];
 
-        const sharedQuotes = all.filter(q => isSharedWith(q.shared_with));
-        // Merge, deduplicate by quote_id
-        const seen = new Set(owned.map((q: any) => q.quote_id));
-        const merged = [...owned];
-        for (const q of sharedQuotes) {
-          if (!seen.has(q.quote_id)) { merged.push(q); seen.add(q.quote_id); }
-        }
-        return merged.sort((a: any, b: any) => b.id - a.id);
-      })();
+          // Also fetch quotes shared with this user
+          const all = db.prepare(`
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+              FROM quotes q 
+              LEFT JOIN customers c ON q.customer_id = c.id
+              LEFT JOIN users u ON q.author_id = u.id
+              WHERE q.author_id NOT IN (${placeholders}) AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '')
+              ORDER BY q.id DESC
+            `).all(...visibleAuthorIds) as any[];
+
+          const sharedQuotes = all.filter(q => isSharedWith(q.shared_with));
+          // Merge, deduplicate by quote_id
+          const seen = new Set(owned.map((q: any) => q.quote_id));
+          const merged = [...owned];
+          for (const q of sharedQuotes) {
+            if (!seen.has(q.quote_id)) { merged.push(q); seen.add(q.quote_id); }
+          }
+          return merged.sort((a: any, b: any) => b.id - a.id);
+        })();
 
     res.json(quotes);
   } catch (error: any) {
@@ -1061,21 +1153,9 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
   `).get(req.params.quote_id) as any;
   if (!quote) return res.status(404).json({ error: 'Quote not found' });
 
-  // Ownership check — block users who don't own this quote and lack elevated access
-  if (!canSeeAll && quote.author_id !== currentUser.id) {
-    // Check if shared with this user
-    let isShared = false;
-    try {
-      const sw = JSON.parse(quote.shared_with || '{}');
-      if (Array.isArray(sw.users) && sw.users.includes(currentUser.id)) isShared = true;
-      if (!isShared && Array.isArray(sw.groups) && sw.groups.length > 0) {
-        const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.groups.map(() => '?').join(',') + ')').all(...sw.groups) as any[];
-        for (const g of groups) {
-          try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { isShared = true; break; } } catch { }
-        }
-      }
-    } catch { }
-    if (!isShared) return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
+  // Ownership / visibility check
+  if (!isQuoteVisibleToUser(quote, currentUser)) {
+    return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
   }
 
   const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id);
@@ -1084,7 +1164,6 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
 
 app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
   const currentUser = (req as any).user;
-  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
   try {
     const quote = db.prepare(`
@@ -1098,20 +1177,9 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
 
-    // Ownership check — block users who don't own this quote and lack elevated access
-    if (!canSeeAll && quote.author_id !== currentUser.id) {
-      let isShared = false;
-      try {
-        const sw = JSON.parse(quote.shared_with || '{}');
-        if (Array.isArray(sw.users) && sw.users.includes(currentUser.id)) isShared = true;
-        if (!isShared && Array.isArray(sw.groups) && sw.groups.length > 0) {
-          const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.groups.map(() => '?').join(',') + ')').all(...sw.groups) as any[];
-          for (const g of groups) {
-            try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { isShared = true; break; } } catch { }
-          }
-        }
-      } catch { }
-      if (!isShared) return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
+    // Ownership / visibility check
+    if (!isQuoteVisibleToUser(quote, currentUser)) {
+      return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
     }
 
     const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id) as any[];
@@ -1123,50 +1191,115 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       settingsMap[s.key] = s.value;
     }
 
+    // Check if quote has draft_data with fresher edits
+    let draftData: any = null;
+    if (quote.draft_data) {
+      try {
+        draftData = typeof quote.draft_data === 'string' ? JSON.parse(quote.draft_data) : quote.draft_data;
+      } catch {}
+    }
+
+    let itemsToUse = items;
+    if (draftData?.items && Array.isArray(draftData.items) && draftData.items.length > 0) {
+      itemsToUse = draftData.items;
+    }
+
+    // Resolve date and validUntil safely
+    const rawDate = draftData?.date || quote.date;
+    const createdAtSafe = rawDate && typeof rawDate === 'string' && rawDate.trim() ? rawDate.trim() : new Date().toISOString().slice(0, 10);
+    const rawExpiry = draftData?.expiryDate || quote.expiry_date;
+    const validUntilSafe = rawExpiry && typeof rawExpiry === 'string' && rawExpiry.trim() ? rawExpiry.trim() : null;
+
+    // Customer details (overlay customer from draft if available)
+    let custName = quote.customer_name || "";
+    let custContact = quote.customer_contact || "";
+    let custEmail = quote.customer_email || "";
+    let custPhone = quote.customer_mobile || "";
+    let custAddress = quote.customer_address || "";
+
+    if (draftData?.selectedCustomer) {
+      custName = draftData.selectedCustomer.name || custName;
+      custContact = draftData.selectedCustomer.contact || custContact;
+      custEmail = draftData.selectedCustomer.email || custEmail;
+      custPhone = draftData.selectedCustomer.mobile || custPhone;
+      custAddress = draftData.selectedCustomer.address || custAddress;
+    }
+
+    const getBool = (queryVal: any, draftVal: any, dbVal: any, defaultVal = true): boolean => {
+      if (queryVal !== undefined && queryVal !== null) return queryVal === 'true' || queryVal === true || queryVal === '1';
+      if (draftVal !== undefined && draftVal !== null) return Boolean(draftVal);
+      if (dbVal !== undefined && dbVal !== null) return Boolean(dbVal);
+      return defaultVal;
+    };
+
+    const showNote = getBool(req.query.showNote, draftData?.showNote, quote.show_note, true);
+    const showPayment = getBool(req.query.showPayment, draftData?.showPayment, quote.show_payment, true);
+    const showWarranty = getBool(req.query.showWarranty, draftData?.showWarranty, quote.show_warranty, true);
+    const showManpower = getBool(req.query.showManpower, draftData?.showManpower, quote.show_manpower, true);
+    const showMobilization = getBool(req.query.showMobilization, draftData?.showMobilization, quote.show_mobilization, true);
+    const showDuration = getBool(req.query.showDuration, draftData?.showDuration, quote.show_duration, true);
+    const showBankDetails = getBool(req.query.showBankDetails, draftData?.showBankDetails, quote.show_bank_details, true);
+    const showCustomField = getBool(req.query.showCustomField, draftData?.showCustomField, quote.show_custom_field, false);
+
+    let parsedCustomFields: any[] = [];
+    try {
+      if (draftData?.customFields) parsedCustomFields = Array.isArray(draftData.customFields) ? draftData.customFields : JSON.parse(draftData.customFields);
+      else if (quote.custom_field) parsedCustomFields = JSON.parse(quote.custom_field);
+    } catch {}
+
     // Map SQLite quote structure to standard PdfQuote type
     const pdfQuote = {
       number: quote.quote_id,
-      createdAt: quote.date,
-      validUntil: quote.expiry_date || null,
+      createdAt: createdAtSafe,
+      validUntil: validUntilSafe,
       currency: "SAR", // standard for legacy app
-      subject: quote.subject || "",
-      subjectAr: quote.subject_ar || "",
-      notes: quote.note || "",
-      notesAr: quote.note_ar || "",
-      payment: quote.payment || "",
-      paymentAr: quote.payment_ar || "",
-      warranty: quote.warranty || "",
-      warrantyAr: quote.warranty_ar || "",
-      manpower: quote.manpower || "",
-      manpowerAr: quote.manpower_ar || "",
-      mobilization: quote.mobilization || "",
-      mobilizationAr: quote.mobilization_ar || "",
-      duration: quote.duration || "",
-      durationAr: quote.duration_ar || "",
-      bankDetails: quote.bank_details || "",
-      bankDetailsAr: quote.bank_details_ar || "",
-      subtotal: quote.subtotal || 0,
-      discountTotal: quote.discount || 0,
-      discountRate: quote.discount_rate || 0,
-      discountType: (quote.discount_type as 'amount' | 'percentage' | 'both') || 'amount',
-      taxTotal: quote.tax || 0,
-      total: quote.grand_total || 0,
+      subject: (draftData?.subject !== undefined ? draftData.subject : quote.subject) || "",
+      subjectAr: (draftData?.subjectAr !== undefined ? draftData.subjectAr : quote.subject_ar) || "",
+      notes: (draftData?.note !== undefined ? draftData.note : quote.note) || "",
+      notesAr: (draftData?.noteAr !== undefined ? draftData.noteAr : quote.note_ar) || "",
+      payment: (draftData?.payment !== undefined ? draftData.payment : quote.payment) || "",
+      paymentAr: (draftData?.paymentAr !== undefined ? draftData.paymentAr : quote.payment_ar) || "",
+      warranty: (draftData?.warranty !== undefined ? draftData.warranty : quote.warranty) || "",
+      warrantyAr: (draftData?.warrantyAr !== undefined ? draftData.warrantyAr : quote.warranty_ar) || "",
+      manpower: (draftData?.manpower !== undefined ? draftData.manpower : quote.manpower) || "",
+      manpowerAr: (draftData?.manpowerAr !== undefined ? draftData.manpowerAr : quote.manpower_ar) || "",
+      mobilization: (draftData?.mobilization !== undefined ? draftData.mobilization : quote.mobilization) || "",
+      mobilizationAr: (draftData?.mobilizationAr !== undefined ? draftData.mobilizationAr : quote.mobilization_ar) || "",
+      duration: (draftData?.duration !== undefined ? draftData.duration : quote.duration) || "",
+      durationAr: (draftData?.durationAr !== undefined ? draftData.durationAr : quote.duration_ar) || "",
+      bankDetails: (draftData?.bankDetails !== undefined ? draftData.bankDetails : quote.bank_details) || "",
+      bankDetailsAr: (draftData?.bankDetailsAr !== undefined ? draftData.bankDetailsAr : quote.bank_details_ar) || "",
+      subtotal: (draftData?.subtotal !== undefined ? draftData.subtotal : quote.subtotal) || 0,
+      discountTotal: (draftData?.discount !== undefined ? draftData.discount : quote.discount) || 0,
+      discountRate: (draftData?.discountRate ?? quote.discount_rate) || 0,
+      discountType: ((draftData?.discountMode || quote.discount_type) as 'amount' | 'percentage' | 'both') || 'amount',
+      taxTotal: (draftData?.tax !== undefined ? draftData.tax : quote.tax) || 0,
+      total: (draftData?.grandTotal !== undefined ? draftData.grandTotal : quote.grand_total) || 0,
+      showNote,
+      showPayment,
+      showWarranty,
+      showManpower,
+      showMobilization,
+      showDuration,
+      showBankDetails,
+      showCustomField,
+      customFields: parsedCustomFields,
       customer: {
-        company: quote.customer_name || "",
-        contactName: quote.customer_contact || "",
-        email: quote.customer_email || "",
-        phone: quote.customer_mobile || "",
-        address: quote.customer_address || "",
+        company: custName,
+        contactName: custContact,
+        email: custEmail,
+        phone: custPhone,
+        address: custAddress,
         city: "",
         country: "Saudi Arabia",
       },
-      lines: items.map((it: any) => ({
+      lines: itemsToUse.map((it: any) => ({
         type: (it.type as 'item' | 'section' | 'note') || 'item',
         description: it.description || "",
-        descriptionAr: it.description_ar || "",
+        descriptionAr: it.description_ar || it.descriptionAr || "",
         quantity: it.qty || 0,
         unit: it.unit || "set",
-        unitPrice: it.unit_price || 0,
+        unitPrice: it.unit_price || it.unitPrice || 0,
         discount: 0,
       })),
     };
@@ -1315,52 +1448,209 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
     const timestamp = new Date().toISOString();
 
     // Check if the quote exists
-    const existing = db.prepare('SELECT id, author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    const existing = db.prepare('SELECT id, author_id, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
 
     // Ownership check — block autosave to someone else's quote
     if (existing) {
       const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
       if (!canSeeAll && existing.author_id !== currentUser.id) {
-        return res.status(403).json({ error: 'Access denied' });
+        // Also check if allowed via canViewQuotesFrom + canEditSharedQuote or shared_with
+        const allowedAuthors: number[] = Array.isArray(currentUser.permissions?.canViewQuotesFrom)
+          ? currentUser.permissions.canViewQuotesFrom.filter((id: any) => typeof id === 'number')
+          : [];
+        const isAllowedAuthor = allowedAuthors.includes(existing.author_id);
+        let canEdit = false;
+        if (isAllowedAuthor && currentUser.permissions?.canEditSharedQuote) canEdit = true;
+        if (!canEdit) {
+          try {
+            const existingFull = db.prepare('SELECT shared_with FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+            const sw = JSON.parse(existingFull?.shared_with || '{}');
+            const canEditUsers: number[] = Array.isArray(sw.canEditUsers) ? sw.canEditUsers : [];
+            if (canEditUsers.includes(currentUser.id)) canEdit = true;
+          } catch {}
+        }
+        if (!canEdit) {
+          return res.status(403).json({ error: 'Access denied' });
+        }
       }
     }
 
-    if (existing) {
-      db.prepare(`
+    const d = draft_data || {};
+    const effectiveDate = d.date || new Date().toISOString().split('T')[0];
+    const customerId = d.selectedCustomerId || null;
+    const subject = d.subject ?? null;
+    const subjectAr = d.subjectAr ?? null;
+    const expiryDate = d.expiryDate || null;
+    const noteHeader = d.noteHeader ?? 'NOTE:';
+    const note = d.note ?? null;
+    const noteAr = d.noteAr ?? null;
+    const payment = d.payment ?? null;
+    const paymentAr = d.paymentAr ?? null;
+    const warranty = d.warranty ?? null;
+    const warrantyAr = d.warrantyAr ?? null;
+    const manpower = d.manpower ?? null;
+    const manpowerAr = d.manpowerAr ?? null;
+    const mobilization = d.mobilization ?? null;
+    const mobilizationAr = d.mobilizationAr ?? null;
+    const duration = d.duration ?? null;
+    const durationAr = d.durationAr ?? null;
+    const bankDetails = d.bankDetails ?? null;
+    const bankDetailsAr = d.bankDetailsAr ?? null;
+    const footer = d.footer ?? null;
+    const footerAr = d.footerAr ?? null;
+    const discount = d.discount ?? 0;
+    const discountRate = d.discountRate ?? 0;
+    const discountType = d.discountMode ?? 'amount';
+    const vatRate = d.vatRate ?? 15;
+    const markup = d.markup ?? 8;
+    const customFieldsStr = d.customFields ? JSON.stringify(d.customFields) : null;
+    const totalAmount = grand_total ?? d.grandTotal ?? null;
+
+    db.transaction(() => {
+      if (existing) {
+        db.prepare(`
           UPDATE quotes 
           SET draft_data = ?, 
-              subject = COALESCE(?, subject),
-              subject_ar = COALESCE(?, subject_ar),
-              customer_id = COALESCE(?, customer_id),
-              grand_total = COALESCE(?, grand_total)
+              date = COALESCE(?, date),
+              expiry_date = ?,
+              subject = ?,
+              subject_ar = ?,
+              customer_id = ?,
+              note_header = ?,
+              note = ?,
+              note_ar = ?,
+              payment = ?,
+              payment_ar = ?,
+              warranty = ?,
+              warranty_ar = ?,
+              manpower = ?,
+              manpower_ar = ?,
+              mobilization = ?,
+              mobilization_ar = ?,
+              duration = ?,
+              duration_ar = ?,
+              bank_details = ?,
+              bank_details_ar = ?,
+              footer = ?,
+              footer_ar = ?,
+              discount = ?,
+              discount_rate = ?,
+              discount_type = ?,
+              vat_rate = ?,
+              markup = ?,
+              custom_field = ?,
+              grand_total = COALESCE(?, grand_total),
+              updated_at = ?
           WHERE quote_id = ?
         `).run(
-        JSON.stringify(draft_data),
-        draft_data.subject || null,
-        draft_data.subjectAr || null,
-        draft_data.selectedCustomerId || null,
-        grand_total || null,
-        quote_id
-      );
-    } else {
-      // Create a shell quote row just for the draft — record author_id so ownership is tracked
-      db.prepare(`
-          INSERT INTO quotes (quote_id, date, status, type, draft_data, subject, subject_ar, customer_id, grand_total, author_id) 
-          VALUES (?, ?, 'Draft', 'Quotation', ?, ?, ?, ?, ?, ?)
+          JSON.stringify(d),
+          effectiveDate,
+          expiryDate,
+          subject,
+          subjectAr,
+          customerId,
+          noteHeader,
+          note,
+          noteAr,
+          payment,
+          paymentAr,
+          warranty,
+          warrantyAr,
+          manpower,
+          manpowerAr,
+          mobilization,
+          mobilizationAr,
+          duration,
+          durationAr,
+          bankDetails,
+          bankDetailsAr,
+          footer,
+          footerAr,
+          discount,
+          discountRate,
+          discountType,
+          vatRate,
+          markup,
+          customFieldsStr,
+          totalAmount,
+          timestamp,
+          quote_id
+        );
+      } else {
+        // Create a shell quote row for the draft
+        db.prepare(`
+          INSERT INTO quotes (
+            quote_id, date, expiry_date, status, type, draft_data, subject, subject_ar, customer_id,
+            note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar,
+            manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
+            bank_details, bank_details_ar, footer, footer_ar, discount, discount_rate, discount_type,
+            vat_rate, markup, custom_field, grand_total, author_id, updated_at
+          ) VALUES (?, ?, ?, 'Draft', 'Quotation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
-        quote_id,
-        new Date().toISOString().split('T')[0],
-        JSON.stringify(draft_data),
-        draft_data.subject || null,
-        draft_data.subjectAr || null,
-        draft_data.selectedCustomerId || null,
-        grand_total || null,
-        (req as any).user?.id || null
-      );
-      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
-        quote_id, 'Draft Created (Autosave)', actor, timestamp
-      );
-    } // ← closes if/else
+          quote_id,
+          effectiveDate,
+          expiryDate,
+          JSON.stringify(d),
+          subject,
+          subjectAr,
+          customerId,
+          noteHeader,
+          note,
+          noteAr,
+          payment,
+          paymentAr,
+          warranty,
+          warrantyAr,
+          manpower,
+          manpowerAr,
+          mobilization,
+          mobilizationAr,
+          duration,
+          durationAr,
+          bankDetails,
+          bankDetailsAr,
+          footer,
+          footerAr,
+          discount,
+          discountRate,
+          discountType,
+          vatRate,
+          markup,
+          customFieldsStr,
+          totalAmount,
+          currentUser?.id || null,
+          timestamp
+        );
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(
+          quote_id, 'Draft Created (Autosave)', actor, timestamp
+        );
+      }
+
+      // If items are present in draft_data, sync quote_items
+      if (Array.isArray(d.items) && d.items.length > 0) {
+        db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
+        const insertItem = db.prepare('INSERT INTO quote_items (quote_id, product_id, description, description_ar, qty, unit, unit_price, net_price, original_price, manual_price, internal_note, item_code, supplier_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        for (const item of d.items) {
+          if (item.description || item.unit_price) {
+            insertItem.run(
+              quote_id,
+              item.product_id || null,
+              item.description || '',
+              item.description_ar || item.descriptionAr || '',
+              item.qty || 1,
+              item.unit || 'set',
+              item.unit_price || item.unitPrice || 0,
+              item.net_price || item.netPrice || 0,
+              item.original_price || null,
+              item.manual_price || null,
+              item.internal_note || null,
+              item.item_code || null,
+              item.supplier_name || null
+            );
+          }
+        }
+      }
+    })();
 
     res.json({ success: true }); // ← always reached
   } catch (error) {
@@ -1375,7 +1665,8 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    author_name, author_id, shared_with, version, force
+    author_name, author_id, shared_with, version, force, is_new,
+    show_note, show_payment, show_warranty, show_manpower, show_mobilization, show_duration, show_bank_details, show_custom_field
   } = req.body;
   const shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
   const updated_at = new Date().toISOString();
@@ -1393,33 +1684,55 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       WHERE q.quote_id = ?
     `).get(quote_id) as any;
 
+    // Concurrency collision protection: if client is creating a new quote but this ID already belongs to an established quote
+    if (is_new && existing && existing.status !== 'Draft' && existing.author_id !== currentUser.id) {
+      return res.status(409).json({ error: 'ID_TAKEN' });
+    }
+
     // Ownership check — block editing someone else's quote
     if (existing) {
       const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+      const allowedAuthors: number[] = Array.isArray(currentUser.permissions?.canViewQuotesFrom)
+        ? currentUser.permissions.canViewQuotesFrom.filter((id: any) => typeof id === 'number')
+        : [];
+      const isAllowedAuthor = allowedAuthors.includes(existing.author_id);
+
       if (!canSeeAll && existing.author_id !== currentUser.id) {
-        // Check if the user is in shared_with AND has per-quote canEdit permission
         let canEditAsShared = false;
-        try {
-          const existingFull = db.prepare('SELECT shared_with FROM quotes WHERE quote_id = ?').get(quote_id) as any;
-          const sw = JSON.parse(existingFull?.shared_with || '{}');
-          const canEditUsers: number[] = Array.isArray(sw.canEditUsers) ? sw.canEditUsers : [];
-          const canEditGroups: number[] = Array.isArray(sw.canEditGroups) ? sw.canEditGroups : [];
-          // Direct user canEdit
-          if (canEditUsers.includes(currentUser.id)) canEditAsShared = true;
-          // Global permission fallback
-          if (!canEditAsShared && currentUser.permissions?.canEditSharedQuote) {
-            const allUsers: number[] = Array.isArray(sw.users) ? sw.users : [];
-            if (allUsers.includes(currentUser.id)) canEditAsShared = true;
-          }
-          // Group canEdit check
-          if (!canEditAsShared && canEditGroups.length > 0) {
-            const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + canEditGroups.map(() => '?').join(',') + ')').all(...canEditGroups) as any[];
-            for (const g of groups) {
-              try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { canEditAsShared = true; break; } } catch { }
-            }
-          }
-        } catch { }
+
+        // If the author is in allowedAuthors AND user has canEditSharedQuote:
+        if (isAllowedAuthor && currentUser.permissions?.canEditSharedQuote) {
+          canEditAsShared = true;
+        }
+
+        // Check if the user is in shared_with AND has per-quote canEdit permission
         if (!canEditAsShared) {
+          try {
+            const existingFull = db.prepare('SELECT shared_with FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+            const sw = JSON.parse(existingFull?.shared_with || '{}');
+            const canEditUsers: number[] = Array.isArray(sw.canEditUsers) ? sw.canEditUsers : [];
+            const canEditGroups: number[] = Array.isArray(sw.canEditGroups) ? sw.canEditGroups : [];
+            // Direct user canEdit
+            if (canEditUsers.includes(currentUser.id)) canEditAsShared = true;
+            // Global permission fallback
+            if (!canEditAsShared && currentUser.permissions?.canEditSharedQuote) {
+              const allUsers: number[] = Array.isArray(sw.users) ? sw.users : [];
+              if (allUsers.includes(currentUser.id)) canEditAsShared = true;
+            }
+            // Group canEdit check
+            if (!canEditAsShared && canEditGroups.length > 0) {
+              const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + canEditGroups.map(() => '?').join(',') + ')').all(...canEditGroups) as any[];
+              for (const g of groups) {
+                try { if (JSON.parse(g.members || '[]').includes(currentUser.id)) { canEditAsShared = true; break; } } catch { }
+              }
+            }
+          } catch { }
+        }
+
+        if (!canEditAsShared) {
+          if (isAllowedAuthor) {
+            return res.status(403).json({ error: 'View-only access: You have permission to view this quotation, but need "Edit Shared Quotes" permission to save changes.' });
+          }
           return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
         }
       }
@@ -1525,7 +1838,8 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             manpower = ?, manpower_ar = ?, mobilization = ?, mobilization_ar = ?, duration = ?, duration_ar = ?, 
             bank_details = ?, bank_details_ar = ?, footer = ?, footer_ar = ?,
             custom_field_header = ?, custom_field = ?, custom_field_ar = ?, status = ?, type = ?, revision_of = ?, vat_rate = ?, expiry_date = ?, markup = ?,
-            author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL
+            author_name = ?, author_id = ?, shared_with = ?, version = ?, draft_data = NULL,
+            show_note = ?, show_payment = ?, show_warranty = ?, show_manpower = ?, show_mobilization = ?, show_duration = ?, show_bank_details = ?, show_custom_field = ?
           WHERE quote_id = ?
         `).run(
           date, customer_id, subject, subject_ar, discount || 0, discount_rate || 0, discount_type || 'amount', subtotal, tax, grand_total, updated_at,
@@ -1533,7 +1847,16 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
           custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion, quote_id
+          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion,
+          show_note !== undefined ? show_note : 1,
+          show_payment !== undefined ? show_payment : 1,
+          show_warranty !== undefined ? show_warranty : 1,
+          show_manpower !== undefined ? show_manpower : 1,
+          show_mobilization !== undefined ? show_mobilization : 1,
+          show_duration !== undefined ? show_duration : 1,
+          show_bank_details !== undefined ? show_bank_details : 1,
+          show_custom_field !== undefined ? show_custom_field : 0,
+          quote_id
         );
         db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
 
@@ -1548,14 +1871,23 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
             note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, 
             manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar, 
             bank_details, bank_details_ar, footer, footer_ar,
-            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            custom_field_header, custom_field, custom_field_ar, status, type, revision_of, author_id, vat_rate, expiry_date, markup, author_name, shared_with, version,
+            show_note, show_payment, show_warranty, show_manpower, show_mobilization, show_duration, show_bank_details, show_custom_field
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           quote_id, date, customer_id, subject, subject_ar, discount || 0, discount_rate || 0, discount_type || 'amount', subtotal, tax, grand_total, updated_at,
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1,
+          show_note !== undefined ? show_note : 1,
+          show_payment !== undefined ? show_payment : 1,
+          show_warranty !== undefined ? show_warranty : 1,
+          show_manpower !== undefined ? show_manpower : 1,
+          show_mobilization !== undefined ? show_mobilization : 1,
+          show_duration !== undefined ? show_duration : 1,
+          show_bank_details !== undefined ? show_bank_details : 1,
+          show_custom_field !== undefined ? show_custom_field : 0
         );
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(quote_id, 'Created', actor, updated_at, null);
       }
@@ -2259,12 +2591,20 @@ app.get('/api/admin/backups/download/:filename', requireAuth, requirePermission(
   }
 });
 
-app.get('/api/settings/:key', requireAuth, (req, res) => {
+app.get('/api/settings/:key', (req, res) => {
   const sensitiveKeys = ['smtpConfig', 'logExpirationDays'];
   const key = req.params.key;
 
   if (sensitiveKeys.includes(key)) {
-    const user = (req as any).user;
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const session = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token = ?').get(token) as { user_id: number; expires_at: string } | undefined;
+    if (!session || new Date(session.expires_at) < new Date()) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const user = db.prepare('SELECT id, username, role, permissions FROM users WHERE id = ?').get(session.user_id) as any;
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    user.permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
     if (!hasPermission(user, 'canManageSettings')) {
       return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
     }
@@ -2292,34 +2632,17 @@ app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), v
 // ── Translation API ───────────────────────────────────────────────────────────
 // Proxies to Google Translate with chunking + retry for reliability.
 app.post('/api/translate', async (req, res) => {
-  const { text } = req.body;
+  const { text, sl = 'en', tl = 'ar' } = req.body;
   if (!text) return res.json({ translation: '' });
-
-  // Split on sentence boundaries so each chunk stays under 400 chars
-  const splitIntoChunks = (str: string, maxLen = 400): string[] => {
-    if (str.length <= maxLen) return [str];
-    const chunks: string[] = [];
-    // Try to split on '. ', '\n', then fallback to hard split
-    const sentences = str.split(/(?<=[\.\!\?\n])\s+/);
-    let current = '';
-    for (const s of sentences) {
-      if ((current + s).length > maxLen && current) {
-        chunks.push(current.trim());
-        current = s;
-      } else {
-        current += (current ? ' ' : '') + s;
-      }
-    }
-    if (current) chunks.push(current.trim());
-    return chunks;
-  };
 
   const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
   const translateChunk = async (chunk: string, attempt = 0): Promise<string> => {
+    if (!chunk || !chunk.trim()) return '';
+
     // Strategy 1: Google Chrome Translate API (clients5 - fast & reliable)
     try {
-      const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=ar&q=${encodeURIComponent(chunk)}`;
+      const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}&q=${encodeURIComponent(chunk)}`;
       const response = await fetch(url, {
         headers: { 'User-Agent': BROWSER_UA },
         signal: AbortSignal.timeout(8000),
@@ -2337,7 +2660,7 @@ app.post('/api/translate', async (req, res) => {
 
     // Strategy 2: Google Translate GTX Endpoint with browser UA
     try {
-      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(chunk)}`;
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(chunk)}`;
       const response = await fetch(url, {
         headers: { 'User-Agent': BROWSER_UA },
         signal: AbortSignal.timeout(8000),
@@ -2365,7 +2688,7 @@ app.post('/api/translate', async (req, res) => {
           messages: [
             {
               role: 'system',
-              content: 'You are a professional English-to-Arabic translator. Translate the given text to Modern Standard Arabic accurately and concisely. Return ONLY the Arabic translation without explanation, markdown quotes, or notes.'
+              content: 'You are a professional English-to-Arabic translator. Translate the given text to Modern Standard Arabic accurately and concisely. Keep all numbers, codes, and account details unchanged. Return ONLY the Arabic translation without explanation, markdown quotes, or notes.'
             },
             {
               role: 'user',
@@ -2390,10 +2713,48 @@ app.post('/api/translate', async (req, res) => {
     throw new Error('Translation failed across all translation backends.');
   };
 
+  // Helper to guarantee numbers, account numbers, and IBANs are never lost in translation
+  const preserveNumbers = (src: string, trans: string): string => {
+    // Simplify overly verbose Arabic translation for IBAN to concise standard "الآيبان:"
+    let cleanedTrans = trans.replace(/رقم الحساب المصرفي الدولي\s*:/g, 'الآيبان:');
+    const srcLines = src.split('\n');
+    const transLines = cleanedTrans.split('\n');
+    if (srcLines.length === transLines.length) {
+      return transLines.map((tLine, i) => {
+        const sLine = srcLines[i];
+        const numbers = sLine.match(/\b(\d{4,}|[A-Z]{2}\d{10,})\b/g) || [];
+        let resLine = tLine;
+        for (const num of numbers) {
+          if (!resLine.includes(num)) {
+            resLine = resLine + ' ' + num;
+          }
+        }
+        return resLine;
+      }).join('\n');
+    }
+    const numbers = src.match(/\b(\d{4,}|[A-Z]{2}\d{10,})\b/g) || [];
+    let res = cleanedTrans;
+    for (const num of numbers) {
+      if (!res.includes(num)) {
+        res = res + ' ' + num;
+      }
+    }
+    return res;
+  };
+
   try {
-    const chunks = splitIntoChunks(text);
-    const translated = await Promise.all(chunks.map(c => translateChunk(c)));
-    res.json({ translation: translated.join(' ').trim() });
+    // If multiline text (e.g. Bank Details, multiline Notes), translate line-by-line to preserve structure
+    if (text.includes('\n')) {
+      const lines = text.split('\n');
+      const translatedLines = await Promise.all(lines.map(line => line.trim() ? translateChunk(line.trim()) : ''));
+      const finalTrans = preserveNumbers(text, translatedLines.join('\n'));
+      return res.json({ translation: finalTrans });
+    }
+
+    // Single line translation
+    const translated = await translateChunk(text.trim());
+    const finalTrans = preserveNumbers(text, translated);
+    res.json({ translation: finalTrans });
   } catch (error: any) {
     console.error('Translation error:', error);
     res.status(500).json({ error: 'Translation failed' });

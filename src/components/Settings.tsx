@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent } from 'lucide-react';
+import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 const APP_VERSION = '1.3.1';
@@ -35,6 +35,38 @@ export default function Settings() {
 
   const [quotePrefix, setQuotePrefix] = useState('AJ');
   const [quotePrefixStatus, setQuotePrefixStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  // Default Document Terms & Conditions / Notes
+  const DEFAULT_DOCUMENT_TERMS = {
+    noteHeader: 'NOTE:',
+    note: '',
+    noteAr: '',
+    showNote: true,
+    payment: '',
+    paymentAr: '',
+    showPayment: true,
+    warranty: '',
+    warrantyAr: '',
+    showWarranty: true,
+    manpower: '',
+    manpowerAr: '',
+    showManpower: true,
+    mobilization: '',
+    mobilizationAr: '',
+    showMobilization: true,
+    duration: '',
+    durationAr: '',
+    showDuration: true,
+    bankDetails: '',
+    bankDetailsAr: '',
+    showBankDetails: true,
+    footer: '',
+    footerAr: '',
+    showCustomField: false
+  };
+  const [documentTerms, setDocumentTerms] = useState(DEFAULT_DOCUMENT_TERMS);
+  const [termsStatus, setTermsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [translatingTerms, setTranslatingTerms] = useState(false);
 
   const [smtpStatus, setSmtpStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [smtpConfig, setSmtpConfig] = useState({
@@ -96,6 +128,10 @@ export default function Settings() {
   // Developer mode
   const [developerMode, setDeveloperMode] = useState(() => localStorage.getItem('developerMode') === 'true');
   const [devModeStatus, setDevModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // Translation Mode: 'manual' = Only translate when clicking Translate, 'auto' = Auto-translate on blur/typing
+  const [translationMode, setTranslationMode] = useState<'manual' | 'auto'>('manual');
+  const [translationModeStatus, setTranslationModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // System Update
   const [updateStatus, setUpdateStatus] = useState<{ current: string; latest: string; hasUpdate: boolean; changelog: string } | null>(null);
@@ -242,6 +278,33 @@ export default function Settings() {
     fetch('/api/settings/quotePrefix')
       .then(res => res.json())
       .then(data => { if (data.value) setQuotePrefix(data.value); })
+      .catch(console.error);
+
+    fetch('/api/settings/translationMode')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) {
+          setTranslationMode(data.value as 'manual' | 'auto');
+          localStorage.setItem('translationMode', data.value);
+        }
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/documentTerms', {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) {
+          try {
+            const parsed = JSON.parse(data.value);
+            setDocumentTerms(prev => ({ ...prev, ...parsed }));
+            localStorage.setItem('cached_documentTerms', data.value);
+          } catch (e) {
+            console.error('Failed to parse documentTerms', e);
+          }
+        }
+      })
       .catch(console.error);
 
     fetch('/api/system/remote-url', {
@@ -602,6 +665,85 @@ export default function Settings() {
     setTimeout(() => setThemeStatus('idle'), 3000);
   };
 
+  const handleSaveDocumentTerms = async () => {
+    setTermsStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key: 'documentTerms', value: JSON.stringify(documentTerms) })
+      });
+      if (res.ok) {
+        setTermsStatus('success');
+        try {
+          localStorage.setItem('cached_documentTerms', JSON.stringify(documentTerms));
+          window.dispatchEvent(new CustomEvent('document-terms-updated', { detail: documentTerms }));
+        } catch {}
+        setTimeout(() => setTermsStatus('idle'), 3000);
+      } else {
+        setTermsStatus('error');
+        setTimeout(() => setTermsStatus('idle'), 5000);
+      }
+    } catch {
+      setTermsStatus('error');
+      setTimeout(() => setTermsStatus('idle'), 5000);
+    }
+  };
+
+  const handleResetDocumentTerms = () => {
+    if (confirm('Clear all Document Terms & Conditions fields?')) {
+      setDocumentTerms(DEFAULT_DOCUMENT_TERMS);
+    }
+  };
+
+  const handleAutoTranslateTerms = async () => {
+    setTranslatingTerms(true);
+    try {
+      const translateField = async (text: string) => {
+        if (!text || !text.trim()) return '';
+        try {
+          const res = await fetch('/api/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            return data.translation || '';
+          }
+        } catch { }
+        return '';
+      };
+
+      const [noteAr, paymentAr, warrantyAr, manpowerAr, mobilizationAr, durationAr, bankDetailsAr, footerAr] = await Promise.all([
+        translateField(documentTerms.note),
+        translateField(documentTerms.payment),
+        translateField(documentTerms.warranty),
+        translateField(documentTerms.manpower),
+        translateField(documentTerms.mobilization),
+        translateField(documentTerms.duration),
+        translateField(documentTerms.bankDetails),
+        translateField(documentTerms.footer)
+      ]);
+
+      setDocumentTerms(prev => ({
+        ...prev,
+        noteAr: noteAr || prev.noteAr,
+        paymentAr: paymentAr || prev.paymentAr,
+        warrantyAr: warrantyAr || prev.warrantyAr,
+        manpowerAr: manpowerAr || prev.manpowerAr,
+        mobilizationAr: mobilizationAr || prev.mobilizationAr,
+        durationAr: durationAr || prev.durationAr,
+        bankDetailsAr: bankDetailsAr || prev.bankDetailsAr,
+        footerAr: footerAr || prev.footerAr
+      }));
+    } catch (err) {
+      console.error('Translation error:', err);
+    } finally {
+      setTranslatingTerms(false);
+    }
+  };
+
   const handleMuFilterSave = async () => {
     setMuFilterStatus('loading');
     try {
@@ -637,6 +779,22 @@ export default function Settings() {
       setRowReorderStatus('error');
     }
     setTimeout(() => setRowReorderStatus('idle'), 2000);
+  };
+
+  const handleTranslationModeToggle = async (val: 'manual' | 'auto') => {
+    setTranslationMode(val);
+    localStorage.setItem('translationMode', val);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key: 'translationMode', value: val })
+      });
+      setTranslationModeStatus('success');
+    } catch {
+      setTranslationModeStatus('error');
+    }
+    setTimeout(() => setTranslationModeStatus('idle'), 2000);
   };
 
   const handleDiscountModeToggle = async (val: 'amount' | 'percentage' | 'both') => {
@@ -1597,6 +1755,405 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* Default Document Terms & Conditions */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <FileText className="text-indigo-600" />
+            <div>
+              <h2 className="text-xl font-semibold text-gray-800">Default Quotation Terms & Conditions</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Configure default terms, notes, and bank details for new quotations</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleAutoTranslateTerms}
+              disabled={translatingTerms}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-gray-100 text-gray-700 text-sm font-medium rounded-lg transition-colors border border-gray-300 disabled:opacity-50"
+              title="Auto-translate English text to Arabic"
+            >
+              <RefreshCw size={15} className={translatingTerms ? "animate-spin" : ""} />
+              {translatingTerms ? 'Translating...' : 'Translate to Arabic'}
+            </button>
+            <button
+              type="button"
+              onClick={handleResetDocumentTerms}
+              className="px-3 py-2 bg-white hover:bg-red-50 hover:text-red-600 text-gray-600 text-sm font-medium rounded-lg transition-colors border border-gray-300"
+              title="Clear all fields"
+            >
+              Clear Fields
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveDocumentTerms}
+              disabled={termsStatus === 'loading'}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 shadow-sm"
+            >
+              {termsStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+              Save Terms Defaults
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-6">
+          <p className="text-gray-600 text-sm">
+            These values serve as the standard template for every new quotation. Changes here won't alter existing saved quotations, but will automatically populate new quotes and when clicking "Clear Form".
+          </p>
+
+          {/* 1. Note Header & Note */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-200 pb-2">
+              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                1. Notice / Remarks (NOTE:)
+              </span>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={documentTerms.showNote !== false}
+                    onChange={e => setDocumentTerms({ ...documentTerms, showNote: e.target.checked })}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                  />
+                  Show by default
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs text-gray-500 font-medium">Header Label:</label>
+                  <input
+                    type="text"
+                    value={documentTerms.noteHeader}
+                    onChange={e => setDocumentTerms({ ...documentTerms, noteHeader: e.target.value })}
+                    placeholder="NOTE:"
+                    className="px-2.5 py-1 text-xs border border-gray-300 rounded font-bold uppercase focus:ring-1 focus:ring-indigo-500 bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English Note</label>
+                <textarea
+                  rows={3}
+                  value={documentTerms.note}
+                  onChange={e => setDocumentTerms({ ...documentTerms, note: e.target.value })}
+                  placeholder="Notice text in English..."
+                  className="w-full p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Note (ملاحظة بالعربية)</label>
+                <textarea
+                  rows={3}
+                  dir="rtl"
+                  value={documentTerms.noteAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, noteAr: e.target.value })}
+                  placeholder="نص الملاحظة بالعربية..."
+                  className="w-full p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 2. Payment */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                2. Payment Terms (PAYMENT:)
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={documentTerms.showPayment !== false}
+                  onChange={e => setDocumentTerms({ ...documentTerms, showPayment: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                />
+                Show by default
+              </label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                <input
+                  type="text"
+                  value={documentTerms.payment}
+                  onChange={e => setDocumentTerms({ ...documentTerms, payment: e.target.value })}
+                  placeholder="e.g. Full Payment in ADVANCE"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white italic"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (شروط الدفع)</label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  value={documentTerms.paymentAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, paymentAr: e.target.value })}
+                  placeholder="مثال: الدفع الكامل مقدما"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Warranty */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                3. Warranty Terms (WARRANTY:)
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={documentTerms.showWarranty !== false}
+                  onChange={e => setDocumentTerms({ ...documentTerms, showWarranty: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                />
+                Show by default
+              </label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                <input
+                  type="text"
+                  value={documentTerms.warranty}
+                  onChange={e => setDocumentTerms({ ...documentTerms, warranty: e.target.value })}
+                  placeholder="e.g. 2 YEARS limited warranty"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (الضمان)</label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  value={documentTerms.warrantyAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, warrantyAr: e.target.value })}
+                  placeholder="مثال: ضمان محدود لمدة عامين"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 4. Manpower */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                4. Manpower (MANPOWER:)
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={documentTerms.showManpower !== false}
+                  onChange={e => setDocumentTerms({ ...documentTerms, showManpower: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                />
+                Show by default
+              </label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                <input
+                  type="text"
+                  value={documentTerms.manpower}
+                  onChange={e => setDocumentTerms({ ...documentTerms, manpower: e.target.value })}
+                  placeholder="e.g. 2 Technicians, 1 Supervisor"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (القوى العاملة)</label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  value={documentTerms.manpowerAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, manpowerAr: e.target.value })}
+                  placeholder="مثال: 2 فنيين، 1 مشرف"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 5. Mobilization */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                5. Mobilization (MOBILIZATION:)
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={documentTerms.showMobilization !== false}
+                  onChange={e => setDocumentTerms({ ...documentTerms, showMobilization: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                />
+                Show by default
+              </label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                <input
+                  type="text"
+                  value={documentTerms.mobilization}
+                  onChange={e => setDocumentTerms({ ...documentTerms, mobilization: e.target.value })}
+                  placeholder="e.g. 3-4 days upon confirmation of payment"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (بدء العمل والجاهزية)</label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  value={documentTerms.mobilizationAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, mobilizationAr: e.target.value })}
+                  placeholder="مثال: 3-4 أيام بعد تأكيد الدفع"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 6. Duration */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                6. Duration (DURATION:)
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={documentTerms.showDuration !== false}
+                  onChange={e => setDocumentTerms({ ...documentTerms, showDuration: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                />
+                Show by default
+              </label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                <input
+                  type="text"
+                  value={documentTerms.duration}
+                  onChange={e => setDocumentTerms({ ...documentTerms, duration: e.target.value })}
+                  placeholder="e.g. 1-2 Working Days"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (مدة التنفيذ)</label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  value={documentTerms.durationAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, durationAr: e.target.value })}
+                  placeholder="مثال: 1-2 أيام عمل"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 7. Bank Details */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                7. Bank Details (BANK DETAILS:)
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={documentTerms.showBankDetails !== false}
+                  onChange={e => setDocumentTerms({ ...documentTerms, showBankDetails: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                />
+                Show by default
+              </label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English Bank Details (Multiline)</label>
+                <textarea
+                  rows={4}
+                  value={documentTerms.bankDetails}
+                  onChange={e => setDocumentTerms({ ...documentTerms, bankDetails: e.target.value })}
+                  placeholder="Bank name, Account number, IBAN, Company name..."
+                  className="w-full p-2.5 text-sm font-mono border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Bank Details (البيانات البنكية)</label>
+                <textarea
+                  rows={4}
+                  dir="rtl"
+                  value={documentTerms.bankDetailsAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, bankDetailsAr: e.target.value })}
+                  placeholder="اسم البنك، رقم الحساب، الآيبان، اسم الشركة..."
+                  className="w-full p-2.5 text-sm font-mono border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 8. Footer Message */}
+          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+            <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+              8. Document Footer Text (FOOTER:)
+            </span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">English Closing Note</label>
+                <input
+                  type="text"
+                  value={documentTerms.footer}
+                  onChange={e => setDocumentTerms({ ...documentTerms, footer: e.target.value })}
+                  placeholder="e.g. Thank you for your business!"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Closing Note (عبارة الشكر الختامية)</label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  value={documentTerms.footerAr}
+                  onChange={e => setDocumentTerms({ ...documentTerms, footerAr: e.target.value })}
+                  placeholder="مثال: شكرا لتعاملكم معنا!"
+                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Status feedback message */}
+          <div className="h-6">
+            {termsStatus === 'success' && (
+              <span className="text-emerald-600 text-sm font-medium flex items-center gap-1">
+                <CheckCircle2 size={16} /> Default Terms & Conditions saved successfully!
+              </span>
+            )}
+            {termsStatus === 'error' && (
+              <span className="text-red-600 text-sm font-medium flex items-center gap-1">
+                <XCircle size={16} /> Failed to save Terms & Conditions. Make sure you have administrator permissions.
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* SMTP Email Configuration */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
@@ -2063,6 +2620,59 @@ export default function Settings() {
           <div className="flex flex-col items-center gap-1 shrink-0">
             {rowReorderStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
             {rowReorderStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* Translation Mode */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+            <Languages size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">Translation Mode / وضع الترجمة</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Control whether Arabic translation happens automatically or only when clicking the Translate button</p>
+          </div>
+        </div>
+        <div className="p-6 flex items-center justify-between gap-8">
+          <div className="space-y-3 flex-1">
+            <div
+              onClick={() => handleTranslationModeToggle('manual')}
+              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                translationMode === 'manual' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                translationMode === 'manual' ? 'border-indigo-500' : 'border-gray-300'
+              }`}>
+                {translationMode === 'manual' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+              </div>
+              <div>
+                <p className="font-semibold text-gray-800">Manual (Only when clicking "Translate")</p>
+                <p className="text-sm text-gray-500 mt-0.5">Translation will only run when you explicitly click the "Translate" button. No automatic translation occurs while typing or changing fields.</p>
+              </div>
+            </div>
+            <div
+              onClick={() => handleTranslationModeToggle('auto')}
+              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                translationMode === 'auto' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                translationMode === 'auto' ? 'border-indigo-500' : 'border-gray-300'
+              }`}>
+                {translationMode === 'auto' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
+              </div>
+              <div>
+                <p className="font-semibold text-gray-800">Auto (Translate on blur / typing)</p>
+                <p className="text-sm text-gray-500 mt-0.5">Automatically translates descriptions, notes, and items when you finish typing or select products.</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            {translationModeStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
+            {translationModeStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
           </div>
         </div>
       </div>

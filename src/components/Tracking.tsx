@@ -67,7 +67,7 @@ export default function Tracking() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
 
-  const [sortKey, setSortKey] = useState<SortKey>('date');
+  const [sortKey, setSortKey] = useState<SortKey>('quote_id');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -144,7 +144,7 @@ export default function Tracking() {
       setSortDir(prev => prev === 'asc' ? 'desc' : prev === 'desc' ? null : 'asc');
     } else {
       setSortKey(key);
-      setSortDir('asc');
+      setSortDir(key === 'quote_id' || key === 'date' || key === 'grand_total' || key === 'updated_at' ? 'desc' : 'asc');
     }
   };
 
@@ -289,24 +289,35 @@ export default function Tracking() {
 
   if (sortKey && sortDir) {
     filtered = [...filtered].sort((a, b) => {
-      let aVal: any = a[sortKey] ?? '';
-      let bVal: any = b[sortKey] ?? '';
-
-      if (sortKey === 'grand_total') {
-        aVal = Number(aVal) || 0;
-        bVal = Number(bVal) || 0;
+      let cmp = 0;
+      if (sortKey === 'quote_id') {
+        cmp = (a.quote_id || '').localeCompare(b.quote_id || '', undefined, { numeric: true, sensitivity: 'base' });
+      } else if (sortKey === 'grand_total') {
+        const aVal = Number(a.grand_total) || 0;
+        const bVal = Number(b.grand_total) || 0;
+        cmp = aVal - bVal;
       } else if (sortKey === 'date' || sortKey === 'updated_at') {
-        aVal = aVal ? new Date(aVal).getTime() : 0;
-        bVal = bVal ? new Date(bVal).getTime() : 0;
+        const aVal = a[sortKey] ? new Date(a[sortKey]).getTime() : 0;
+        const bVal = b[sortKey] ? new Date(b[sortKey]).getTime() : 0;
+        cmp = aVal - bVal;
       } else {
-        aVal = String(aVal).toLowerCase();
-        bVal = String(bVal).toLowerCase();
+        const aVal = String(a[sortKey] ?? '').toLowerCase();
+        const bVal = String(b[sortKey] ?? '').toLowerCase();
+        cmp = aVal.localeCompare(bVal);
       }
 
-      if (aVal < bVal) return sortDir === 'asc' ? -1 : 1;
-      if (aVal > bVal) return sortDir === 'asc' ? 1 : -1;
-      return 0;
+      if (cmp !== 0) {
+        return sortDir === 'asc' ? cmp : -cmp;
+      }
+
+      // Secondary tie-breaker: sort by quote_id descending in natural numeric order
+      return (b.quote_id || '').localeCompare(a.quote_id || '', undefined, { numeric: true, sensitivity: 'base' });
     });
+  } else {
+    // Default fallback: natural numeric order by quote_id descending
+    filtered = [...filtered].sort((a, b) =>
+      (b.quote_id || '').localeCompare(a.quote_id || '', undefined, { numeric: true, sensitivity: 'base' })
+    );
   }
 
   const clearFilters = () => { setSearch(''); setStatusFilter(''); setTypeFilter(''); setDateFrom(''); setDateTo(''); setCreatorFilter(''); setCurrentPage(1); };
