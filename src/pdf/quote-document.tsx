@@ -147,20 +147,10 @@ export const standardTranslations: Record<string, string> = {
 };
 
 export function getBilingualParts(en: string | null | undefined, ar: string | null | undefined) {
-  if (!en && !ar) return { en: "", ar: "" };
-  // Both sides supplied — use as-is
-  if (en && ar) return { en: en.trim(), ar: ar.trim() };
-  const value = (en || ar || "").trim();
-  // "|" as bilingual separator (only when ar is absent)
-  if (!ar && value.includes("|")) {
-    const parts = value.split("|");
-    return { en: parts[0].trim(), ar: parts[1]?.trim() ?? "" };
-  }
-  // Lookup translation table
-  if (!ar && standardTranslations[value]) {
-    return { en: value, ar: standardTranslations[value] };
-  }
-  return { en: en || value, ar: ar || "" };
+  return {
+    en: (en || "").trim(),
+    ar: (ar || "").trim(),
+  };
 }
 
 export function getBilingualNotes(notes: string | null | undefined, notesAr?: string | null) {
@@ -177,21 +167,7 @@ export function getBilingualNotes(notes: string | null | undefined, notesAr?: st
   if (!notes) return [];
   return notes.split("\n").map((line) => {
     const cleanLine = line.trim();
-    // Check if the line itself is a "|" bilingual pair (not the word "work|device")
-    const pipeIdx = cleanLine.indexOf("|");
-    if (pipeIdx !== -1 && pipeIdx > 10) {
-      // Only treat as bilingual separator when pipe is not within the first 10 chars
-      const parts = cleanLine.split("|");
-      return { en: parts[0].trim(), ar: parts[1]?.trim() ?? "" };
-    }
-    if (standardTranslations[cleanLine]) return { en: cleanLine, ar: standardTranslations[cleanLine] };
-    // Fallback: build Arabic from known sub-strings
-    let ar = "";
-    if (cleanLine.includes("Any additional work") && cleanLine.includes("Change Order"))
-      ar += "سيتم اعتبار أي عمل إضافي/جهاز بمثابة أمر تغيير";
-    if (cleanLine.includes("Internet source is provided by the OWNER"))
-      ar += (ar ? "\n" : "") + "يتم توفير مصدر الإنترنت من قبل المالك";
-    return { en: cleanLine, ar };
+    return { en: cleanLine, ar: "" };
   });
 }
 

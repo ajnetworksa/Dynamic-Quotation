@@ -2629,6 +2629,129 @@ app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), v
   }
 });
 
+// Admin endpoint to bulk update notes and terms across all quotes in the database
+app.post('/api/admin/bulk-update-quote-terms', requireAuth, requireAdmin, (req, res) => {
+  try {
+    let terms = req.body;
+    if (!terms || Object.keys(terms).length === 0) {
+      const settingRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('documentTerms') as { value: string } | undefined;
+      if (!settingRow?.value) {
+        return res.status(400).json({ error: 'No default document terms found in settings.' });
+      }
+      terms = JSON.parse(settingRow.value);
+    }
+
+    const note = terms.note || '';
+    const noteAr = terms.noteAr || '';
+    const noteHeader = terms.noteHeader || 'NOTE:';
+    const payment = terms.payment || '';
+    const paymentAr = terms.paymentAr || '';
+    const warranty = terms.warranty || '';
+    const warrantyAr = terms.warrantyAr || '';
+    const manpower = terms.manpower || '';
+    const manpowerAr = terms.manpowerAr || '';
+    const mobilization = terms.mobilization || '';
+    const mobilizationAr = terms.mobilizationAr || '';
+    const duration = terms.duration || '';
+    const durationAr = terms.durationAr || '';
+    const bankDetails = terms.bankDetails || '';
+    const bankDetailsAr = terms.bankDetailsAr || '';
+    const footer = terms.footer || '';
+    const footerAr = terms.footerAr || '';
+    const showNote = terms.showNote !== false ? 1 : 0;
+    const showPayment = terms.showPayment !== false ? 1 : 0;
+    const showWarranty = terms.showWarranty !== false ? 1 : 0;
+    const showManpower = terms.showManpower !== false ? 1 : 0;
+    const showMobilization = terms.showMobilization !== false ? 1 : 0;
+    const showDuration = terms.showDuration !== false ? 1 : 0;
+    const showBankDetails = terms.showBankDetails !== false ? 1 : 0;
+
+    const updateAllQuotes = db.transaction(() => {
+      const quotes = db.prepare('SELECT id, quote_id, draft_data FROM quotes').all() as Array<{ id: number; quote_id: string; draft_data: string | null }>;
+      
+      const updateStmt = db.prepare(`
+        UPDATE quotes
+        SET note = ?, note_ar = ?, note_header = ?,
+            payment = ?, payment_ar = ?,
+            warranty = ?, warranty_ar = ?,
+            manpower = ?, manpower_ar = ?,
+            mobilization = ?, mobilization_ar = ?,
+            duration = ?, duration_ar = ?,
+            bank_details = ?, bank_details_ar = ?,
+            footer = ?, footer_ar = ?,
+            show_note = ?, show_payment = ?, show_warranty = ?,
+            show_manpower = ?, show_mobilization = ?, show_duration = ?,
+            show_bank_details = ?,
+            draft_data = ?
+        WHERE id = ?
+      `);
+
+      for (const q of quotes) {
+        let newDraftData = q.draft_data;
+        if (q.draft_data) {
+          try {
+            const draft = JSON.parse(q.draft_data);
+            draft.note = note;
+            draft.noteAr = noteAr;
+            draft.noteHeader = noteHeader;
+            draft.payment = payment;
+            draft.paymentAr = paymentAr;
+            draft.warranty = warranty;
+            draft.warrantyAr = warrantyAr;
+            draft.manpower = manpower;
+            draft.manpowerAr = manpowerAr;
+            draft.mobilization = mobilization;
+            draft.mobilizationAr = mobilizationAr;
+            draft.duration = duration;
+            draft.durationAr = durationAr;
+            draft.bankDetails = bankDetails;
+            draft.bankDetailsAr = bankDetailsAr;
+            draft.footer = footer;
+            draft.footerAr = footerAr;
+            draft.showNote = Boolean(showNote);
+            draft.showPayment = Boolean(showPayment);
+            draft.showWarranty = Boolean(showWarranty);
+            draft.showManpower = Boolean(showManpower);
+            draft.showMobilization = Boolean(showMobilization);
+            draft.showDuration = Boolean(showDuration);
+            draft.showBankDetails = Boolean(showBankDetails);
+            newDraftData = JSON.stringify(draft);
+          } catch {}
+        }
+
+        updateStmt.run(
+          note, noteAr, noteHeader,
+          payment, paymentAr,
+          warranty, warrantyAr,
+          manpower, manpowerAr,
+          mobilization, mobilizationAr,
+          duration, durationAr,
+          bankDetails, bankDetailsAr,
+          footer, footerAr,
+          showNote, showPayment, showWarranty,
+          showManpower, showMobilization, showDuration,
+          showBankDetails,
+          newDraftData,
+          q.id
+        );
+      }
+
+      return quotes.length;
+    });
+
+    const updatedCount = updateAllQuotes();
+    try {
+      db.prepare('INSERT INTO system_logs (level, source, type, message, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
+        .run('INFO', 'ADMIN_SETTINGS', 'BULK_UPDATE_TERMS', `Admin bulk-updated document terms on ${updatedCount} quotes.`, JSON.stringify({ count: updatedCount }), new Date().toISOString());
+    } catch {}
+
+    res.json({ success: true, count: updatedCount });
+  } catch (error: any) {
+    console.error('[Bulk Update Terms Error]:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ── Translation API ───────────────────────────────────────────────────────────
 // Proxies to Google Translate with chunking + retry for reliability.
 app.post('/api/translate', async (req, res) => {
