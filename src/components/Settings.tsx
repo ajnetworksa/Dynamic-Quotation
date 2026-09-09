@@ -67,6 +67,8 @@ export default function Settings() {
   const [documentTerms, setDocumentTerms] = useState(DEFAULT_DOCUMENT_TERMS);
   const [termsStatus, setTermsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [translatingTerms, setTranslatingTerms] = useState(false);
+  const [bulkUpdatingQuotes, setBulkUpdatingQuotes] = useState(false);
+  const [bulkUpdateResult, setBulkUpdateResult] = useState<string | null>(null);
 
   const [smtpStatus, setSmtpStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [smtpConfig, setSmtpConfig] = useState({
@@ -109,7 +111,8 @@ export default function Settings() {
     showFeatureAccess: true,
     inspectionProtection: true,
     internalNotes: true,
-    bottomNote: true
+    bottomNote: true,
+    updateTermsButton: false
   });
   const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
@@ -641,6 +644,7 @@ export default function Settings() {
       });
       if (res.ok) {
         setWorkflowStatus('success');
+        try { window.dispatchEvent(new CustomEvent('workflow-visibility-updated', { detail: next })); } catch {}
         setTimeout(() => setWorkflowStatus('idle'), 2000);
       } else setWorkflowStatus('error');
     } catch { setWorkflowStatus('error'); }
@@ -693,6 +697,42 @@ export default function Settings() {
   const handleResetDocumentTerms = () => {
     if (confirm('Clear all Document Terms & Conditions fields?')) {
       setDocumentTerms(DEFAULT_DOCUMENT_TERMS);
+    }
+  };
+
+  const handleBulkUpdateAllQuotes = async () => {
+    const confirmUpdate = window.confirm(
+      '⚠️ ADMIN BULK DATABASE UPDATE:\n\nThis will update the Notes and Terms (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details, and Footer) across ALL quotations in the database to match the current fields shown here.\n\nQuote items, pricing, discounts, dates, and customer details will NOT be changed.\n\nAre you sure you want to proceed?'
+    );
+    if (!confirmUpdate) return;
+
+    setBulkUpdatingQuotes(true);
+    setBulkUpdateResult(null);
+    try {
+      // First save current documentTerms to settings
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key: 'documentTerms', value: JSON.stringify(documentTerms) })
+      });
+
+      // Call bulk update API
+      const res = await fetch('/api/admin/bulk-update-quote-terms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify(documentTerms)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setBulkUpdateResult(`Successfully updated ${data.count} quotation(s) in the database!`);
+        alert(`Success! Updated ${data.count} quotation(s) across the database with the current document terms.`);
+      } else {
+        throw new Error(data.error || 'Failed to bulk update quotes');
+      }
+    } catch (err: any) {
+      alert(`Error updating quotes: ${err.message}`);
+    } finally {
+      setBulkUpdatingQuotes(false);
     }
   };
 
@@ -1793,13 +1833,75 @@ export default function Settings() {
               {termsStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
               Save Terms Defaults
             </button>
+            {user.role === 'admin' && (
+              <button
+                type="button"
+                onClick={handleBulkUpdateAllQuotes}
+                disabled={bulkUpdatingQuotes}
+                className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                title="Update all existing quotes in the database with these terms"
+              >
+                {bulkUpdatingQuotes ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}
+                <span>{bulkUpdatingQuotes ? 'Updating DB...' : 'Update All Quotes in DB'}</span>
+              </button>
+            )}
           </div>
         </div>
 
         <div className="p-6 space-y-6">
           <p className="text-gray-600 text-sm">
-            These values serve as the standard template for every new quotation. Changes here won't alter existing saved quotations, but will automatically populate new quotes and when clicking "Clear Form".
+            These values serve as the standard template for every new quotation. Changes here automatically populate new quotes and when clicking "Clear Form".
           </p>
+
+          {user.role === 'admin' && (
+            <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm text-amber-900 dark:text-amber-200">
+              <div className="flex items-start sm:items-center gap-2.5">
+                <Shield size={20} className="shrink-0 text-amber-600 mt-0.5 sm:mt-0" />
+                <div>
+                  <div className="font-semibold text-amber-900 dark:text-amber-100">Admin Database Sync:</div>
+                  <div className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                    Have older quotes saved in the database with outdated terms or notes? Click below to update notes, payment, warranty, duration, and bank details across all existing quotes in the database.
+                  </div>
+                  {bulkUpdateResult && (
+                    <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mt-1.5 flex items-center gap-1">
+                      <CheckCircle2 size={14} /> {bulkUpdateResult}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleBulkUpdateAllQuotes}
+                disabled={bulkUpdatingQuotes}
+                className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                {bulkUpdatingQuotes ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                <span>{bulkUpdatingQuotes ? 'Updating All Quotes...' : 'Update All Quotes in DB'}</span>
+              </button>
+            </div>
+          )}
+
+          {user.role === 'admin' && (
+            <div className="flex items-center justify-between p-3.5 bg-gray-50 dark:bg-gray-800/60 rounded-xl border border-gray-200 dark:border-gray-700 text-xs">
+              <div>
+                <span className="font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                  <RefreshCw size={13} className="text-indigo-600" />
+                  Show &quot;Update Terms&quot; button in quote editor
+                </span>
+                <p className="text-gray-500 dark:text-gray-400 text-[11px] mt-0.5">
+                  When enabled, displays a button on quotes so users can quickly update notes and terms to these defaults.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleWorkflowToggle('updateTermsButton')}
+                className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ml-4 ${workflowVisibility.updateTermsButton ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                title={workflowVisibility.updateTermsButton ? 'Click to hide Update Terms button on quotes' : 'Click to show Update Terms button on quotes'}
+              >
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${workflowVisibility.updateTermsButton ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+          )}
 
           {/* 1. Note Header & Note */}
           <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
@@ -2507,6 +2609,7 @@ export default function Settings() {
               { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
               { id: 'internalNotes', label: 'Internal Notes', desc: 'Enable private internal notes on quote items' },
               { id: 'bottomNote', label: 'Bottom Note Section', desc: 'Show terms/conditions note section at page bottom' },
+              { id: 'updateTermsButton', label: 'Update Terms Button', desc: 'Show button on quote to update notes and terms to defaults' },
             ].map((btn) => (
               <div
                 key={btn.id}

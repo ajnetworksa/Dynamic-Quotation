@@ -208,7 +208,8 @@ export default function QuoteForm() {
     preparedBy: true,
     shareWith: true,
     internalNotes: true,
-    bottomNote: true
+    bottomNote: true,
+    updateTermsButton: false
   });
 
   // Global markup percentage added for automated pricing.
@@ -562,8 +563,17 @@ export default function QuoteForm() {
         }
       }
     };
+    const handleWorkflowUpdated = (e: any) => {
+      if (e.detail) {
+        setWorkflowVisibility(prev => ({ ...prev, ...e.detail }));
+      }
+    };
     window.addEventListener('document-terms-updated', handleTermsUpdated);
-    return () => window.removeEventListener('document-terms-updated', handleTermsUpdated);
+    window.addEventListener('workflow-visibility-updated', handleWorkflowUpdated);
+    return () => {
+      window.removeEventListener('document-terms-updated', handleTermsUpdated);
+      window.removeEventListener('workflow-visibility-updated', handleWorkflowUpdated);
+    };
   }, [recallQuoteId, selectedCustomerId, subject, items]);
 
   // Refetch list of customers, products, and document terms when returning to the tab
@@ -1360,6 +1370,25 @@ export default function QuoteForm() {
         }
       }
     } catch {}
+  };
+
+  const handleUpdateDocumentTermsOnly = async () => {
+    if (!confirm('Update only the Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to the latest defaults from Settings?\n\nYour items, customer, and pricing will not be changed.')) return;
+    try {
+      const freshTerms = await fetchDocumentTerms(true);
+      if (!freshTerms) {
+        applyDefaultTerms(defaultTermsRef.current || getCachedTerms());
+      }
+      setSaveStatus('unsaved');
+      setTimeout(() => {
+        document.querySelectorAll<HTMLTextAreaElement>('textarea[data-autoresize="true"]').forEach(el => {
+          el.style.height = 'auto';
+          el.style.height = `${el.scrollHeight}px`;
+        });
+      }, 50);
+    } catch (err: any) {
+      alert(`Failed to update terms: ${err.message}`);
+    }
   };
 
   const handleProductSelect = (index: number, productId: string) => {
@@ -2843,9 +2872,19 @@ export default function QuoteForm() {
           </div>
         </div>
         <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors">
+          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors" title="Clear all fields to start a new blank quote">
             <RefreshCw size={18} /> Clear
           </button>
+          {workflowVisibility.updateTermsButton && (
+            <button
+              type="button"
+              onClick={handleUpdateDocumentTermsOnly}
+              className="flex items-center gap-2 px-3.5 py-2 text-slate-700 bg-slate-100 dark:bg-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium cursor-pointer"
+              title="Update only Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to latest defaults from Settings"
+            >
+              <RefreshCw size={16} /> Update Terms
+            </button>
+          )}
           <div className="flex items-center rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 overflow-hidden shadow-xs">
             <button
               onClick={handleTranslateAll}
@@ -3478,6 +3517,23 @@ export default function QuoteForm() {
           <div data-pdf-block="totals-notes" className="flex flex-col md:flex-row justify-between gap-8 mb-4">
             {/* Terms & Conditions */}
             <div className="flex-1 space-y-2 [&_input]:text-[inherit] [&_textarea]:text-[inherit]" style={{ fontSize: `${termsFontSize}px` }}>
+              {workflowVisibility.updateTermsButton && (
+                <div data-html2canvas-ignore="true" className="print:hidden flex items-center justify-between pb-1.5 border-b border-gray-200 dark:border-gray-700 mb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+                    <FileText size={14} className="text-gray-400" />
+                    Notes &amp; Document Terms
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleUpdateDocumentTermsOnly}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-md border border-indigo-200 dark:border-indigo-800 transition-colors shadow-2xs cursor-pointer"
+                    title="Update Notes, Payment, Warranty, Manpower, Mobilization, Duration & Bank Details from Settings defaults without changing items or customer"
+                  >
+                    <RefreshCw size={12} className="shrink-0" />
+                    <span>Update Notes &amp; Terms to Defaults</span>
+                  </button>
+                </div>
+              )}
               {workflowVisibility.bottomNote !== false && (
                 <>
                   {showNote && (
