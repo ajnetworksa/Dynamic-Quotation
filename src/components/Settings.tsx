@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages } from 'lucide-react';
+import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages, Sparkles, Type } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 const APP_VERSION = '1.3.1';
@@ -20,6 +20,14 @@ export default function Settings() {
 
   const [termsFontSize, setTermsFontSize] = useState<number>(14); // default 14px
   const [termsFontSizeStatus, setTermsFontSizeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [tableFontSize, setTableFontSize] = useState<number>(14);
+  const [noteFontSize, setNoteFontSize] = useState<number>(14);
+  const [paymentFontSize, setPaymentFontSize] = useState<number>(14);
+  const [warrantyFontSize, setWarrantyFontSize] = useState<number>(14);
+  const [bankDetailsFontSize, setBankDetailsFontSize] = useState<number>(14);
+  const [otherTermsFontSize, setOtherTermsFontSize] = useState<number>(14);
+  const [termsTopGap, setTermsTopGap] = useState<number>(6);
+  const [fontSizeSaveStatus, setFontSizeSaveStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [footerSize, setFooterSize] = useState<number>(30); // default 30 pt
   const [footerSizeStatus, setFooterSizeStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
@@ -29,6 +37,8 @@ export default function Settings() {
   const [stampImageStatus, setStampImageStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [currentStampImage, setCurrentStampImage] = useState<string | null>(null);
   const [stampSize, setStampSize] = useState<number>(140);
+  const [stampWidth, setStampWidth] = useState<number>(137);
+  const [stampHeight, setStampHeight] = useState<number>(100);
   const [stampOffsetX, setStampOffsetX] = useState<number>(0);
   const [stampOffsetY, setStampOffsetY] = useState<number>(0);
   const [stampPositionStatus, setStampPositionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -168,6 +178,41 @@ export default function Settings() {
       })
       .catch(console.error);
 
+    fetch('/api/settings/tableFontSize')
+      .then(res => res.json())
+      .then(data => { if (data.value) setTableFontSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/noteFontSize')
+      .then(res => res.json())
+      .then(data => { if (data.value) setNoteFontSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/paymentFontSize')
+      .then(res => res.json())
+      .then(data => { if (data.value) setPaymentFontSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/warrantyFontSize')
+      .then(res => res.json())
+      .then(data => { if (data.value) setWarrantyFontSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/bankDetailsFontSize')
+      .then(res => res.json())
+      .then(data => { if (data.value) setBankDetailsFontSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/otherTermsFontSize')
+      .then(res => res.json())
+      .then(data => { if (data.value) setOtherTermsFontSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/termsTopGap')
+      .then(res => res.json())
+      .then(data => { if (data.value) setTermsTopGap(parseInt(data.value, 10)); })
+      .catch(console.error);
+
     fetch('/api/settings/footerSize')
       .then(res => res.json())
       .then(data => {
@@ -192,6 +237,37 @@ export default function Settings() {
     fetch('/api/settings/stampSize')
       .then(res => res.json())
       .then(data => { if (data.value) setStampSize(parseInt(data.value, 10)); })
+      .catch(console.error);
+
+    fetch('/api/settings/stampWidth')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) {
+          setStampWidth(parseInt(data.value, 10));
+        } else {
+          fetch('/api/settings/stampSize')
+            .then(r => r.json())
+            .then(d => {
+              if (d.value) setStampWidth(parseInt(d.value, 10));
+            });
+        }
+      })
+      .catch(console.error);
+
+    fetch('/api/settings/stampHeight')
+      .then(res => res.json())
+      .then(data => {
+        if (data.value) {
+          setStampHeight(parseInt(data.value, 10));
+        } else {
+          fetch('/api/settings/stampSize')
+            .then(r => r.json())
+            .then(d => {
+              const s = d.value ? parseInt(d.value, 10) : 137;
+              setStampHeight(Math.round(s / 1.37055));
+            });
+        }
+      })
       .catch(console.error);
 
     fetch('/api/settings/stampOffsetX')
@@ -611,6 +687,53 @@ export default function Settings() {
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  const saveStampDimensions = async (newW: number, newH: number) => {
+    setStampPositionStatus('loading');
+    try {
+      const token = localStorage.getItem('token');
+      await Promise.all([
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ key: 'stampWidth', value: newW.toString() })
+        }),
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ key: 'stampHeight', value: newH.toString() })
+        }),
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ key: 'stampSize', value: newW.toString() })
+        })
+      ]);
+      setStampPositionStatus('success');
+      setTimeout(() => setStampPositionStatus('idle'), 3000);
+    } catch {
+      setStampPositionStatus('error');
+    }
+  };
+
+  const handleSaveFontSize = async (key: string, val: number) => {
+    setFontSizeSaveStatus('loading');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ key, value: val.toString() })
+      });
+      if (res.ok) {
+        setFontSizeSaveStatus('success');
+        setTimeout(() => setFontSizeSaveStatus('idle'), 3000);
+      } else {
+        setFontSizeSaveStatus('error');
+      }
+    } catch {
+      setFontSizeSaveStatus('error');
+    }
   };
 
   const handleSmtpSave = async () => {
@@ -1658,33 +1781,69 @@ export default function Settings() {
                 )}
               </div>
 
-              <div className="mt-6 border-t border-gray-100 pt-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Adjust Stamp Size (px)
-                  </label>
-                  <div className="flex items-center gap-4">
-                    <input
-                      type="range" min="50" max="400" value={stampSize}
-                      onChange={(e) => setStampSize(parseInt(e.target.value, 10))}
-                      onMouseUp={async () => {
-                        setStampPositionStatus('loading');
-                        try {
-                          const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampSize', value: stampSize.toString() }) });
-                          if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
-                          else setStampPositionStatus('error');
-                        } catch { setStampPositionStatus('error'); }
+              <div className="mt-6 border-t border-gray-100 pt-6 space-y-5">
+                {/* Stamp Width & Height / Shape controls */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-800">Stamp Shape & Dimensions</h3>
+                      <p className="text-xs text-gray-500">Fine-tune width and height manually to eliminate any oval distortion.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newH = Math.round(stampWidth / 1.37055);
+                        setStampHeight(newH);
+                        saveStampDimensions(stampWidth, newH);
                       }}
-                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                    />
-                    <span className="text-gray-600 text-sm font-mono w-12">{stampSize}px</span>
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all"
+                      title="Automatically calculate height so the stamp graphic forms a perfect 1:1 circle"
+                    >
+                      <Sparkles size={14} /> Auto-Fix to 1:1 Circle
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <label className="text-xs font-medium text-gray-700">Stamp Width (px)</label>
+                      <span className="text-xs font-mono font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{stampWidth}px</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range" min="50" max="350" value={stampWidth}
+                        onChange={(e) => setStampWidth(parseInt(e.target.value, 10))}
+                        onMouseUp={() => saveStampDimensions(stampWidth, stampHeight)}
+                        onTouchEnd={() => saveStampDimensions(stampWidth, stampHeight)}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <label className="text-xs font-medium text-gray-700">Stamp Height (px)</label>
+                      <span className="text-xs font-mono font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{stampHeight}px</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range" min="40" max="300" value={stampHeight}
+                        onChange={(e) => setStampHeight(parseInt(e.target.value, 10))}
+                        onMouseUp={() => saveStampDimensions(stampWidth, stampHeight)}
+                        onTouchEnd={() => saveStampDimensions(stampWidth, stampHeight)}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
                   </div>
                 </div>
 
+                {/* Offsets */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Horizontal Position Offset (px) - Move Right/Left
-                  </label>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="text-sm font-medium text-gray-700">
+                      Horizontal Position Offset (px) - Move Right/Left
+                    </label>
+                    <span className="text-xs font-mono text-gray-600 w-12 text-right">{stampOffsetX}px</span>
+                  </div>
                   <div className="flex items-center gap-4">
                     <input
                       type="range" min="-800" max="800" value={stampOffsetX}
@@ -1699,14 +1858,16 @@ export default function Settings() {
                       }}
                       className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                     />
-                    <span className="text-gray-600 text-sm font-mono w-12">{stampOffsetX}px</span>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Vertical Position Offset (px) - Move Up/Down
-                  </label>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="text-sm font-medium text-gray-700">
+                      Vertical Position Offset (px) - Move Up/Down
+                    </label>
+                    <span className="text-xs font-mono text-gray-600 w-12 text-right">{stampOffsetY}px</span>
+                  </div>
                   <div className="flex items-center gap-4">
                     <input
                       type="range" min="-400" max="400" value={stampOffsetY}
@@ -1721,26 +1882,232 @@ export default function Settings() {
                       }}
                       className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                     />
-                    <span className="text-gray-600 text-sm font-mono w-12">{stampOffsetY}px</span>
                   </div>
                 </div>
 
                 <div className="h-4">
+                  {stampPositionStatus === 'loading' && <span className="text-indigo-600 text-xs font-medium flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving...</span>}
                   {stampPositionStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Layout saved</span>}
                   {stampPositionStatus === 'error' && <span className="text-red-600 text-xs font-medium">Failed to save layout</span>}
                 </div>
               </div>
             </div>
-            <div className="w-36 h-36 border-2 border-dashed border-gray-300 rounded-full flex items-center justify-center bg-gray-50 overflow-hidden shrink-0">
-              {currentStampImage ? (
-                <img src={currentStampImage} alt="Current Stamp" className="max-w-full max-h-full object-contain p-1" />
-              ) : (
-                <span className="text-gray-400 text-xs text-center px-3">No stamp uploaded</span>
+
+            {/* Live Preview with Circular Alignment Guide */}
+            <div className="flex flex-col items-center gap-2.5 shrink-0">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Live Alignment Guide</span>
+              <div
+                className="w-44 h-44 border-2 border-dashed border-indigo-400 rounded-full flex items-center justify-center bg-slate-50 relative overflow-hidden shadow-sm"
+                title="The dashed border represents a true 1:1 circle guide. Adjust Width & Height until the stamp fills it evenly."
+              >
+                {currentStampImage ? (
+                  <img
+                    src={currentStampImage}
+                    alt="Current Stamp"
+                    style={{
+                      width: `${Math.round(stampWidth * 1.15)}px`,
+                      height: `${Math.round(stampHeight * 1.15)}px`,
+                      maxWidth: '96%',
+                      maxHeight: '96%',
+                      objectFit: 'fill',
+                    }}
+                    className="transition-all duration-100"
+                  />
+                ) : (
+                  <span className="text-gray-400 text-xs text-center px-3">No stamp uploaded</span>
+                )}
+              </div>
+              {currentStampImage && (
+                <div className="text-center">
+                  {Math.abs(stampWidth / stampHeight - 1.37055) < 0.05 ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      <CheckCircle2 size={12} /> True Circle (1:1)
+                    </span>
+                  ) : stampWidth / stampHeight > 1.37055 ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                      ↔ Stretched Horizontally
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                      ↕ Stretched Vertically
+                    </span>
+                  )}
+                  <p className="text-[10px] text-gray-400 mt-1 max-w-[170px]">
+                    Dashed ring is a circular guide for checking symmetry
+                  </p>
+                </div>
               )}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Document Font Sizes Setup */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Type className="text-indigo-600" />
+            <div>
+              <h2 className="text-xl font-semibold text-gray-800">Document Font Sizes Setup</h2>
+              <p className="text-gray-500 text-xs mt-0.5">Adjust text font sizes individually for line items table, notes, payment, warranty, bank details, and other terms.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {fontSizeSaveStatus === 'loading' && <span className="text-xs text-indigo-600 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving...</span>}
+            {fontSizeSaveStatus === 'success' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
+            {fontSizeSaveStatus === 'error' && <span className="text-xs text-red-600 flex items-center gap-1"><XCircle size={14} /> Save failed</span>}
+          </div>
+        </div>
+        <div className="p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+            {/* Table Line Items */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-semibold text-sm text-gray-800">📋 Table Line Items</span>
+                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{tableFontSize}px</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Item names, descriptions (EN/AR), units, and prices in the items table.</p>
+                <input
+                  type="range" min="9" max="22" value={tableFontSize}
+                  onChange={(e) => setTableFontSize(parseInt(e.target.value, 10))}
+                  onMouseUp={() => handleSaveFontSize('tableFontSize', tableFontSize)}
+                  onTouchEnd={() => handleSaveFontSize('tableFontSize', tableFontSize)}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-200">
+                <p className="text-gray-700 truncate font-medium" style={{ fontSize: `${tableFontSize}px` }}>Sample Product / وصف تجريبي</p>
+              </div>
+            </div>
+
+            {/* Note Section */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-semibold text-sm text-gray-800">📝 Notes Section</span>
+                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{noteFontSize}px</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Special quotation notes and instructions below the table.</p>
+                <input
+                  type="range" min="8" max="24" value={noteFontSize}
+                  onChange={(e) => setNoteFontSize(parseInt(e.target.value, 10))}
+                  onMouseUp={() => handleSaveFontSize('noteFontSize', noteFontSize)}
+                  onTouchEnd={() => handleSaveFontSize('noteFontSize', noteFontSize)}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-200">
+                <p className="text-gray-700 truncate" style={{ fontSize: `${noteFontSize}px` }}>NOTE: Work will be change order / ملاحظة</p>
+              </div>
+            </div>
+
+            {/* Payment Terms */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-semibold text-sm text-gray-800">💳 Payment Terms</span>
+                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{paymentFontSize}px</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Payment conditions and schedule clause.</p>
+                <input
+                  type="range" min="8" max="24" value={paymentFontSize}
+                  onChange={(e) => setPaymentFontSize(parseInt(e.target.value, 10))}
+                  onMouseUp={() => handleSaveFontSize('paymentFontSize', paymentFontSize)}
+                  onTouchEnd={() => handleSaveFontSize('paymentFontSize', paymentFontSize)}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-200">
+                <p className="text-gray-700 truncate" style={{ fontSize: `${paymentFontSize}px` }}>PAYMENT: As per contract / حسب العقد</p>
+              </div>
+            </div>
+
+            {/* Warranty Terms */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-semibold text-sm text-gray-800">🛡️ Warranty Terms</span>
+                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{warrantyFontSize}px</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Warranty coverage, period, and conditions clause.</p>
+                <input
+                  type="range" min="8" max="24" value={warrantyFontSize}
+                  onChange={(e) => setWarrantyFontSize(parseInt(e.target.value, 10))}
+                  onMouseUp={() => handleSaveFontSize('warrantyFontSize', warrantyFontSize)}
+                  onTouchEnd={() => handleSaveFontSize('warrantyFontSize', warrantyFontSize)}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-200">
+                <p className="text-gray-700 truncate" style={{ fontSize: `${warrantyFontSize}px` }}>WARRANTY: 2 Years warranty / ضمان سنتين</p>
+              </div>
+            </div>
+
+            {/* Bank Details */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-semibold text-sm text-gray-800">🏦 Bank Details</span>
+                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{bankDetailsFontSize}px</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Bank account numbers, IBAN, and beneficiary info.</p>
+                <input
+                  type="range" min="8" max="24" value={bankDetailsFontSize}
+                  onChange={(e) => setBankDetailsFontSize(parseInt(e.target.value, 10))}
+                  onMouseUp={() => handleSaveFontSize('bankDetailsFontSize', bankDetailsFontSize)}
+                  onTouchEnd={() => handleSaveFontSize('bankDetailsFontSize', bankDetailsFontSize)}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-200">
+                <p className="text-gray-700 truncate font-mono" style={{ fontSize: `${bankDetailsFontSize}px` }}>IBAN: SA0230400... / الحساب</p>
+              </div>
+            </div>
+
+            {/* Other Terms (Manpower, Mobilization, Duration, Custom) */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-semibold text-sm text-gray-800">⏱️ Other Terms</span>
+                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{otherTermsFontSize}px</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">Manpower, Mobilization, Project Duration, and Custom Fields.</p>
+                <input
+                  type="range" min="8" max="24" value={otherTermsFontSize}
+                  onChange={(e) => setOtherTermsFontSize(parseInt(e.target.value, 10))}
+                  onMouseUp={() => handleSaveFontSize('otherTermsFontSize', otherTermsFontSize)}
+                  onTouchEnd={() => handleSaveFontSize('otherTermsFontSize', otherTermsFontSize)}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-200">
+                <p className="text-gray-700 truncate" style={{ fontSize: `${otherTermsFontSize}px` }}>DURATION: 2 Weeks / المدة أسبوعين</p>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Terms Top Gap Control */}
+          <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+            <div className="flex justify-between items-center mb-1">
+              <span className="font-semibold text-sm text-gray-800">📏 Gap: Items Table → Terms/Notes</span>
+              <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{termsTopGap}pt</span>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">Controls the vertical spacing between the line items table and the terms/notes section below it in the PDF.</p>
+            <input
+              type="range" min="0" max="150" value={termsTopGap}
+              onChange={(e) => setTermsTopGap(parseInt(e.target.value, 10))}
+              onMouseUp={() => handleSaveFontSize('termsTopGap', termsTopGap)}
+              onTouchEnd={() => handleSaveFontSize('termsTopGap', termsTopGap)}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            />
+          </div>
+
+        </div>
+      </div>
+
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
           <div className="flex items-center gap-3">
