@@ -113,9 +113,17 @@ export default function QuoteForm() {
   // saved in the database via the Settings page.
   const [logoSize, setLogoSize] = useState(24);
   const [stampSize, setStampSize] = useState(140);
+  const [stampWidth, setStampWidth] = useState<number | null>(null);
+  const [stampHeight, setStampHeight] = useState<number | null>(null);
   const [stampOffsetX, setStampOffsetX] = useState(0);
   const [stampOffsetY, setStampOffsetY] = useState(0);
   const [termsFontSize, setTermsFontSize] = useState(14); // Default 14px
+  const [tableFontSize, setTableFontSize] = useState(14);
+  const [noteFontSize, setNoteFontSize] = useState<number | null>(null);
+  const [paymentFontSize, setPaymentFontSize] = useState<number | null>(null);
+  const [warrantyFontSize, setWarrantyFontSize] = useState<number | null>(null);
+  const [bankDetailsFontSize, setBankDetailsFontSize] = useState<number | null>(null);
+  const [otherTermsFontSize, setOtherTermsFontSize] = useState<number | null>(null);
   const [themeColors, setThemeColors] = useState<ThemeColors>({
     headerBg: "#039737a6",
     headerText: "#1f2937",
@@ -160,7 +168,13 @@ export default function QuoteForm() {
   const [showOverwriteModal, setShowOverwriteModal] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+  const [isRecorded, setIsRecorded] = useState(false);
+  const [showExportRecordModal, setShowExportRecordModal] = useState(false);
+  const [pendingExportType, setPendingExportType] = useState<'excel' | 'pdf' | 'server-pdf' | 'server-pdf-stamped' | null>(null);
   const isInitialLoadRef = useRef(true);
+  const isClearingRef = useRef(false);
+  const prevRecallRef = useRef<string | null>(null);
+  const cacheTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [translationMode, setTranslationMode] = useState<'manual' | 'auto'>(() => {
     return (localStorage.getItem('translationMode') as 'manual' | 'auto') || 'manual';
   });
@@ -414,9 +428,67 @@ export default function QuoteForm() {
   // These appear as auto-complete options on every Unit cell. Free-text still allowed.
   const UNIT_SUGGESTIONS = ['pc', 'set', 'lot', 'm²', 'hr', 'day', 'kg', 'm', 'lm', 'pair', 'roll'];
 
-  // ── DRAFT AUTO-SAVE ───────────────────────────────────────────────────────────
+  // ── DRAFT LOCAL CACHE ────────────────────────────────────────────────────────
   const DRAFT_KEY = 'quote_draft';
   const [draftBanner, setDraftBanner] = useState(false);
+
+  const restoreDraftData = useCallback((d: any) => {
+    if (!d) return;
+    if (d.isRecorded) {
+      if (d.quoteId) setQuoteId(d.quoteId);
+      setIsRecorded(true);
+    } else {
+      if (d.idUnlocked && d.quoteId) {
+        setQuoteId(d.quoteId);
+        setIdUnlocked(true);
+      } else {
+        setQuoteId('');
+        setIdUnlocked(false);
+      }
+      setIsRecorded(false);
+    }
+    if (d.date) setDate(d.date);
+    if (d.expiryDate) setExpiryDate(d.expiryDate);
+    if (d.subject) setSubject(d.subject);
+    if (d.subjectAr) setSubjectAr(d.subjectAr);
+    if (d.selectedCustomerId !== undefined) setSelectedCustomerId(d.selectedCustomerId);
+    if (d.selectedCustomer !== undefined) setSelectedCustomer(d.selectedCustomer);
+    if (d.customerSearch !== undefined) setCustomerSearch(d.customerSearch);
+    if (d.items?.length) setItems(d.items);
+    if (d.discount !== undefined) setDiscount(d.discount);
+    if (d.discountRate !== undefined) setDiscountRate(d.discountRate);
+    if (d.discountMode !== undefined) setDiscountMode(d.discountMode);
+    if (d.vatRate !== undefined) setVatRate(d.vatRate);
+    if (d.markup !== undefined) setMarkup(d.markup);
+    if (d.authorName !== undefined) setAuthorName(d.authorName);
+    if (d.authorId !== undefined) setAuthorId(d.authorId);
+    if (d.note) setNote(d.note);
+    if (d.noteAr) setNoteAr(d.noteAr);
+    if (d.noteHeader) setNoteHeader(d.noteHeader);
+    if (d.payment) setPayment(d.payment);
+    if (d.paymentAr) setPaymentAr(d.paymentAr);
+    if (d.warranty) setWarranty(d.warranty);
+    if (d.warrantyAr) setWarrantyAr(d.warrantyAr);
+    if (d.manpower) setManpower(d.manpower);
+    if (d.manpowerAr) setManpowerAr(d.manpowerAr);
+    if (d.mobilization) setMobilization(d.mobilization);
+    if (d.mobilizationAr) setMobilizationAr(d.mobilizationAr);
+    if (d.duration) setDuration(d.duration);
+    if (d.durationAr) setDurationAr(d.durationAr);
+    if (d.bankDetails) setBankDetails(d.bankDetails);
+    if (d.bankDetailsAr) setBankDetailsAr(d.bankDetailsAr);
+    if (d.footer) setFooter(d.footer);
+    if (d.footerAr) setFooterAr(d.footerAr);
+    if (d.customFields) setCustomFields(d.customFields);
+    if (d.showNote !== undefined) setShowNote(d.showNote);
+    if (d.showPayment !== undefined) setShowPayment(d.showPayment);
+    if (d.showWarranty !== undefined) setShowWarranty(d.showWarranty);
+    if (d.showManpower !== undefined) setShowManpower(d.showManpower);
+    if (d.showMobilization !== undefined) setShowMobilization(d.showMobilization);
+    if (d.showDuration !== undefined) setShowDuration(d.showDuration);
+    if (d.showBankDetails !== undefined) setShowBankDetails(d.showBankDetails);
+    if (d.showCustomField !== undefined) setShowCustomField(d.showCustomField);
+  }, []);
 
   // ── QUOTE TEMPLATES ───────────────────────────────────────────────────────────
   const [templates, setTemplates] = useState<{ name: string; data: any }[]>([]);
@@ -529,18 +601,41 @@ export default function QuoteForm() {
         console.error('Failed to load translationMode setting:', e);
       }
 
+      const wasRecalling = Boolean(prevRecallRef.current);
+      prevRecallRef.current = recallQuoteId;
+
+      if (isClearingRef.current) return;
+
       if (recallQuoteId) {
         await fetchQuote(recallQuoteId, dbCustomers, dbProducts);
+        setIsRecorded(true);
+        // Do not keep stale draft cache while viewing an existing database quote
+        localStorage.removeItem(DRAFT_KEY);
         setTimeout(() => { isInitialLoadRef.current = false; }, 600);
-      } else if (!quoteId) {
-        // Check for saved draft
+      } else if (!wasRecalling) {
+        // Auto-restore locally cached draft if it exists (only for fresh quote creation, not after clearing a recalled quote)
         const draft = localStorage.getItem(DRAFT_KEY);
-        if (draft) setDraftBanner(true);
-        await generateQuoteId();
-        setDate(new Date().toISOString().split('T')[0]);
-        setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
+        if (draft) {
+          try {
+            const d = JSON.parse(draft);
+            restoreDraftData(d);
+          } catch (e) {
+            console.error('Failed to parse cached draft:', e);
+          }
+        } else {
+          setQuoteId('');
+          setIsRecorded(false);
+          setDate(new Date().toISOString().split('T')[0]);
+          setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
+        }
         setTimeout(() => { isInitialLoadRef.current = false; }, 600);
       } else {
+        // Was recalling an existing quote and now cleared -> ensure blank fresh form and no draft restored
+        localStorage.removeItem(DRAFT_KEY);
+        setQuoteId('');
+        setIsRecorded(false);
+        setDate(new Date().toISOString().split('T')[0]);
+        setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
         setTimeout(() => { isInitialLoadRef.current = false; }, 600);
       }
     };
@@ -744,6 +839,24 @@ export default function QuoteForm() {
         if (dataTermsFont.value) setTermsFontSize(parseInt(dataTermsFont.value, 10));
       }
 
+      const resTableFont = await fetch('/api/settings/tableFontSize');
+      if (resTableFont.ok) { const d = await resTableFont.json(); if (d.value) setTableFontSize(parseInt(d.value, 10)); }
+
+      const resNoteFont = await fetch('/api/settings/noteFontSize');
+      if (resNoteFont.ok) { const d = await resNoteFont.json(); if (d.value) setNoteFontSize(parseInt(d.value, 10)); }
+
+      const resPaymentFont = await fetch('/api/settings/paymentFontSize');
+      if (resPaymentFont.ok) { const d = await resPaymentFont.json(); if (d.value) setPaymentFontSize(parseInt(d.value, 10)); }
+
+      const resWarrantyFont = await fetch('/api/settings/warrantyFontSize');
+      if (resWarrantyFont.ok) { const d = await resWarrantyFont.json(); if (d.value) setWarrantyFontSize(parseInt(d.value, 10)); }
+
+      const resBankFont = await fetch('/api/settings/bankDetailsFontSize');
+      if (resBankFont.ok) { const d = await resBankFont.json(); if (d.value) setBankDetailsFontSize(parseInt(d.value, 10)); }
+
+      const resOtherTermsFont = await fetch('/api/settings/otherTermsFontSize');
+      if (resOtherTermsFont.ok) { const d = await resOtherTermsFont.json(); if (d.value) setOtherTermsFontSize(parseInt(d.value, 10)); }
+
       const resFooter = await fetch('/api/settings/footerImage');
       if (resFooter.ok) {
         const dataFooter = await resFooter.json();
@@ -804,6 +917,12 @@ export default function QuoteForm() {
 
       const resStampSize = await fetch('/api/settings/stampSize');
       if (resStampSize.ok) { const d = await resStampSize.json(); if (d.value) setStampSize(parseInt(d.value, 10)); }
+
+      const resStampWidth = await fetch('/api/settings/stampWidth');
+      if (resStampWidth.ok) { const d = await resStampWidth.json(); if (d.value) setStampWidth(parseInt(d.value, 10)); }
+
+      const resStampHeight = await fetch('/api/settings/stampHeight');
+      if (resStampHeight.ok) { const d = await resStampHeight.json(); if (d.value) setStampHeight(parseInt(d.value, 10)); }
 
       const resStampOffsetX = await fetch('/api/settings/stampOffsetX');
       if (resStampOffsetX.ok) { const d = await resStampOffsetX.json(); if (d.value) setStampOffsetX(parseInt(d.value, 10)); }
@@ -1307,30 +1426,42 @@ export default function QuoteForm() {
     }
   };
 
-  const generateQuoteId = async () => {
+  const generateQuoteId = async (): Promise<string> => {
     try {
       const res = await fetch('/api/quotes/next-id');
       if (res.ok) {
         const data = await res.json();
         setQuoteId(data.nextId);
+        return data.nextId;
       } else {
         // Fallback
         const randomNum = Math.floor(10000 + Math.random() * 90000);
-        setQuoteId(`AJ-${randomNum}`);
+        const fallback = `AJ-${randomNum}`;
+        setQuoteId(fallback);
+        return fallback;
       }
     } catch (e) {
       const randomNum = Math.floor(10000 + Math.random() * 90000);
-      setQuoteId(`AJ-${randomNum}`);
+      const fallback = `AJ-${randomNum}`;
+      setQuoteId(fallback);
+      return fallback;
     }
   };
 
   const clearForm = async () => {
     if (!confirm('Quote Form will be cleaned up. Do you confirm?')) return;
-    await generateQuoteId();
+    isClearingRef.current = true;
+    if (cacheTimerRef.current) {
+      clearTimeout(cacheTimerRef.current);
+      cacheTimerRef.current = null;
+    }
+    localStorage.removeItem(DRAFT_KEY);
+
+    setQuoteId('');
+    setIsRecorded(false);
     setSearchParams({});
     setDate(new Date().toISOString().split('T')[0]);
     setExpiryDate('');
-    localStorage.removeItem('quote_draft');
     setSelectedCustomerId('');
     setSelectedCustomer(null);
     setCustomerSearch('');
@@ -1370,6 +1501,16 @@ export default function QuoteForm() {
         }
       }
     } catch {}
+
+    localStorage.removeItem(DRAFT_KEY);
+    setSaveStatus('saved');
+    setLastSavedTime(null);
+
+    // Keep isClearingRef active across render cycles and router updates
+    setTimeout(() => {
+      isClearingRef.current = false;
+      localStorage.removeItem(DRAFT_KEY);
+    }, 800);
   };
 
   const handleUpdateDocumentTermsOnly = async () => {
@@ -1608,9 +1749,15 @@ export default function QuoteForm() {
   const tax = discountedSubtotal * (vatRate / 100);
   const grandTotal = discountedSubtotal + tax;
 
-  const performSave = async (force: boolean = false) => {
+  const performSave = async (force: boolean = false, overrideQuoteId?: string): Promise<boolean> => {
+    const activeQuoteId = overrideQuoteId || quoteId;
+    if (!activeQuoteId) {
+      alert('Cannot record without Quote ID!');
+      return false;
+    }
+
     const payload = {
-      quote_id: quoteId,
+      quote_id: activeQuoteId,
       date,
       expiry_date: expiryDate || null,
       customer_id: selectedCustomerId,
@@ -1672,81 +1819,111 @@ export default function QuoteForm() {
       })),
       version,
       force,
-      is_new: !recallQuoteId || recallQuoteId !== quoteId
+      is_new: !recallQuoteId || recallQuoteId !== activeQuoteId
     };
 
-    const res = await fetch('/api/quotes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    try {
+      const res = await fetch('/api/quotes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-    if (res.ok) {
-      const data = await res.json();
-      setVersion(data.version || 1); // Update local version lock to the newly saved version
-      setSaveStatus('saved');
-      setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-      alert(recallQuoteId === quoteId ? 'Quote updated successfully!' : 'Quote data is recorded to Tracking section!');
-      localStorage.removeItem('quote_draft'); // clear local draft just in case
-      setShowOverwriteModal(false);
-      setShowConflictModal(false);
-    } else if (res.status === 409) {
-      const errorData = await res.json();
-      if (errorData.error === 'ID_TAKEN') {
-        alert("This Quote ID was just used by someone else! Generating a new one for you automatically...");
-        handleCreateNewId();
+      if (res.ok) {
+        const data = await res.json();
+        setVersion(data.version || 1); // Update local version lock to the newly saved version
+        setIsRecorded(true);
+        setSaveStatus('saved');
+        setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        alert(recallQuoteId === activeQuoteId ? 'Quote updated successfully!' : `Quote data (${activeQuoteId}) is recorded to Tracking section!`);
+        localStorage.removeItem(DRAFT_KEY); // clear local draft since officially recorded
+        setShowOverwriteModal(false);
+        setShowConflictModal(false);
+        return true;
+      } else if (res.status === 409) {
+        const errorData = await res.json();
+        if (errorData.error === 'ID_TAKEN') {
+          alert("This Quote ID was just used by someone else! Generating a new one for you automatically...");
+          handleCreateNewId();
+        } else {
+          setShowConflictModal(true);
+        }
+        return false;
       } else {
-        setShowConflictModal(true);
+        const error = await res.json();
+        alert(`Failed to record quote: ${error.error}`);
+        return false;
       }
-    } else {
-      const error = await res.json();
-      alert(`Failed to record quote: ${error.error}`);
+    } catch (e: any) {
+      alert(`Network error saving quote: ${e.message}`);
+      return false;
     }
   };
 
-  const recordQuote = async () => {
-    if (!quoteId) return alert('Please enter Quote ID!');
-    if (!date) return alert('Please input date!');
-    if (grandTotal === 0) return alert('Total is zero! Please check.');
-    if (!selectedCustomerId) return alert('Please select a customer.');
+  const recordQuote = async (): Promise<boolean> => {
+    if (!date) {
+      alert('Please input date!');
+      return false;
+    }
+    if (grandTotal === 0) {
+      alert('Total is zero! Please check.');
+      return false;
+    }
+    if (!selectedCustomerId) {
+      alert('Please select a customer.');
+      return false;
+    }
+
+    let activeId = (quoteId || '').trim();
+    if (!activeId) {
+      activeId = await generateQuoteId();
+      if (!activeId) {
+        alert('Failed to generate Quote ID. Please try again.');
+        return false;
+      }
+    }
 
     try {
       // Check if quote ID already exists
-      const checkRes = await fetch(`/api/quotes/${quoteId}`);
+      const checkRes = await fetch(`/api/quotes/${activeId}`);
       if (checkRes.ok) {
         // Quote exists. If we are not explicitly editing this specific quote, warn them.
-        if (recallQuoteId !== quoteId) {
+        if (recallQuoteId !== activeId) {
           setShowOverwriteModal(true);
-          return;
+          return false;
         }
       }
     } catch (e) {
       console.warn('Could not check for existing quote', e);
     }
 
-    await performSave();
+    return await performSave(false, activeId);
   };
 
   const handleCreateNewId = async () => {
     setShowOverwriteModal(false);
-    await generateQuoteId();
+    const newId = await generateQuoteId();
     // Use setTimeout so the new ID state applies before telling user to save again.
     setTimeout(() => {
-      alert("A new Quote ID has been generated! You can now click Record to save.");
+      alert(`A new Quote ID (${newId}) has been generated! You can now click Record to save.`);
     }, 100);
   };
 
-  // ── DRAFT AUTO-SAVE: Debounced 1.5s auto-save to DB & localStorage ────────
-  const saveDraftToDB = useCallback(async (isImmediate = false) => {
-    if (!quoteId) return;
+  // ── LOCAL DRAFT CACHE: Auto-saves to localStorage across tabs/reloads (NO DB WRITE) ────────
+  const cacheDraftLocally = useCallback(() => {
+    // Recalled quotes from database and active clear operations MUST NOT be cached into draft_key!
+    if (recallQuoteId || isClearingRef.current) return;
+
     const isMeaningful = subject.trim() !== '' ||
       selectedCustomerId !== '' ||
       items.some(i => i.description.trim() !== '');
     if (!isMeaningful) return;
 
-    setSaveStatus('saving');
     const draft = {
-      quoteId, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup, authorName, authorId,
+      quoteId: idUnlocked ? quoteId : '',
+      isRecorded,
+      idUnlocked,
+      date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup, authorName, authorId,
       selectedCustomerId, selectedCustomer, customerSearch,
       note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
       manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1757,29 +1934,9 @@ export default function QuoteForm() {
     };
 
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-
-    try {
-      const res = await fetch('/api/quotes/autosave', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          quote_id: quoteId,
-          draft_data: draft,
-          grand_total: grandTotal
-        }),
-        keepalive: isImmediate
-      });
-      if (res.ok) {
-        setSaveStatus('saved');
-        setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-      } else {
-        setSaveStatus('unsaved');
-      }
-    } catch (e) {
-      console.warn('Autosave failed:', e);
-      setSaveStatus('unsaved');
-    }
-  }, [quoteId, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup,
+    setSaveStatus('saved');
+    setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  }, [recallQuoteId, idUnlocked, quoteId, isRecorded, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup,
     authorName, authorId, selectedCustomerId, selectedCustomer, customerSearch,
     note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
     manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1788,87 +1945,36 @@ export default function QuoteForm() {
     subtotal, tax, grandTotal]);
 
   useEffect(() => {
-    if (isInitialLoadRef.current) return;
+    if (isInitialLoadRef.current || isClearingRef.current || recallQuoteId) return;
 
     setSaveStatus('unsaved');
-    const timer = setTimeout(() => {
-      saveDraftToDB();
-    }, 1500);
+    if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);
+    cacheTimerRef.current = setTimeout(() => {
+      if (!isClearingRef.current && !recallQuoteId) {
+        cacheDraftLocally();
+      }
+    }, 500);
 
-    return () => clearTimeout(timer);
-  }, [saveDraftToDB]);
+    return () => {
+      if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);
+    };
+  }, [cacheDraftLocally, recallQuoteId]);
 
-  // Flush auto-save on unload or tab close
+  // Flush local cache on unload or tab close
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (!isInitialLoadRef.current) {
-        saveDraftToDB(true);
+      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId) {
+        cacheDraftLocally();
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      if (!isInitialLoadRef.current) {
-        saveDraftToDB(true);
+      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId) {
+        cacheDraftLocally();
       }
     };
-  }, [saveDraftToDB]);
-
-  const restoreDraft = () => {
-    const raw = localStorage.getItem(DRAFT_KEY);
-    if (!raw) return;
-    try {
-      const d = JSON.parse(raw);
-      if (d.quoteId) setQuoteId(d.quoteId);
-      if (d.date) setDate(d.date);
-      if (d.expiryDate) setExpiryDate(d.expiryDate);
-      if (d.subject) setSubject(d.subject);
-      if (d.subjectAr) setSubjectAr(d.subjectAr);
-      if (d.selectedCustomerId !== undefined) setSelectedCustomerId(d.selectedCustomerId);
-      if (d.selectedCustomer !== undefined) setSelectedCustomer(d.selectedCustomer);
-      if (d.customerSearch !== undefined) setCustomerSearch(d.customerSearch);
-      if (d.items?.length) setItems(d.items);
-      if (d.discount) setDiscount(d.discount);
-      if (d.discountRate !== undefined) setDiscountRate(d.discountRate);
-      if (d.discountMode !== undefined) setDiscountMode(d.discountMode);
-      if (d.vatRate !== undefined) setVatRate(d.vatRate);
-      if (d.markup !== undefined) setMarkup(d.markup);
-      if (d.authorName !== undefined) setAuthorName(d.authorName);
-      if (d.authorId !== undefined) setAuthorId(d.authorId);
-      if (d.note) setNote(d.note);
-      if (d.noteAr) setNoteAr(d.noteAr);
-      if (d.noteHeader) setNoteHeader(d.noteHeader);
-      if (d.payment) setPayment(d.payment);
-      if (d.paymentAr) setPaymentAr(d.paymentAr);
-      if (d.warranty) setWarranty(d.warranty);
-      if (d.warrantyAr) setWarrantyAr(d.warrantyAr);
-      if (d.manpower) setManpower(d.manpower);
-      if (d.manpowerAr) setManpowerAr(d.manpowerAr);
-      if (d.mobilization) setMobilization(d.mobilization);
-      if (d.mobilizationAr) setMobilizationAr(d.mobilizationAr);
-      if (d.duration) setDuration(d.duration);
-      if (d.durationAr) setDurationAr(d.durationAr);
-      if (d.bankDetails) setBankDetails(d.bankDetails);
-      if (d.bankDetailsAr) setBankDetailsAr(d.bankDetailsAr);
-      if (d.footer) setFooter(d.footer);
-      if (d.footerAr) setFooterAr(d.footerAr);
-      if (d.customFields) setCustomFields(d.customFields);
-      if (d.showNote !== undefined) setShowNote(d.showNote);
-      if (d.showPayment !== undefined) setShowPayment(d.showPayment);
-      if (d.showWarranty !== undefined) setShowWarranty(d.showWarranty);
-      if (d.showManpower !== undefined) setShowManpower(d.showManpower);
-      if (d.showMobilization !== undefined) setShowMobilization(d.showMobilization);
-      if (d.showDuration !== undefined) setShowDuration(d.showDuration);
-      if (d.showBankDetails !== undefined) setShowBankDetails(d.showBankDetails);
-      if (d.showCustomField !== undefined) setShowCustomField(d.showCustomField);
-    } catch (e) { /* ignore */ }
-    setDraftBanner(false);
-  };
-
-  const discardDraft = () => {
-    localStorage.removeItem(DRAFT_KEY);
-    setDraftBanner(false);
-  };
+  }, [cacheDraftLocally, recallQuoteId]);
 
   // ── TEMPLATES ─────────────────────────────────────────────────────────────────
   const loadTemplates = () => {
@@ -1924,8 +2030,9 @@ export default function QuoteForm() {
 
   // ── DUPLICATE QUOTE ───────────────────────────────────────────────────────────
   const handleDuplicate = async () => {
-    if (!confirm('This will copy the current quote into a new ID with today\'s date. Proceed?')) return;
-    await generateQuoteId();
+    if (!confirm('This will copy the current quote into a new unrecorded draft with today\'s date. Proceed?')) return;
+    setQuoteId('');
+    setIsRecorded(false);
     // Clear the recall param so it saves as a new quote
     setSearchParams({});
     setDate(new Date().toISOString().split('T')[0]);
@@ -1933,7 +2040,7 @@ export default function QuoteForm() {
     const exp = new Date();
     exp.setDate(exp.getDate() + 30);
     setExpiryDate(exp.toISOString().split('T')[0]);
-    alert('Quote duplicated with a new ID and today\'s date. Click Record to save it.');
+    alert('Quote duplicated! A new Quote ID will be assigned when you click Record.');
   };
 
   const handleCreateRevision = () => {
@@ -2006,10 +2113,8 @@ export default function QuoteForm() {
   };
 
   const handleServerPDF = async (includeStamp: boolean = false) => {
-    if (!quoteId) return alert('Please save the quote first before exporting.');
     setIsGeneratingServerPDF(true);
     try {
-      await saveDraftToDB(true);
       const token = localStorage.getItem('token');
       const params = new URLSearchParams();
       if (includeStamp) params.set('stamp', 'true');
@@ -2022,11 +2127,63 @@ export default function QuoteForm() {
       params.set('showBankDetails', String(showBankDetails));
       params.set('showCustomField', String(showCustomField));
 
-      const response = await fetch(`/api/quotes/${quoteId}/pdf?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      let response: Response;
+      if (quoteId && isRecorded) {
+        response = await fetch(`/api/quotes/${quoteId}/pdf?${params.toString()}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+      } else {
+        // Unrecorded / draft quote: render via server endpoint directly without requiring DB entry
+        response = await fetch(`/api/quotes/render-pdf?${params.toString()}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            quote: {
+              quote_id: quoteId || 'DRAFT',
+              type,
+              date,
+              expiry_date: expiryDate,
+              subject,
+              subject_ar: subjectAr,
+              discount,
+              discount_rate: discountRate,
+              discount_type: discountMode,
+              subtotal,
+              tax,
+              grand_total: grandTotal,
+              note_header: noteHeader,
+              note, note_ar: noteAr,
+              payment, payment_ar: paymentAr,
+              warranty, warranty_ar: warrantyAr,
+              manpower, manpower_ar: manpowerAr,
+              mobilization, mobilization_ar: mobilizationAr,
+              duration, duration_ar: durationAr,
+              bank_details: bankDetails, bank_details_ar: bankDetailsAr,
+              footer, footer_ar: footerAr,
+              custom_field: JSON.stringify(customFields),
+              vat_rate: vatRate,
+              author_name: authorName,
+              show_note: showNote ? 1 : 0,
+              show_payment: showPayment ? 1 : 0,
+              show_warranty: showWarranty ? 1 : 0,
+              show_manpower: showManpower ? 1 : 0,
+              show_mobilization: showMobilization ? 1 : 0,
+              show_duration: showDuration ? 1 : 0,
+              show_bank_details: showBankDetails ? 1 : 0,
+              show_custom_field: showCustomField ? 1 : 0,
+            },
+            items: items.filter(item => item.description.trim() !== ''),
+            selectedCustomer,
+            showStamp: includeStamp
+          })
+        });
+      }
+
       if (!response.ok) {
         throw new Error('Failed to generate PDF on server');
       }
@@ -2037,7 +2194,8 @@ export default function QuoteForm() {
       const customerName = (selectedCustomer?.name || 'Unknown')
         .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
         .trim();
-      a.download = `${customerName}-${quoteId}${includeStamp ? '-stamped' : ''}.pdf`;
+      const effectiveId = quoteId || 'DRAFT';
+      a.download = `${customerName}-${effectiveId}${includeStamp ? '-stamped' : ''}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -2115,7 +2273,11 @@ export default function QuoteForm() {
             if (!data) return;
 
             const div = clonedDoc.createElement('div');
-            div.innerText = data.value || '';
+            let displayVal = data.value || '';
+            if (!displayVal && el.placeholder && el.placeholder.includes('Assigned on Record')) {
+              displayVal = 'DRAFT';
+            }
+            div.innerText = displayVal;
             div.className = el.className;
             div.style.textAlign = data.textAlign;
             div.style.fontFamily = data.fontFamily;
@@ -2354,7 +2516,8 @@ export default function QuoteForm() {
       const customerName = (selectedCustomer?.name || 'Unknown')
         .replace(/[^a-zA-Z0-9_\-.\s]/g, '') // strip filename-unsafe characters
         .trim();
-      link.download = `${customerName}-${quoteId}.pdf`;
+      const effectivePdfId = quoteId || 'DRAFT';
+      link.download = `${customerName}-${effectivePdfId}.pdf`;
 
       document.body.appendChild(link);
       link.click();
@@ -2609,7 +2772,8 @@ export default function QuoteForm() {
       const customerName = (selectedCustomer?.name || 'Unknown')
         .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
         .trim();
-      link.download = `${customerName}-${quoteId}-stamped.pdf`;
+      const effectiveStampId = quoteId || 'DRAFT';
+      link.download = `${customerName}-${effectiveStampId}-stamped.pdf`;
 
       document.body.appendChild(link);
       link.click();
@@ -2628,7 +2792,7 @@ export default function QuoteForm() {
     const quoteInfo = [
       [], // 1
       [type.toUpperCase()], // 2
-      ['Quote ID:', quoteId], // 3
+      ['Quote ID:', quoteId || 'DRAFT'], // 3
       ['Date:', date], // 4
       ['Valid For:', '', 'صالحة لـ'], // 5
       [], // 6
@@ -2832,7 +2996,50 @@ export default function QuoteForm() {
     const excelCustomerName = (selectedCustomer?.name || 'Unknown')
       .replace(/[^a-zA-Z0-9_\-.\s]/g, '')
       .trim();
-    saveAs(blob, `${excelCustomerName}-${quoteId}.xlsx`);
+    saveAs(blob, `${excelCustomerName}-${quoteId || 'DRAFT'}.xlsx`);
+  };
+
+  // ── EXPORT PROMPT & DISPATCH ────────────────────────────────────────────────
+  const triggerExport = (type: 'excel' | 'pdf' | 'server-pdf' | 'server-pdf-stamped') => {
+    // If quote is already recorded, execute directly
+    if (isRecorded || (recallQuoteId && recallQuoteId === quoteId)) {
+      executeExport(type);
+      return;
+    }
+    // Quote is not yet recorded -> prompt user
+    setPendingExportType(type);
+    setShowExportRecordModal(true);
+  };
+
+  const executeExport = (type: 'excel' | 'pdf' | 'server-pdf' | 'server-pdf-stamped') => {
+    if (type === 'excel') handleExportExcel();
+    else if (type === 'pdf') handleExportPDF();
+    else if (type === 'server-pdf') handleServerPDF(false);
+    else if (type === 'server-pdf-stamped') handleServerPDF(true);
+  };
+
+  const handleRecordAndExport = async () => {
+    setShowExportRecordModal(false);
+    const saved = await recordQuote();
+    if (saved && pendingExportType) {
+      setTimeout(() => {
+        executeExport(pendingExportType);
+        setPendingExportType(null);
+      }, 250);
+    }
+  };
+
+  const handleExportWithoutRecording = () => {
+    setShowExportRecordModal(false);
+    if (pendingExportType) {
+      executeExport(pendingExportType);
+      setPendingExportType(null);
+    }
+  };
+
+  const handleCancelExportPrompt = () => {
+    setShowExportRecordModal(false);
+    setPendingExportType(null);
   };
 
   return (
@@ -2855,12 +3062,12 @@ export default function QuoteForm() {
               <span className="text-gray-300 dark:text-gray-600">•</span>
               {saveStatus === 'saving' && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-amber-700 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 rounded-full border border-amber-200 dark:border-amber-800">
-                  <RefreshCw className="w-3 h-3 animate-spin" /> Saving...
+                  <RefreshCw className="w-3 h-3 animate-spin" /> Caching...
                 </span>
               )}
               {saveStatus === 'saved' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-emerald-700 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 rounded-full border border-emerald-200 dark:border-emerald-800" title={lastSavedTime ? `Saved at ${lastSavedTime}` : 'All changes saved'}>
-                  <CheckCircle className="w-3 h-3" /> Saved {lastSavedTime ? `at ${lastSavedTime}` : ''}
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-emerald-700 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 rounded-full border border-emerald-200 dark:border-emerald-800" title={isRecorded ? (lastSavedTime ? `Recorded at ${lastSavedTime}` : 'Recorded') : 'Draft cached locally (Not yet recorded to database)'}>
+                  <CheckCircle className="w-3 h-3" /> {isRecorded ? `Recorded ${lastSavedTime ? `at ${lastSavedTime}` : ''}` : 'Draft cached'}
                 </span>
               )}
               {saveStatus === 'unsaved' && (
@@ -2960,17 +3167,17 @@ export default function QuoteForm() {
               {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />} Email
             </button>
           )}
-          <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
+          <button onClick={() => triggerExport('excel')} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
             <FileSpreadsheet size={18} /> Export Excel
           </button>
-          <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
+          <button onClick={() => triggerExport('pdf')} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
           </button>
-          <button onClick={() => handleServerPDF(false)} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
+          <button onClick={() => triggerExport('server-pdf')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
             {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (React)
           </button>
           {stampUrl && (
-            <button onClick={() => handleServerPDF(true)} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors disabled:opacity-50 font-semibold" title="Download high-fidelity vector PDF with official company stamp">
+            <button onClick={() => triggerExport('server-pdf-stamped')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors disabled:opacity-50 font-semibold" title="Download high-fidelity vector PDF with official company stamp">
               {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF + Stamp
             </button>
           )}
@@ -3031,18 +3238,19 @@ export default function QuoteForm() {
                     <input
                       type="text"
                       value={quoteId}
+                      placeholder="(Assigned on Record)"
                       readOnly={!idUnlocked}
                       onChange={e => setQuoteId(e.target.value)}
-                      className={`font-mono text-gray-900 outline-none border-b transition-colors ${
+                      className={`font-mono text-gray-900 outline-none border-b transition-colors placeholder:text-gray-400 placeholder:italic placeholder:font-sans placeholder:text-sm ${
                         idUnlocked ? 'border-amber-400 bg-amber-50 px-1.5 py-0.5 rounded' : 'border-transparent bg-transparent'
                       }`}
-                      title={idUnlocked ? 'Manual editing enabled' : 'ID is automatically generated. Click lock to edit if needed.'}
+                      title={idUnlocked ? 'Manual editing enabled' : 'ID is assigned upon clicking Record. Click lock to enter a custom ID manually.'}
                     />
                     <button
                       type="button"
                       onClick={() => {
                         if (!idUnlocked) {
-                          if (confirm('Quote IDs are automatically sequenced. Are you sure you want to manually edit this ID?')) {
+                          if (confirm('Quote IDs are automatically sequenced when you click Record. Are you sure you want to manually set a custom ID?')) {
                             setIdUnlocked(true);
                           }
                         } else {
@@ -3255,12 +3463,12 @@ export default function QuoteForm() {
                       >
                         <div
                           ref={el => rowRefs.current[index] = el}
-                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 text-base items-stretch print:items-stretch transition-opacity
+                          className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 [&_input]:text-[inherit] [&_textarea]:text-[inherit] items-stretch print:items-stretch transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
                           ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
                           ${dragOverIndex === index && dragIndex !== index ? 'border-t-2 border-indigo-500' : ''}
                         `}
-                          style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent' }}>
+                          style={{ backgroundColor: index % 2 === 0 ? themeColors.stripeBg : 'transparent', fontSize: `${tableFontSize || 14}px` }}>
                           <div
                             className="px-1 py-0.5 text-center border-r border-gray-300 h-full flex flex-col items-center justify-center group/grip cursor-grab active:cursor-grabbing touch-none select-none print:cursor-auto"
                             onPointerDown={(e) => onGripPointerDown(e, index)}
@@ -3516,7 +3724,7 @@ export default function QuoteForm() {
           {/* Bottom Section: Terms & Totals */}
           <div data-pdf-block="totals-notes" className="flex flex-col md:flex-row justify-between gap-8 mb-4">
             {/* Terms & Conditions */}
-            <div className="flex-1 space-y-2 [&_input]:text-[inherit] [&_textarea]:text-[inherit]" style={{ fontSize: `${termsFontSize}px` }}>
+            <div className="flex-1 [&_input]:text-[inherit] [&_textarea]:text-[inherit]" style={{ fontSize: `${termsFontSize}px` }}>
               {workflowVisibility.updateTermsButton && (
                 <div data-html2canvas-ignore="true" className="print:hidden flex items-center justify-between pb-1.5 border-b border-gray-200 dark:border-gray-700 mb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
@@ -3534,51 +3742,52 @@ export default function QuoteForm() {
                   </button>
                 </div>
               )}
-              {workflowVisibility.bottomNote !== false && (
-                <>
-                  {showNote && (
-                    <div className="flex flex-col md:flex-row gap-2 group relative">
-                      <span className="font-bold w-40 shrink-0">
-                        <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={noteHeader} onChange={(e) => setNoteHeader(e.target.value)} />
-                      </span>
-                      <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="relative group/note flex flex-col justify-center">
+
+              <div className="flex flex-col gap-y-1">
+                {workflowVisibility.bottomNote !== false && (
+                  <>
+                    {showNote && (
+                      <div className="flex flex-col md:flex-row md:items-start group relative" style={{ fontSize: `${noteFontSize || termsFontSize || 14}px` }}>
+                        <span className="font-bold w-40 shrink-0">
+                          <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={noteHeader} onChange={(e) => setNoteHeader(e.target.value)} />
+                        </span>
+                        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="relative group/note flex flex-col justify-start">
+                            <textarea
+                              data-autoresize="true"
+                              ref={autoResizeTextarea}
+                              className="w-full outline-none bg-transparent resize-none overflow-hidden"
+                              value={note}
+                              onChange={e => { setNote(e.target.value); autoResizeTextarea(e.currentTarget); }}
+                              onBlur={() => handleAutoTranslate(note, noteAr, setNoteAr)}
+                              rows={Math.max(note.split('\n').length, 1)}
+                            />
+                          </div>
                           <textarea
                             data-autoresize="true"
                             ref={autoResizeTextarea}
-                            className="w-full outline-none bg-transparent resize-none overflow-hidden"
-                            value={note}
-                            onChange={e => { setNote(e.target.value); autoResizeTextarea(e.currentTarget); }}
-                            onBlur={() => handleAutoTranslate(note, noteAr, setNoteAr)}
-                            rows={Math.max(note.split('\n').length, 2)}
+                            dir="rtl"
+                            className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
+                            value={noteAr}
+                            onChange={e => { setNoteAr(e.target.value); autoResizeTextarea(e.currentTarget); }}
+                            rows={Math.max(noteAr.split('\n').length, 1)}
                           />
                         </div>
-                        <textarea
-                          data-autoresize="true"
-                          ref={autoResizeTextarea}
-                          dir="rtl"
-                          className="w-full outline-none bg-transparent resize-none overflow-hidden text-right"
-                          value={noteAr}
-                          onChange={e => { setNoteAr(e.target.value); autoResizeTextarea(e.currentTarget); }}
-                          rows={Math.max(noteAr.split('\n').length, 2)}
-                        />
+                        <input type="checkbox" data-html2canvas-ignore="true" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-0.5" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Hide Note" />
                       </div>
-                      <input type="checkbox" data-html2canvas-ignore="true" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-1" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Hide Note" />
-                    </div>
-                  )}
-                  {!showNote && (
-                    <div data-html2canvas-ignore="true" className="flex gap-2 print:hidden items-center text-gray-400 italic">
-                      <input type="checkbox" data-html2canvas-ignore="true" className="cursor-pointer h-4 w-4" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Show Note" />
-                      <span>Show Note Section</span>
-                    </div>
-                  )}
-                </>
-              )}
+                    )}
+                    {!showNote && (
+                      <div data-html2canvas-ignore="true" className="flex gap-2 print:hidden items-center text-gray-400 italic">
+                        <input type="checkbox" data-html2canvas-ignore="true" className="cursor-pointer h-4 w-4" checked={showNote} onChange={(e) => setShowNote(e.target.checked)} title="Show Note" />
+                        <span>Show Note Section</span>
+                      </div>
+                    )}
+                  </>
+                )}
 
-              <div className="flex flex-col gap-y-0.5 mt-4">
                 {showPayment ? (
-                  <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0 text-base">PAYMENT:</span>
+                  <div className="flex flex-col md:flex-row md:items-center group" style={{ fontSize: `${paymentFontSize || termsFontSize || 14}px` }}>
+                    <span className="font-bold w-40 shrink-0">PAYMENT:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent italic" value={payment} onChange={e => setPayment(e.target.value)} onBlur={() => handleAutoTranslate(payment, paymentAr, setPaymentAr)} />
                     </div>
@@ -3593,8 +3802,8 @@ export default function QuoteForm() {
                 )}
 
                 {showWarranty ? (
-                  <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0 text-base">WARRANTY:</span>
+                  <div className="flex flex-col md:flex-row md:items-center group" style={{ fontSize: `${warrantyFontSize || termsFontSize || 14}px` }}>
+                    <span className="font-bold w-40 shrink-0">WARRANTY:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={warranty} onChange={e => setWarranty(e.target.value)} onBlur={() => handleAutoTranslate(warranty, warrantyAr, setWarrantyAr)} />
                     </div>
@@ -3609,8 +3818,8 @@ export default function QuoteForm() {
                 )}
 
                 {showManpower ? (
-                  <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0 text-base">MANPOWER:</span>
+                  <div className="flex flex-col md:flex-row md:items-center group" style={{ fontSize: `${otherTermsFontSize || termsFontSize || 14}px` }}>
+                    <span className="font-bold w-40 shrink-0">MANPOWER:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={manpower} onChange={e => setManpower(e.target.value)} onBlur={() => handleAutoTranslate(manpower, manpowerAr, setManpowerAr)} />
                     </div>
@@ -3625,8 +3834,8 @@ export default function QuoteForm() {
                 )}
 
                 {showMobilization ? (
-                  <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0 text-base">MOBILIZATION:</span>
+                  <div className="flex flex-col md:flex-row md:items-center group" style={{ fontSize: `${otherTermsFontSize || termsFontSize || 14}px` }}>
+                    <span className="font-bold w-40 shrink-0">MOBILIZATION:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={mobilization} onChange={e => setMobilization(e.target.value)} onBlur={() => handleAutoTranslate(mobilization, mobilizationAr, setMobilizationAr)} />
                     </div>
@@ -3641,8 +3850,8 @@ export default function QuoteForm() {
                 )}
 
                 {showDuration ? (
-                  <div className="flex flex-col md:flex-row md:items-center group">
-                    <span className="font-bold w-40 shrink-0 text-base">DURATION:</span>
+                  <div className="flex flex-col md:flex-row md:items-center group" style={{ fontSize: `${otherTermsFontSize || termsFontSize || 14}px` }}>
+                    <span className="font-bold w-40 shrink-0">DURATION:</span>
                     <div className="flex-1 flex items-center group/field relative">
                       <input type="text" className="flex-1 outline-none bg-transparent" value={duration} onChange={e => setDuration(e.target.value)} onBlur={() => handleAutoTranslate(duration, durationAr, setDurationAr)} />
                     </div>
@@ -3657,8 +3866,8 @@ export default function QuoteForm() {
                 )}
 
                 {showBankDetails ? (
-                  <div className="flex flex-col md:flex-row md:items-start group mt-1">
-                    <span className="font-bold w-40 shrink-0 mt-1 text-base">BANK DETAILS:</span>
+                  <div className="flex flex-col md:flex-row md:items-start group" style={{ fontSize: `${bankDetailsFontSize || termsFontSize || 14}px` }}>
+                    <span className="font-bold w-40 shrink-0">BANK DETAILS:</span>
                     <div className="flex-1 flex flex-col justify-center relative group/bank pr-2">
                       <textarea
                         data-autoresize="true"
@@ -3679,20 +3888,20 @@ export default function QuoteForm() {
                       onChange={e => { setBankDetailsAr(e.target.value); autoResizeTextarea(e.currentTarget); }}
                       rows={Math.max(bankDetailsAr.split('\n').length, 3)}
                     />
-                    <input type="checkbox" data-html2canvas-ignore="true" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-1" checked={showBankDetails} onChange={(e) => setShowBankDetails(e.target.checked)} title="Hide Bank Details" />
+                    <input type="checkbox" data-html2canvas-ignore="true" className="print:hidden cursor-pointer h-4 w-4 shrink-0 mx-1 mt-0.5" checked={showBankDetails} onChange={(e) => setShowBankDetails(e.target.checked)} title="Hide Bank Details" />
                   </div>
                 ) : (
-                  <div data-html2canvas-ignore="true" className="print:hidden flex items-center gap-2 text-gray-400 italic mt-2">
+                  <div data-html2canvas-ignore="true" className="print:hidden flex items-center gap-2 text-gray-400 italic">
                     <input type="checkbox" data-html2canvas-ignore="true" className="cursor-pointer h-4 w-4" checked={showBankDetails} onChange={(e) => setShowBankDetails(e.target.checked)} title="Show Bank Details" />
                     <span>Show Bank Details</span>
                   </div>
                 )}
 
                 {showCustomField && customFields.length > 0 ? (
-                  <div className="flex flex-col gap-2 mt-2">
+                  <div className="flex flex-col gap-y-1 mt-1">
                     {customFields.map((cf, index) => (
-                      <div key={cf.id} className="flex flex-col md:flex-row gap-2 group relative">
-                        <span className="font-bold w-40 shrink-0 text-base">
+                      <div key={cf.id} className="flex flex-col md:flex-row group relative" style={{ fontSize: `${otherTermsFontSize || termsFontSize || 14}px` }}>
+                        <span className="font-bold w-40 shrink-0">
                           <input type="text" className="w-full bg-transparent outline-none font-bold uppercase" value={cf.header} onChange={(e) => updateCustomField(index, 'header', e.target.value)} />
                         </span>
                         <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3912,18 +4121,25 @@ export default function QuoteForm() {
                   }}
                   className="mt-4"
                 >
-                  <img
-                    src={stampUrl}
-                    alt="Company Stamp"
-                    className="object-contain opacity-90 transition-all duration-300"
-                    style={{
-                      width: `${stampSize}px`,
-                      height: `${stampSize}px`,
-                      maxWidth: `${stampSize}px`,
-                      maxHeight: `${stampSize}px`,
-                      display: 'block',
-                    }}
-                  />
+                  {(() => {
+                    const effectiveW = stampWidth || stampSize || 137;
+                    const effectiveH = stampHeight || Math.round(effectiveW / 1.37055) || 100;
+                    return (
+                      <img
+                        src={stampUrl}
+                        alt="Company Stamp"
+                        className="opacity-90 transition-all duration-300"
+                        style={{
+                          width: `${effectiveW}px`,
+                          height: `${effectiveH}px`,
+                          maxWidth: `${effectiveW}px`,
+                          maxHeight: `${effectiveH}px`,
+                          objectFit: 'fill',
+                          display: 'block',
+                        }}
+                      />
+                    );
+                  })()}
                 </div>
               )}
 
@@ -4670,6 +4886,52 @@ export default function QuoteForm() {
                 }}
               >
                 {addCustomerModal.isSaving ? 'Saving...' : 'Save & Select'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Confirm Record Before Export Modal ── */}
+      {showExportRecordModal && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-4 mb-4">
+              <div className="p-3 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded-xl shrink-0">
+                <Save size={24} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Record Quotation?</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  This quotation has not been recorded to the system yet. Would you like to assign a Quote ID and record it before exporting?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5 mt-6">
+              <button
+                type="button"
+                onClick={handleRecordAndExport}
+                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <Save size={16} />
+                Record & Export
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportWithoutRecording}
+                className="w-full py-2.5 px-4 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-medium rounded-xl text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                Export Without Recording
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCancelExportPrompt}
+                className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-xl text-sm transition-colors cursor-pointer"
+              >
+                Cancel
               </button>
             </div>
           </div>

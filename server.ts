@@ -1255,6 +1255,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       currency: "SAR", // standard for legacy app
       subject: (draftData?.subject !== undefined ? draftData.subject : quote.subject) || "",
       subjectAr: (draftData?.subjectAr !== undefined ? draftData.subjectAr : quote.subject_ar) || "",
+      noteHeader: (draftData?.noteHeader !== undefined ? draftData.noteHeader : quote.note_header) || "NOTE:",
       notes: (draftData?.note !== undefined ? draftData.note : quote.note) || "",
       notesAr: (draftData?.noteAr !== undefined ? draftData.noteAr : quote.note_ar) || "",
       payment: (draftData?.payment !== undefined ? draftData.payment : quote.payment) || "",
@@ -1322,6 +1323,12 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       logoUrl: settingsMap.logo || null,
       logoSize: settingsMap.logoSize ? parseInt(settingsMap.logoSize, 10) : 24,
       termsFontSize: settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14,
+      tableFontSize: settingsMap.tableFontSize ? parseInt(settingsMap.tableFontSize, 10) : 14,
+      noteFontSize: settingsMap.noteFontSize ? parseInt(settingsMap.noteFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      paymentFontSize: settingsMap.paymentFontSize ? parseInt(settingsMap.paymentFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      warrantyFontSize: settingsMap.warrantyFontSize ? parseInt(settingsMap.warrantyFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      bankDetailsFontSize: settingsMap.bankDetailsFontSize ? parseInt(settingsMap.bankDetailsFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      otherTermsFontSize: settingsMap.otherTermsFontSize ? parseInt(settingsMap.otherTermsFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
       footerImageUrl: settingsMap.footerImage || null,
       footerSize: settingsMap.footerSize ? parseInt(settingsMap.footerSize, 10) : 30,
       bankName: "",
@@ -1337,9 +1344,12 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       pdfTableBgColor: settingsMap.pdfTableBgColor || brandColor,
       pdfTableTextColor: settingsMap.pdfTableTextColor || '#18181b',
       stampUrl: settingsMap.stampImage || null,
-      stampSize: settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 140,
+      stampSize: settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 137,
+      stampWidth: settingsMap.stampWidth ? parseInt(settingsMap.stampWidth, 10) : (settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 137),
+      stampHeight: settingsMap.stampHeight ? parseInt(settingsMap.stampHeight, 10) : Math.round((settingsMap.stampWidth ? parseInt(settingsMap.stampWidth, 10) : (settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 137)) / 1.37055),
       stampOffsetX: settingsMap.stampOffsetX ? parseInt(settingsMap.stampOffsetX, 10) : 0,
       stampOffsetY: settingsMap.stampOffsetY ? parseInt(settingsMap.stampOffsetY, 10) : 0,
+      termsTopGap: settingsMap.termsTopGap ? parseInt(settingsMap.termsTopGap, 10) : 6,
     };
 
     const buffer = await renderToBuffer(
@@ -1357,6 +1367,150 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
   } catch (error: any) {
     console.error('PDF Generation Error:', error);
     res.status(500).json({ error: error.message || 'Failed to generate PDF' });
+  }
+});
+
+// ── In-Memory / Unrecorded Quote PDF Render ──────────────────────────────────
+app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
+  try {
+    const { quote, items = [], selectedCustomer, showStamp = false } = req.body;
+    if (!quote) return res.status(400).json({ error: 'Quote data is required' });
+
+    // Fetch settings key-value pairs
+    const settingsRows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+    const settingsMap: Record<string, string> = {};
+    for (const s of settingsRows) {
+      settingsMap[s.key] = s.value;
+    }
+
+    const custName = selectedCustomer?.name || "";
+    const custContact = selectedCustomer?.contact || "";
+    const custEmail = selectedCustomer?.email || "";
+    const custPhone = selectedCustomer?.mobile || "";
+    const custAddress = selectedCustomer?.address || "";
+
+    let parsedCustomFields: any[] = [];
+    try {
+      if (quote.custom_field) {
+        parsedCustomFields = typeof quote.custom_field === 'string' ? JSON.parse(quote.custom_field) : quote.custom_field;
+      }
+    } catch {}
+
+    const pdfQuote = {
+      number: quote.quote_id || "DRAFT",
+      createdAt: quote.date || new Date().toISOString().slice(0, 10),
+      validUntil: quote.expiry_date || "",
+      currency: "SAR",
+      subject: quote.subject || "",
+      subjectAr: quote.subject_ar || "",
+      noteHeader: quote.note_header || "NOTE:",
+      notes: quote.note || "",
+      notesAr: quote.note_ar || "",
+      payment: quote.payment || "",
+      paymentAr: quote.payment_ar || "",
+      warranty: quote.warranty || "",
+      warrantyAr: quote.warranty_ar || "",
+      manpower: quote.manpower || "",
+      manpowerAr: quote.manpower_ar || "",
+      mobilization: quote.mobilization || "",
+      mobilizationAr: quote.mobilization_ar || "",
+      duration: quote.duration || "",
+      durationAr: quote.duration_ar || "",
+      bankDetails: quote.bank_details || "",
+      bankDetailsAr: quote.bank_details_ar || "",
+      subtotal: quote.subtotal || 0,
+      discountTotal: quote.discount || 0,
+      discountRate: quote.discount_rate || 0,
+      discountType: (quote.discount_type as 'amount' | 'percentage' | 'both') || 'amount',
+      taxTotal: quote.tax || 0,
+      total: quote.grand_total || 0,
+      showNote: quote.show_note !== 0 && quote.show_note !== false,
+      showPayment: quote.show_payment !== 0 && quote.show_payment !== false,
+      showWarranty: quote.show_warranty !== 0 && quote.show_warranty !== false,
+      showManpower: quote.show_manpower !== 0 && quote.show_manpower !== false,
+      showMobilization: quote.show_mobilization !== 0 && quote.show_mobilization !== false,
+      showDuration: quote.show_duration !== 0 && quote.show_duration !== false,
+      showBankDetails: quote.show_bank_details !== 0 && quote.show_bank_details !== false,
+      showCustomField: Boolean(quote.show_custom_field),
+      customFields: parsedCustomFields,
+      customer: {
+        company: custName,
+        contactName: custContact,
+        email: custEmail,
+        phone: custPhone,
+        address: custAddress,
+        city: "",
+        country: "Saudi Arabia",
+      },
+      lines: (items || []).map((it: any) => ({
+        type: (it.type as 'item' | 'section' | 'note') || 'item',
+        description: it.description || "",
+        descriptionAr: it.description_ar || it.descriptionAr || "",
+        quantity: it.qty || 0,
+        unit: it.unit || "set",
+        unitPrice: it.unit_price || it.unitPrice || 0,
+        discount: 0,
+      })),
+    };
+
+    let brandColor = "#039737";
+    try {
+      const colors = JSON.parse(settingsMap.themeColors || '{}');
+      if (colors.headerBg) brandColor = colors.headerBg;
+    } catch {}
+
+    const isInvoice = (quote.type || '').toLowerCase().includes('invoice');
+
+    const pdfSettings = {
+      companyName: "AJ Network Solutions",
+      brandColor,
+      taxLabel: `VAT ${quote.vat_rate || 15}%`,
+      logoUrl: settingsMap.logo || null,
+      logoSize: settingsMap.logoSize ? parseInt(settingsMap.logoSize, 10) : 24,
+      termsFontSize: settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14,
+      tableFontSize: settingsMap.tableFontSize ? parseInt(settingsMap.tableFontSize, 10) : 14,
+      noteFontSize: settingsMap.noteFontSize ? parseInt(settingsMap.noteFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      paymentFontSize: settingsMap.paymentFontSize ? parseInt(settingsMap.paymentFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      warrantyFontSize: settingsMap.warrantyFontSize ? parseInt(settingsMap.warrantyFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      bankDetailsFontSize: settingsMap.bankDetailsFontSize ? parseInt(settingsMap.bankDetailsFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      otherTermsFontSize: settingsMap.otherTermsFontSize ? parseInt(settingsMap.otherTermsFontSize, 10) : (settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14),
+      footerImageUrl: settingsMap.footerImage || null,
+      footerSize: settingsMap.footerSize ? parseInt(settingsMap.footerSize, 10) : 30,
+      bankName: "",
+      bankAccount: "",
+      bankIban: "",
+      bankAccountName: "",
+      footerText: settingsMap.footerText || "Thank you for your business!",
+      pdfHeaderBgType: settingsMap.pdfHeaderBgType || 'solid',
+      pdfHeaderBgColorStart: settingsMap.pdfHeaderBgColorStart || brandColor,
+      pdfHeaderBgColorEnd: settingsMap.pdfHeaderBgColorEnd || brandColor,
+      pdfHeaderTextColor: settingsMap.pdfHeaderTextColor || '#ffffff',
+      pdfTableBgColor: settingsMap.pdfTableBgColor || brandColor,
+      pdfTableTextColor: settingsMap.pdfTableTextColor || '#18181b',
+      stampUrl: settingsMap.stampImage || null,
+      stampSize: settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 137,
+      stampWidth: settingsMap.stampWidth ? parseInt(settingsMap.stampWidth, 10) : (settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 137),
+      stampHeight: settingsMap.stampHeight ? parseInt(settingsMap.stampHeight, 10) : Math.round((settingsMap.stampWidth ? parseInt(settingsMap.stampWidth, 10) : (settingsMap.stampSize ? parseInt(settingsMap.stampSize, 10) : 137)) / 1.37055),
+      stampOffsetX: settingsMap.stampOffsetX ? parseInt(settingsMap.stampOffsetX, 10) : 0,
+      stampOffsetY: settingsMap.stampOffsetY ? parseInt(settingsMap.stampOffsetY, 10) : 0,
+      termsTopGap: settingsMap.termsTopGap ? parseInt(settingsMap.termsTopGap, 10) : 6,
+    };
+
+    const buffer = await renderToBuffer(
+      React.createElement(QuotePdfDocument, {
+        quote: pdfQuote,
+        settings: pdfSettings,
+        type: isInvoice ? 'invoice' : 'quotation',
+        showStamp: Boolean(showStamp),
+      })
+    );
+
+    res.contentType("application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${quote.quote_id || 'DRAFT'}.pdf`);
+    res.send(buffer);
+  } catch (error: any) {
+    console.error('PDF Render Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to render PDF' });
   }
 });
 
@@ -2586,6 +2740,15 @@ app.get('/api/admin/backups/download/:filename', requireAuth, requirePermission(
       return res.status(404).json({ error: 'Backup file not found' });
     }
     res.download(file, filename);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/settings', (req, res) => {
+  try {
+    const settings = db.prepare('SELECT key, value FROM settings WHERE key NOT IN ("smtpConfig", "logExpirationDays")').all();
+    res.json(settings);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

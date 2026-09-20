@@ -37,6 +37,12 @@ export type PdfSettings = {
   logoUrl?: string | null;
   logoSize?: number | null;
   termsFontSize?: number | null;
+  tableFontSize?: number | null;
+  noteFontSize?: number | null;
+  paymentFontSize?: number | null;
+  warrantyFontSize?: number | null;
+  bankDetailsFontSize?: number | null;
+  otherTermsFontSize?: number | null;
   footerImageUrl?: string | null;
   footerSize?: number | null;
   brandColor: string;
@@ -59,8 +65,11 @@ export type PdfSettings = {
   pdfTableTextColor?: string | null;
   stampUrl?: string | null;
   stampSize?: number | null;
+  stampWidth?: number | null;
+  stampHeight?: number | null;
   stampOffsetX?: number | null;
   stampOffsetY?: number | null;
+  termsTopGap?: number | null;
 };
 
 export type PdfQuote = {
@@ -70,6 +79,7 @@ export type PdfQuote = {
   currency: string;
   subject?: string | null;
   subjectAr?: string | null;
+  noteHeader?: string | null;
   notes?: string | null;
   notesAr?: string | null;
   payment?: string | null;
@@ -316,11 +326,10 @@ const styles = StyleSheet.create({
   border: { borderLeftWidth: 0.5, borderLeftColor: "#18181b" },
   borderTop: { borderTopWidth: 0.5, borderTopColor: "#18181b" },
   borderRight: { borderRightWidth: 0.5, borderRightColor: "#18181b" },
-  noteBox: { flex: 1, padding: 6 },
   totalsBox: { width: 158, borderWidth: 0.5, borderColor: "#18181b" },
   totalRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 6, paddingVertical: 3, borderBottomWidth: 0.5, borderColor: "#18181b" },
   totalPkg: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 6, paddingVertical: 5, fontWeight: "bold", color: "#ffffff" },
-  termsSection: { marginTop: 12, width: 390 },
+  termsSection: { flex: 1, marginRight: 12 },
   termRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -444,7 +453,16 @@ export function QuotePdfDocument({
   ].filter(Boolean).join(", ");
 
   const termsRows = buildPdfTermRows(quote, settings);
-  const tFontSize = (settings.termsFontSize || 14) * 0.53; // scale web 14px to ~7.5pt
+  const defaultTermsFontSize = settings.termsFontSize || 14;
+  const noteFontSize = (settings.noteFontSize || defaultTermsFontSize) * 0.53;
+  const tableItemFontSize = settings.tableFontSize ? settings.tableFontSize * 0.53 : 7.5;
+  const getTermFontSize = (label: string): number => {
+    const l = (label || "").toUpperCase();
+    if (l.includes("PAYMENT")) return (settings.paymentFontSize || defaultTermsFontSize) * 0.53;
+    if (l.includes("WARRANTY")) return (settings.warrantyFontSize || defaultTermsFontSize) * 0.53;
+    if (l.includes("BANK")) return (settings.bankDetailsFontSize || defaultTermsFontSize) * 0.53;
+    return (settings.otherTermsFontSize || defaultTermsFontSize) * 0.53;
+  };
   const noteItems = getBilingualNotes(quote.notes, quote.notesAr);
   const bank = getBilingualParts(quote.bankDetails, quote.bankDetailsAr);
 
@@ -613,37 +631,37 @@ export function QuotePdfDocument({
 
                 {/* ITEM Column */}
                 <View style={[{ width: COL.item }, styles.cellContainer, ...cellBorder]}>
-                  <Text style={[styles.cellText, styles.cellCenter]}>{serialNum}</Text>
+                  <Text style={[styles.cellText, styles.cellCenter, { fontSize: tableItemFontSize }]}>{serialNum}</Text>
                 </View>
 
                 {/* DESCRIPTION Column */}
                 <View style={[{ flex: 1 }, styles.cellContainer, ...cellBorder]}>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Text style={[styles.cellText, styles.cellLeft, { flex: 1 }]}>{line.description}</Text>
+                    <Text style={[styles.cellText, styles.cellLeft, { flex: 1, fontSize: tableItemFontSize }]}>{line.description}</Text>
                     {line.descriptionAr ? (
-                      <Text style={[styles.cellText, styles.cellRight, { flex: 1 }]}>{line.descriptionAr}</Text>
+                      <Text style={[styles.cellText, styles.cellRight, { flex: 1, fontSize: tableItemFontSize }]}>{line.descriptionAr}</Text>
                     ) : null}
                   </View>
                 </View>
 
                 {/* QTY Column */}
                 <View style={[{ width: COL.qty }, styles.cellContainer, ...cellBorder]}>
-                  <Text style={[styles.cellText, styles.cellCenter]}>{line.quantity}</Text>
+                  <Text style={[styles.cellText, styles.cellCenter, { fontSize: tableItemFontSize }]}>{line.quantity}</Text>
                 </View>
 
                 {/* UNIT Column */}
                 <View style={[{ width: COL.unit }, styles.cellContainer, ...cellBorder]}>
-                  <Text style={[styles.cellText, styles.cellCenter]}>{line.unit}</Text>
+                  <Text style={[styles.cellText, styles.cellCenter, { fontSize: tableItemFontSize }]}>{line.unit}</Text>
                 </View>
 
                 {/* UNIT PRICE Column */}
                 <View style={[{ width: COL.unitPrice }, styles.cellContainer, ...cellBorder]}>
-                  <Text style={[styles.cellText, styles.cellCenter]}>{fmt(line.unitPrice)}</Text>
+                  <Text style={[styles.cellText, styles.cellCenter, { fontSize: tableItemFontSize }]}>{fmt(line.unitPrice)}</Text>
                 </View>
 
                 {/* NET PRICE Column */}
                 <View style={[{ width: COL.netPrice }, styles.cellContainer, ...cellBorderRight]}>
-                  <Text style={[styles.cellText, styles.cellCenter, styles.cellBold]}>{fmt(lineNetPrice(line))}</Text>
+                  <Text style={[styles.cellText, styles.cellCenter, styles.cellBold, { fontSize: tableItemFontSize }]}>{fmt(lineNetPrice(line))}</Text>
                 </View>
 
               </View>
@@ -651,38 +669,57 @@ export function QuotePdfDocument({
           })}
         </View>
 
-        {/* ── NOTE + TOTALS ───────────────────────────────────────────── */}
+        {/* ── TERMS & TOTALS ───────────────────────────────────────────── */}
         <View style={{ marginTop: 6 }}>
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            {/* Note box */}
-            {quote.showNote !== false && (quote.notes || quote.notesAr) ? (
-              <View style={styles.noteBox}>
-                <View style={{ flexDirection: "row", gap: 4 }}>
-                  <Text style={{ fontWeight: "bold", minWidth: 38 }}>NOTE:</Text>
-                  <View style={{ flex: 1, flexDirection: "row", gap: 6 }}>
-                    {/* English lines */}
-                    <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", width: "100%" }}>
+            {/* Terms & Notes column (Left) */}
+            <View style={[styles.termsSection, { marginTop: settings.termsTopGap != null ? settings.termsTopGap : 0 }]}>
+              {/* Note Row - styled identically to terms */}
+              {quote.showNote !== false && (quote.notes || quote.notesAr) ? (
+                <View style={styles.termRow}>
+                  <Text style={[styles.termLabel, { fontSize: noteFontSize }]}>
+                    {((quote.noteHeader || "NOTE").replace(/:$/, "").trim())}:
+                  </Text>
+                  <View style={styles.termEnContainer}>
+                    {noteItems.map((item, idx) => (
+                      <Text key={idx} style={[styles.termEnText, { fontSize: noteFontSize, marginBottom: 1 }]}>
+                        {item.en}
+                      </Text>
+                    ))}
+                  </View>
+                  {noteItems.some((n) => n.ar) ? (
+                    <View style={styles.termArContainer}>
                       {noteItems.map((item, idx) => (
-                        <Text key={idx} style={{ fontSize: 7.5, marginBottom: 1 }}>{item.en}</Text>
+                        <Text key={idx} style={[styles.termArText, { fontSize: noteFontSize, marginBottom: 1 }]}>
+                          {item.ar}
+                        </Text>
                       ))}
                     </View>
-                    {/* Arabic lines */}
-                    {noteItems.some((n) => n.ar) ? (
-                      <View style={{ flex: 1 }}>
-                        {noteItems.map((item, idx) => (
-                          <Text key={idx} style={{ fontSize: 7.5, textAlign: "right", marginBottom: 1 }}>{item.ar}</Text>
-                        ))}
+                  ) : null}
+                </View>
+              ) : null}
+
+              {/* Other Terms Rows */}
+              {termsRows.map((row) => {
+                const rowFontSize = getTermFontSize(row.label);
+                return (
+                  <View key={row.label} style={styles.termRow}>
+                    <Text style={[styles.termLabel, { fontSize: rowFontSize }]}>{row.label}:</Text>
+                    <View style={styles.termEnContainer}>
+                      <Text style={[styles.termEnText, { fontSize: rowFontSize }]}>{row.en}</Text>
+                    </View>
+                    {row.ar ? (
+                      <View style={styles.termArContainer}>
+                        <Text style={[styles.termArText, { fontSize: rowFontSize }]}>{row.ar}</Text>
                       </View>
                     ) : null}
                   </View>
-                </View>
-              </View>
-            ) : (
-              <View style={{ flex: 1 }} />
-            )}
+                );
+              })}
+            </View>
 
-            {/* Totals box */}
-            <View style={{ position: "relative" }}>
+            {/* Totals box (Right) */}
+            <View style={{ position: "relative", alignSelf: "flex-start" }}>
               <View style={styles.totalsBox}>
                 <View style={styles.totalRow}>
                   <Text style={{ fontWeight: "bold" }}>SUBTOTAL</Text>
@@ -733,36 +770,17 @@ export function QuotePdfDocument({
                   src={settings.stampUrl}
                   style={{
                     position: "absolute",
-                    width: settings.stampSize || 140,
-                    height: settings.stampSize || 140,
-                    top: 85 + (settings.stampOffsetY || 0),
+                    width: settings.stampWidth || settings.stampSize || 137,
+                    height: settings.stampHeight || (settings.stampWidth ? Math.round(settings.stampWidth / 1.37055) : (settings.stampSize ? Math.round(settings.stampSize / 1.37055) : 100)),
+                    top: 105 + (settings.stampOffsetY || 0),
                     left: 10 + (settings.stampOffsetX || 0),
                     opacity: 0.9,
-                    objectFit: "contain",
+                    objectFit: "fill",
                   }}
                 />
               )}
             </View>
           </View>
-
-          {/* ── TERMS ───────────────────────────────────────────────── */}
-          {termsRows.length > 0 ? (
-            <View style={styles.termsSection}>
-              {termsRows.map((row) => (
-                <View key={row.label} style={styles.termRow}>
-                  <Text style={[styles.termLabel, { fontSize: tFontSize }]}>{row.label}:</Text>
-                  <View style={styles.termEnContainer}>
-                    <Text style={[styles.termEnText, { fontSize: tFontSize }]}>{row.en}</Text>
-                  </View>
-                  {row.ar ? (
-                    <View style={styles.termArContainer}>
-                      <Text style={[styles.termArText, { fontSize: tFontSize }]}>{row.ar}</Text>
-                    </View>
-                  ) : null}
-                </View>
-              ))}
-            </View>
-          ) : null}
         </View>
 
         {/* ── DYNAMIC FOOTER ───────────────────────────────────────── */}
