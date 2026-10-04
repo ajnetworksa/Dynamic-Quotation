@@ -29,11 +29,52 @@ import multer from 'multer';
 import OpenAI from 'openai';
 import fs from 'fs';
 import { z, ZodSchema } from 'zod';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import ExcelJS from 'exceljs';
 import AdmZip from 'adm-zip';
 const execAsync = promisify(exec);
+
+/** Run git with argument array (no shell) to prevent command injection. */
+function runGit(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', args, { cwd: process.cwd(), shell: false });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (chunk) => { stdout += chunk; });
+    proc.stderr.on('data', (chunk) => { stderr += chunk; });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(stderr.trim() || stdout.trim() || `git exited with code ${code}`));
+    });
+  });
+}
+
+function assertSafeHttpsGitRemoteUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Invalid repository URL');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Invalid repository URL');
+  }
+  return parsed.href;
+}
+
+function getQuoteIdPrefix(): string {
+  const prefixRow = db.prepare("SELECT value FROM settings WHERE key = 'quotePrefix'").get() as { value?: string } | undefined;
+  return (prefixRow?.value || 'AJ').trim().replace(/[^A-Z0-9]/gi, '') || 'AJ';
+}
+
+/** Base quote id from a revision id, e.g. QT-10001-R2 → QT-10001 */
+function getQuoteBaseId(quoteId: string): string | null {
+  const prefix = getQuoteIdPrefix();
+  const match = quoteId.match(new RegExp(`^(${prefix}-\\d+)`));
+  return match ? match[1] : null;
+}
 // import { GoogleGenerativeAI } from "@google/generative-ai"; // Switched to OpenRouter for better stability
 
 // ── FILE LOGGING FOR BACKEND DEBUGGING ────────────────────────────────────────
@@ -977,9 +1018,7 @@ app.delete('/api/products/:id', requireAuth, requirePermission('canDeleteData'),
 // ── Quotes ────────────────────────────────────────────────────────────────────
 app.get('/api/quotes/next-id', requireAuth, (req, res) => {
   try {
-    // Read configurable prefix from settings (defaults to 'AJ' if not set)
-    const prefixRow = db.prepare("SELECT value FROM settings WHERE key = 'quotePrefix'").get() as any;
-    const prefix = (prefixRow?.value || 'AJ').trim().replace(/[^A-Z0-9]/gi, '');
+    const prefix = getQuoteIdPrefix();
     const regex = new RegExp(`^${prefix}-(\\d+)`);
 
     const rows = db.prepare('SELECT quote_id FROM quotes').all() as { quote_id: string }[];
@@ -1130,10 +1169,11 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 app.get('/api/quotes/:quote_id/lock', requireAuth, (req, res) => {
   try {
     const currentUser = (req as any).user;
-    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    const row = db.prepare('SELECT version, author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number; author_id: number } | undefined;
+    const row = db.prepare('SELECT version, author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number; author_id: number; shared_with?: string | null } | undefined;
     if (!row) return res.status(404).json({ error: 'Quote not found' });
-    if (!canSeeAll && row.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
+    if (!isQuoteVisibleToUser(row, currentUser)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     res.json({ version: row.version ?? 1 });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch lock' });
@@ -1519,16 +1559,14 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
   const currentUser = (req as any).user;
   const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
-  // Get base ID: 'AJ-12345-R2' -> 'AJ-12345'
-  const baseIdMatch = quoteId.match(/^(AJ-\d+)/);
-  if (!baseIdMatch) return res.status(400).json({ error: 'Invalid Quote ID format' });
-  const baseId = baseIdMatch[1];
+  const baseId = getQuoteBaseId(quoteId);
+  if (!baseId) return res.status(400).json({ error: 'Invalid Quote ID format' });
 
-  // Ownership check — verify access using the base (original) quote
-  if (!canSeeAll) {
-    const base = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(baseId) as { author_id: number } | undefined;
-    if (!base) return res.status(404).json({ error: 'Quote not found' });
-    if (base.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
+  // Visibility check — verify access using the base (original) quote
+  const base = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?').get(baseId) as { author_id: number; shared_with?: string | null } | undefined;
+  if (!base) return res.status(404).json({ error: 'Quote not found' });
+  if (!canSeeAll && !isQuoteVisibleToUser(base, currentUser)) {
+    return res.status(403).json({ error: 'Access denied' });
   }
 
   // Fetch all quotes starting with this base ID
@@ -2745,7 +2783,7 @@ app.get('/api/admin/backups/download/:filename', requireAuth, requirePermission(
   }
 });
 
-app.get('/api/settings', (req, res) => {
+app.get('/api/settings', requireAuth, (req, res) => {
   try {
     const settings = db.prepare('SELECT key, value FROM settings WHERE key NOT IN ("smtpConfig", "logExpirationDays")').all();
     res.json(settings);
@@ -2754,23 +2792,13 @@ app.get('/api/settings', (req, res) => {
   }
 });
 
-app.get('/api/settings/:key', (req, res) => {
+app.get('/api/settings/:key', requireAuth, (req, res) => {
   const sensitiveKeys = ['smtpConfig', 'logExpirationDays'];
   const key = req.params.key;
+  const user = (req as any).user;
 
-  if (sensitiveKeys.includes(key)) {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const session = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token = ?').get(token) as { user_id: number; expires_at: string } | undefined;
-    if (!session || new Date(session.expires_at) < new Date()) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    const user = db.prepare('SELECT id, username, role, permissions FROM users WHERE id = ?').get(session.user_id) as any;
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    user.permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
-    if (!hasPermission(user, 'canManageSettings')) {
-      return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
-    }
+  if (sensitiveKeys.includes(key) && !hasPermission(user, 'canManageSettings')) {
+    return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
   }
 
   try {
@@ -2917,9 +2945,15 @@ app.post('/api/admin/bulk-update-quote-terms', requireAuth, requireAdmin, (req, 
 
 // ── Translation API ───────────────────────────────────────────────────────────
 // Proxies to Google Translate with chunking + retry for reliability.
-app.post('/api/translate', async (req, res) => {
+app.post('/api/translate', requireAuth, async (req, res) => {
   const { text, sl = 'en', tl = 'ar' } = req.body;
   if (!text) return res.json({ translation: '' });
+  if (typeof text !== 'string' || text.length > 15000) {
+    return res.status(400).json({ error: 'Invalid or oversized text payload' });
+  }
+  if (typeof sl !== 'string' || typeof tl !== 'string' || !/^[a-z]{2,8}(-[a-z]{2,8})?$/i.test(sl) || !/^[a-z]{2,8}(-[a-z]{2,8})?$/i.test(tl)) {
+    return res.status(400).json({ error: 'Invalid language code' });
+  }
 
   const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -3380,11 +3414,12 @@ app.get('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) =>
 
 app.post('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) => {
   const { url } = req.body;
-  if (!url || !url.startsWith('http')) {
+  if (typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({ error: 'Invalid repository URL' });
   }
   try {
-    await execAsync(`git remote set-url origin ${url}`);
+    const safeUrl = assertSafeHttpsGitRemoteUrl(url.trim());
+    await runGit(['remote', 'set-url', 'origin', safeUrl]);
     res.json({ success: true, message: 'Remote URL updated successfully' });
   } catch (error: any) {
     res.status(500).json({ error: `Failed to update remote URL: ${error.message}` });
