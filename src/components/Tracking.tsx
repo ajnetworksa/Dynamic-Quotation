@@ -2,6 +2,7 @@ import { getStoredUser } from '../lib/storage';
 import { toast, confirmAsync, promptAsync } from '../lib/notify';
 import PaymentsPanel from './PaymentsPanel';
 import ShareLinkPanel from './ShareLinkPanel';
+import RecurringPanel from './RecurringPanel';
 import { ymdOf, parseQuoteDate } from '../lib/dates';
 import { STATUS_BADGE as SHARED_BADGES, STATUSES, normalizeStatus } from '../lib/status';
 const STATUS_BADGE: Record<string, string> = SHARED_BADGES;
@@ -1615,6 +1616,7 @@ export default function Tracking() {
               <PaymentsPanel quoteId={timelineQuoteId} currency={timelineQuote.currency || 'SAR'} onChanged={fetchQuotes} />
             )}
             {timelineQuote && <ShareLinkPanel quoteId={timelineQuoteId} onChanged={fetchQuotes} />}
+            {timelineQuote && <RecurringPanel quoteId={timelineQuoteId} onChanged={fetchQuotes} />}
 
             {/* Quote Summary Card */}
             {timelineQuote && (

@@ -20,6 +20,7 @@ import { STATUSES, isStatus } from './src/lib/status.ts';
 import { generateSecret, verifyTotp, otpauthUrl } from './src/lib/totp.ts';
 import { customerKeys, productKey } from './src/lib/importDedupe.ts';
 import { encryptBackup, decryptBackup } from './src/lib/backupCrypto.ts';
+import { nextRunDate, dueRunDates, FREQUENCIES, Frequency } from './src/lib/recurrence.ts';
 import QRCode from 'qrcode';
 import express from 'express';
 import http from 'http';
@@ -424,6 +425,22 @@ db.exec(`CREATE TABLE IF NOT EXISTS quote_payments (
   created_at TEXT NOT NULL
 )`);
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_payments_quote ON quote_payments(quote_id)'); } catch { }
+
+// ── Recurring documents: a schedule that creates a fresh Draft copy of an invoice/quote every period ──
+db.exec(`CREATE TABLE IF NOT EXISTS recurring_schedules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_quote_id TEXT NOT NULL,
+  frequency TEXT NOT NULL,
+  anchor_day INTEGER,
+  next_run TEXT NOT NULL,
+  end_date TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  last_run_at TEXT,
+  last_created_id TEXT,
+  runs INTEGER NOT NULL DEFAULT 0
+)`);
 
 // ── Client approval links (public, token-based) ────────────────────────────────
 db.exec(`CREATE TABLE IF NOT EXISTS quote_shares (
@@ -2709,6 +2726,99 @@ app.post('/api/public/quotes/:token/respond', respondLimiter, validate(RespondSc
   })();
   auditLog({ actor: `client:${name}`, ip: req.ip, action: `PUBLIC ${decision} via approval link`, target: quote.quote_id, status: 200 });
   res.json({ success: true, status: newStatus });
+});
+
+// ── Recurring documents API + daily generator ────────────────────────────────
+// Next free quote number, exactly like /api/quotes/next-id but for the system (no user reservation).
+const nextQuoteIdForSystem = (): string => {
+  const prefix = (((db.prepare("SELECT value FROM settings WHERE key = 'quotePrefix'").get() as any)?.value) || 'AJ').trim().replace(/[^A-Z0-9]/gi, '') || 'AJ';
+  const re = new RegExp(`^${prefix}-(\\d+)`);
+  let max = 0;
+  for (const table of ['quotes', 'activity_log', 'id_reservations']) {
+    for (const r of db.prepare(`SELECT quote_id FROM ${table}`).all() as { quote_id: string }[]) {
+      const m = r.quote_id?.match(re);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+  }
+  return `${prefix}-${String(max > 0 ? max + 1 : 10001).padStart(5, '0')}`;
+};
+
+// Copies a quote (header, items) into a NEW Draft dated `runDate`. Payments, approval links, notes and history are not copied.
+const cloneQuoteAsDraft = (sourceId: string, runDate: string, actor: string): string | null => {
+  const src = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(sourceId) as any;
+  if (!src) return null;
+  const newId = nextQuoteIdForSystem();
+  const skip = new Set(['id', 'quote_id', 'draft_data', 'deleted_at', 'deleted_by', 'retain_forever', 'followup_date', 'followup_note', 'quote_note', 'lost_reason', 'revision_of', 'created_at']);
+  const cols = (db.prepare('PRAGMA table_info(quotes)').all() as any[]).map(c => c.name).filter(n => !skip.has(n));
+  const row: any = { ...src };
+  // keep the same validity window
+  if (src.expiry_date && src.date) {
+    const days = Math.round((new Date(String(src.expiry_date).slice(0, 10)).getTime() - new Date(String(src.date).slice(0, 10)).getTime()) / 86400000);
+    row.expiry_date = Number.isFinite(days) && days >= 0 ? new Date(new Date(runDate).getTime() + days * 86400000).toISOString().slice(0, 10) : null;
+  }
+  row.date = runDate; row.status = 'Draft'; row.version = 1; row.updated_at = new Date().toISOString();
+  db.transaction(() => {
+    const allCols = ['quote_id', ...cols];
+    db.prepare(`INSERT INTO quotes (${allCols.join(', ')}) VALUES (${allCols.map(() => '?').join(', ')})`).run(newId, ...cols.map(c => row[c] ?? null));
+    const itemCols = (db.prepare('PRAGMA table_info(quote_items)').all() as any[]).map(c => c.name).filter(n => n !== 'id' && n !== 'quote_id');
+    const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(sourceId) as any[];
+    const ins = db.prepare(`INSERT INTO quote_items (quote_id, ${itemCols.join(', ')}) VALUES (?, ${itemCols.map(() => '?').join(', ')})`);
+    for (const it of items) ins.run(newId, ...itemCols.map(c => it[c] ?? null));
+    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(newId, `Created automatically from ${sourceId} (recurring)`, actor, new Date().toISOString());
+  })();
+  return newId;
+};
+
+const runRecurringSchedules = (today = new Date().toISOString().slice(0, 10)): number => {
+  let created = 0;
+  const due = db.prepare('SELECT * FROM recurring_schedules WHERE active = 1 AND next_run <= ?').all(today) as any[];
+  for (const sch of due) {
+    try {
+      const dates = dueRunDates(sch.next_run, sch.frequency as Frequency, today, sch.anchor_day || undefined)
+        .filter(d => !sch.end_date || d <= sch.end_date);
+      let last: string | null = sch.last_created_id;
+      for (const d of dates) { const id = cloneQuoteAsDraft(sch.source_quote_id, d, 'recurring'); if (id) { last = id; created++; } }
+      const next = (dates.length ? nextRunDate(dates[dates.length - 1], sch.frequency as Frequency, sch.anchor_day || undefined) : sch.next_run);
+      const finished = (sch.end_date && next > sch.end_date) || !db.prepare('SELECT 1 FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(sch.source_quote_id);
+      db.prepare('UPDATE recurring_schedules SET next_run = ?, last_run_at = ?, last_created_id = ?, runs = runs + ?, active = ? WHERE id = ?')
+        .run(next, dates.length ? new Date().toISOString() : sch.last_run_at, last, dates.length, finished ? 0 : 1, sch.id);
+    } catch (e) { console.error('Recurring schedule failed:', sch.id, e); }
+  }
+  if (created) console.log(`🔁 Recurring: created ${created} draft document(s)`);
+  return created;
+};
+runRecurringSchedules();
+setInterval(() => runRecurringSchedules(), 6 * 60 * 60 * 1000); // every 6 hours; each schedule only fires once per due date
+
+const RecurringSchema = z.object({
+  frequency: z.enum(FREQUENCIES as [Frequency, ...Frequency[]]),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+});
+app.get('/api/quotes/:quote_id/recurring', requireAuth, (req, res) => {
+  const q = db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+  if (!q) return res.status(404).json({ error: 'Quote not found' });
+  if (!isQuoteVisibleToUser(q, (req as any).user)) return res.status(403).json({ error: 'Access denied.' });
+  res.json(db.prepare('SELECT * FROM recurring_schedules WHERE source_quote_id = ? ORDER BY id DESC').all(q.quote_id));
+});
+app.post('/api/quotes/:quote_id/recurring', requireAuth, validate(RecurringSchema), (req, res) => {
+  const q = db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
+  if (!q) return res.status(404).json({ error: 'Quote not found' });
+  if (!canEditQuote(q, (req as any).user)) return res.status(403).json({ error: 'You do not have permission to change this quote.' });
+  const { frequency, start_date, end_date } = req.body;
+  if (end_date && end_date < start_date) return res.status(400).json({ error: 'The end date is before the start date.' });
+  const info = db.prepare('INSERT INTO recurring_schedules (source_quote_id, frequency, anchor_day, next_run, end_date, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(q.quote_id, frequency, Number(start_date.slice(8, 10)), start_date, end_date || null, (req as any).user.username, new Date().toISOString());
+  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(q.quote_id, `Recurring schedule created (${frequency}, from ${start_date})`, (req as any).user.username, new Date().toISOString());
+  const created = runRecurringSchedules(); // a start date in the past or today generates immediately
+  res.json({ id: info.lastInsertRowid, createdNow: created });
+});
+app.delete('/api/recurring/:id', requireAuth, (req, res) => {
+  const sch = db.prepare('SELECT s.id, q.author_id, q.shared_with FROM recurring_schedules s LEFT JOIN quotes q ON q.quote_id = s.source_quote_id WHERE s.id = ?').get(Number(req.params.id)) as any;
+  if (!sch) return res.status(404).json({ error: 'Schedule not found' });
+  if (!canEditQuote(sch, (req as any).user)) return res.status(403).json({ error: 'Access denied.' });
+  db.prepare('UPDATE recurring_schedules SET active = 0 WHERE id = ?').run(sch.id);
+  res.json({ success: true });
 });
 
 // ── Payments API ─────────────────────────────────────────────────────────────
