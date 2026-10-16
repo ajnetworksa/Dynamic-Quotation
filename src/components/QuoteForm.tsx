@@ -171,6 +171,9 @@ export default function QuoteForm() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
   const [isRecorded, setIsRecorded] = useState(false);
+  // True while a RECALLED (already recorded) quote has edits that were not saved yet. Fresh drafts are cached
+  // locally and survive a closed tab, recalled quotes are not, so only they trigger the leave-page warning.
+  const [hasUnsavedRecalledEdits, setHasUnsavedRecalledEdits] = useState(false);
   const [showExportRecordModal, setShowExportRecordModal] = useState(false);
   const [pendingExportType, setPendingExportType] = useState<'excel' | 'pdf' | 'server-pdf' | 'server-pdf-stamped' | null>(null);
   const isInitialLoadRef = useRef(true);
@@ -203,6 +206,7 @@ export default function QuoteForm() {
   const [items, setItems] = useState<QuoteItem[]>([]);
   const [itemsHistory, setItemsHistory] = useState<QuoteItem[][]>([]);
   // rawDiscount is what the user typed; `discount` (derived below) is the amount actually applied (capped at the subtotal).
+  const [currency, setCurrency] = useState('SAR'); // per-quote currency (ISO code)
   const [rawDiscount, setDiscount] = useState(0);
   const [discountRate, setDiscountRate] = useState(0);
   const [discountMode, setDiscountMode] = useState<'amount' | 'percentage' | 'both'>('amount');
@@ -463,6 +467,7 @@ export default function QuoteForm() {
     if (d.discountRate !== undefined) setDiscountRate(d.discountRate);
     if (d.discountMode !== undefined) setDiscountMode(d.discountMode);
     if (d.vatRate !== undefined) setVatRate(d.vatRate);
+    if (d.currency) setCurrency(d.currency);
     if (d.markup !== undefined) setMarkup(d.markup);
     if (d.authorName !== undefined) setAuthorName(d.authorName);
     if (d.authorId !== undefined) setAuthorId(d.authorId);
@@ -612,6 +617,8 @@ export default function QuoteForm() {
 
       if (recallQuoteId) {
         await fetchQuote(recallQuoteId, dbCustomers, dbProducts);
+        // Loading fills many fields; do not count that as the user's edits (clears after React has applied it).
+        setTimeout(() => setHasUnsavedRecalledEdits(false), 900);
         setIsRecorded(true);
         // Do not keep stale draft cache while viewing an existing database quote
         localStorage.removeItem(DRAFT_KEY);
@@ -784,22 +791,25 @@ export default function QuoteForm() {
     };
   }, [focusedDescriptionIndex]);
 
-  // Undo (Ctrl+Z) for dragging operations
+  // Undo (Ctrl+Z) for row operations (drag, move up/down, add, remove).
+  // History lives in a ref mirror so the handler never calls setState inside a state updater
+  // (that ran twice under StrictMode and popped two entries).
+  const itemsHistoryRef = useRef<QuoteItem[][]>([]);
+  itemsHistoryRef.current = itemsHistory;
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (window.location.pathname !== '/quote') return; // form stays mounted on every page
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         // Prevent intercepting native text undo if typing in an input
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
         e.preventDefault();
-        setItemsHistory(prevHistory => {
-          if (prevHistory.length === 0) return prevHistory;
-          const newHistory = [...prevHistory];
-          const previousItems = newHistory.pop()!;
-          setItems(previousItems);
-          return newHistory;
-        });
+        const history = itemsHistoryRef.current;
+        if (history.length === 0) return;
+        const previousItems = history[history.length - 1];
+        setItemsHistory(history.slice(0, -1));
+        setItems(previousItems);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1121,25 +1131,22 @@ export default function QuoteForm() {
       if (trans) setSubjectAr(trans);
     }
 
-    // 2. Items
-    const newItems = [...items];
-    let itemsChanged = false;
-    for (let i = 0; i < newItems.length; i++) {
-      if (newItems[i].description) {
-        const prod = newItems[i].product_id ? products.find(p => p.id === newItems[i].product_id) : null;
-        if (prod?.description_ar) {
-          newItems[i].description_ar = prod.description_ar;
-          itemsChanged = true;
-        } else {
-          const trans = await translateSingle(newItems[i].description);
-          if (trans) {
-            newItems[i].description_ar = trans;
-            itemsChanged = true;
-          }
-        }
+    // 2. Items. Results are collected by row id and merged into the CURRENT items afterwards, so edits typed,
+    // rows added/removed or reordered while the (slow) translation runs are never overwritten or mis-targeted.
+    const arById = new Map<string, string>();
+    for (const it of [...items]) {
+      if (!it.description) continue;
+      const prod = it.product_id ? products.find(p => p.id === it.product_id) : null;
+      if (prod?.description_ar) {
+        arById.set(it.id, prod.description_ar);
+      } else {
+        const trans = await translateSingle(it.description);
+        if (trans) arById.set(it.id, trans);
       }
     }
-    if (itemsChanged) setItems(newItems);
+    if (arById.size) {
+      setItems(prev => prev.map(i => arById.has(i.id) ? { ...i, description_ar: arById.get(i.id)! } : i));
+    }
 
     // 3. Terms
     if (note) {
@@ -1191,6 +1198,8 @@ export default function QuoteForm() {
   const handleProductAutoTranslate = async (index: number, text: string, currentAr: string, force = true) => {
     if (translationMode !== 'auto') return;
     if (!text) return;
+    // Remember WHICH row this is (by id): the user may reorder or delete rows while the request is in flight.
+    const rowId = items[index]?.id;
     // Mark row as translating
     setTranslatingRows(prev => { const s = new Set(prev); s.add(index); return s; });
     const clearIndicator = () => setTranslatingRows(prev => { const s = new Set(prev); s.delete(index); return s; });
@@ -1207,7 +1216,8 @@ export default function QuoteForm() {
         if (res.ok) {
           const data = await res.json();
           if (data.translation) {
-            updateItem(index, 'description_ar', data.translation);
+            if (rowId) setItems(prev => prev.map(i => i.id === rowId ? { ...i, description_ar: data.translation } : i));
+            else updateItem(index, 'description_ar', data.translation);
           } else if (tries < 2) {
             // Empty result — retry once after a short delay
             await new Promise(r => setTimeout(r, 700));
@@ -1304,6 +1314,7 @@ export default function QuoteForm() {
       setType(data.type || 'Quotation');
       setVersion(data.version || 1);
       setVatRate(parsedDraft?.vatRate !== undefined ? parsedDraft.vatRate : (data.vat_rate !== undefined ? data.vat_rate : 15));
+      setCurrency(parsedDraft?.currency || data.currency || 'SAR');
       setMarkup(parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8));
       setPayment(pick(parsedDraft?.payment, data.payment, dt.payment || ''));
       setPaymentAr(pick(parsedDraft?.paymentAr, data.payment_ar, dt.paymentAr || ''));
@@ -1489,6 +1500,7 @@ export default function QuoteForm() {
     setStatus('Draft');
     setType('Quotation');
     setVatRate(15);
+    setCurrency('SAR');
     setAuthorName(user.name || user.username);
     setAuthorId(null);
     setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
@@ -1521,6 +1533,7 @@ export default function QuoteForm() {
 
     localStorage.removeItem(DRAFT_KEY);
     setSaveStatus('saved');
+    setHasUnsavedRecalledEdits(false);
     setLastSavedTime(null);
 
     // Keep isClearingRef active across render cycles and router updates
@@ -1672,18 +1685,28 @@ export default function QuoteForm() {
     });
   };
 
+  const pushHistory = (snapshot: QuoteItem[]) => setItemsHistory(h => [...h, snapshot].slice(-20));
+  const blankItem = (): QuoteItem => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 });
+
   const addItem = () => {
-    setItems([...items, { id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+    pushHistory(items);
+    // Functional update: two quick clicks (or an async translation landing at the same time) cannot drop a row.
+    setItems(prev => [...prev, blankItem()]);
   };
 
   const removeItem = (index: number) => {
-    if (!window.confirm('Are you sure you want to remove this item?')) return;
-    const newItems = items.filter((_, i) => i !== index);
-    setItems(newItems.length ? newItems : [{ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
+    if (!window.confirm('Are you sure you want to remove this item? (Ctrl+Z undoes it)')) return;
+    pushHistory(items);
+    const targetId = items[index]?.id;
+    setItems(prev => {
+      const next = prev.filter(i => i.id !== targetId);
+      return next.length ? next : [blankItem()];
+    });
   };
 
   const moveItemUp = (index: number) => {
     if (index === 0) return;
+    pushHistory(items);
     setItems(prevItems => {
       const newItems = [...prevItems];
       const temp = newItems[index - 1];
@@ -1695,6 +1718,7 @@ export default function QuoteForm() {
 
   const moveItemDown = (index: number) => {
     if (index === items.length - 1) return;
+    pushHistory(items);
     setItems(prevItems => {
       const newItems = [...prevItems];
       const temp = newItems[index + 1];
@@ -1816,6 +1840,7 @@ export default function QuoteForm() {
       status,
       type,
       vat_rate: vatRate,
+      currency,
       markup: markup,
       author_name: authorName,
       author_id: authorId,
@@ -1858,6 +1883,7 @@ export default function QuoteForm() {
         setVersion(data.version || 1); // Update local version lock to the newly saved version
         setIsRecorded(true);
         setSaveStatus('saved');
+        setHasUnsavedRecalledEdits(false);
         setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         alert(recallQuoteId === activeQuoteId ? 'Quote updated successfully!' : `Quote data (${activeQuoteId}) is recorded to Tracking section!`);
         localStorage.removeItem(DRAFT_KEY); // clear local draft since officially recorded
@@ -1958,7 +1984,7 @@ export default function QuoteForm() {
       quoteId: idUnlocked ? quoteId : '',
       isRecorded,
       idUnlocked,
-      date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup, authorName, authorId,
+      date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, currency, markup, authorName, authorId,
       selectedCustomerId, selectedCustomer, customerSearch,
       note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
       manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1968,10 +1994,17 @@ export default function QuoteForm() {
       savedAt: new Date().toISOString(),
     };
 
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch (e) {
+      // Storage full / blocked (private window): keep working, but do not claim the draft was cached.
+      console.warn('Could not cache draft locally', e);
+      setSaveStatus('unsaved');
+      return;
+    }
     setSaveStatus('saved');
     setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-  }, [recallQuoteId, idUnlocked, quoteId, isRecorded, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup,
+  }, [recallQuoteId, idUnlocked, quoteId, isRecorded, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, currency, markup,
     authorName, authorId, selectedCustomerId, selectedCustomer, customerSearch,
     note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
     manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -1980,6 +2013,7 @@ export default function QuoteForm() {
     subtotal, tax, grandTotal]);
 
   useEffect(() => {
+    if (!isInitialLoadRef.current && !isClearingRef.current && recallQuoteId) setHasUnsavedRecalledEdits(true);
     if (isInitialLoadRef.current || isClearingRef.current || recallQuoteId) return;
 
     setSaveStatus('unsaved');
@@ -1997,9 +2031,14 @@ export default function QuoteForm() {
 
   // Flush local cache on unload or tab close
   useEffect(() => {
-    const handleBeforeUnload = () => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId) {
         cacheDraftLocally();
+      }
+      // Edits to a recalled quote exist only in memory: ask before the tab closes / reloads.
+      if (recallQuoteId && hasUnsavedRecalledEdits) {
+        e.preventDefault();
+        e.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -2009,7 +2048,7 @@ export default function QuoteForm() {
         cacheDraftLocally();
       }
     };
-  }, [cacheDraftLocally, recallQuoteId]);
+  }, [cacheDraftLocally, recallQuoteId, hasUnsavedRecalledEdits]);
 
   // ── TEMPLATES ─────────────────────────────────────────────────────────────────
   const loadTemplates = () => {
@@ -4016,7 +4055,7 @@ export default function QuoteForm() {
                 <div className="grid grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base text-up">
                   <div className="font-bold">SUBTOTAL</div>
                   <div className="flex justify-between items-center font-mono font-bold">
-                    <span>SAR</span>
+                    <span>{currency}</span>
                     <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>
@@ -4046,15 +4085,15 @@ export default function QuoteForm() {
                           className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-gray-200 hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
                           title={
                             discountMode === 'amount' ? "Switch to Percentage (%)" :
-                            discountMode === 'percentage' ? "Switch to Both (% & SAR)" :
-                            "Switch to Direct Amount (SAR)"
+                            discountMode === 'percentage' ? `Switch to Both (% & ${currency})` :
+                            `Switch to Direct Amount (${currency})`
                           }
                         >
-                          {discountMode === 'amount' ? 'SAR' : discountMode === 'percentage' ? '%' : 'BOTH'}
+                          {discountMode === 'amount' ? currency : discountMode === 'percentage' ? '%' : 'BOTH'}
                         </button>
                       </div>
                       <span className="text-[11px] text-gray-400 font-normal">
-                        {discountMode === 'both' ? '(% & SAR)' : discountMode === 'percentage' ? '(Percentage %)' : '(Direct SAR)'}
+                        {discountMode === 'both' ? `(% & ${currency})` : discountMode === 'percentage' ? '(Percentage %)' : `(Direct ${currency})`}
                       </span>
                     </div>
 
@@ -4081,11 +4120,11 @@ export default function QuoteForm() {
                             <span className="ml-1 font-bold text-gray-600">%</span>
                           </div>
                         ) : (
-                          <span className="text-xs text-gray-400 italic">SAR only</span>
+                          <span className="text-xs text-gray-400 italic">{currency} only</span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <span>SAR</span>
+                        <span>{currency}</span>
                         {discountMode === 'percentage' ? (
                           <span className="font-bold">{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         ) : (
@@ -4116,10 +4155,21 @@ export default function QuoteForm() {
                       DISCOUNT {(discountMode === 'percentage' || discountMode === 'both') && discountRate > 0 ? `(${discountRate}%)` : ''}
                     </div>
                     <div className="flex justify-between items-center font-mono font-bold">
-                      <span>SAR</span>
+                      <span>{currency}</span>
                       <span>{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                   </div>
+                </div>
+                <div className="print:hidden flex items-center justify-between border-b border-gray-300 p-2 text-sm">
+                  <label htmlFor="quote-currency" className="font-bold">CURRENCY</label>
+                  <select
+                    id="quote-currency"
+                    value={currency}
+                    onChange={e => setCurrency(e.target.value)}
+                    className="border border-gray-300 rounded px-1.5 py-0.5 bg-white font-mono"
+                  >
+                    {['SAR', 'AED', 'QAR', 'KWD', 'BHD', 'OMR', 'EGP', 'JOD', 'USD', 'EUR', 'GBP'].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
                 <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
                   <div className="font-bold flex items-center whitespace-nowrap">
@@ -4134,14 +4184,14 @@ export default function QuoteForm() {
                     />%
                   </div>
                   <div className="flex justify-between items-center font-mono">
-                    <span>SAR</span>
+                    <span>{currency}</span>
                     <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 border-gray-300 p-2 pt-0 pb-3 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
                   <div className="font-bold">TOTAL PACKAGE</div>
                   <div className="flex justify-between items-center font-mono font-bold text-md rounded-md bg-green-400 text-black pt-0 pb-3">
-                    <span className="mr-2">SAR</span>
+                    <span className="mr-2">{currency}</span>
                     <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>

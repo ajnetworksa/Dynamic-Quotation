@@ -27,6 +27,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function Dashboard() {
     const [quotes, setQuotes] = useState<Quote[]>([]);
+    const [chosenCurrency, setChosenCurrency] = useState('');
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -51,7 +52,11 @@ export default function Dashboard() {
     const currentMonth = monthKey(new Date());
     const thisMonthQuotes = quotes.filter(q => monthKeyOf(q.date) === currentMonth);
     // Won business (Accepted + Invoiced) counted once: a quote and the invoice/revision made from it are not both added.
-    const won: any[] = wonQuotes(quotes as any[]);
+    // Money is never added across currencies: the figures below use one currency at a time.
+    const curOf = (q: any) => q.currency || 'SAR';
+    const currencies = Array.from(new Set((quotes as any[]).map(curOf)));
+    const activeCurrency = currencies.includes(chosenCurrency) ? chosenCurrency : (currencies.includes('SAR') ? 'SAR' : currencies[0] || 'SAR');
+    const won: any[] = wonQuotes(quotes as any[]).filter(q => curOf(q) === activeCurrency);
     const sumTotal = (list: any[]) => list.reduce((s, q) => s + (Number(q.grand_total) || 0), 0);
 
     const stats = {
@@ -153,12 +158,23 @@ export default function Dashboard() {
                 </div>
             </div>
 
+            {currencies.length > 1 && canViewRevenue && (
+                <div className="flex items-center gap-2 text-sm">
+                    <label htmlFor="dash-currency" className="font-semibold text-gray-600">Currency</label>
+                    <select id="dash-currency" value={activeCurrency} onChange={e => setChosenCurrency(e.target.value)}
+                        className="border border-gray-300 rounded px-2 py-1 bg-white">
+                        {currencies.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <span className="text-gray-400">Revenue figures are shown for one currency at a time.</span>
+                </div>
+            )}
+
             {/* Stats Grid */}
             <div className={`grid grid-cols-2 ${canViewRevenue ? 'md:grid-cols-3 lg:grid-cols-6' : 'md:grid-cols-4'} gap-4`}>
                 {[
                     { label: 'Total Documents', value: stats.totalDocs, icon: <FileText size={22} />, color: 'bg-indigo-100 text-indigo-600', hide: false },
-                    { label: 'Won Revenue', value: `SAR ${stats.totalRevenue.toLocaleString()}`, icon: <CheckCircle size={22} />, color: 'bg-emerald-100 text-emerald-600', hide: !canViewRevenue },
-                    { label: 'This Month (Won)', value: `SAR ${stats.monthRevenue.toLocaleString()}`, icon: <TrendingUp size={22} />, color: 'bg-blue-100 text-blue-600', hide: !canViewRevenue },
+                    { label: 'Won Revenue', value: `${activeCurrency} ${stats.totalRevenue.toLocaleString()}`, icon: <CheckCircle size={22} />, color: 'bg-emerald-100 text-emerald-600', hide: !canViewRevenue },
+                    { label: 'This Month (Won)', value: `${activeCurrency} ${stats.monthRevenue.toLocaleString()}`, icon: <TrendingUp size={22} />, color: 'bg-blue-100 text-blue-600', hide: !canViewRevenue },
                     { label: 'This Month (Docs)', value: stats.monthCount, icon: <BarChart2 size={22} />, color: 'bg-violet-100 text-violet-600', hide: false },
                     { label: 'Pending / Draft', value: stats.pendingCount, icon: <Clock size={22} />, color: 'bg-amber-100 text-amber-600', hide: false },
                     { label: 'Lost Deals', value: stats.rejectedCount, icon: <XCircle size={22} />, color: 'bg-red-100 text-red-600', hide: false },
@@ -187,7 +203,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Monthly Revenue Bar Chart */}
                     <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <h3 className="text-lg font-bold text-gray-800 mb-5">Monthly Won Revenue (SAR)</h3>
+                        <h3 className="text-lg font-bold text-gray-800 mb-5">Monthly Won Revenue ({activeCurrency})</h3>
                         <div className="flex items-end gap-4 h-40">
                             {last6Months.map((m) => {
                                 const heightPct = maxBar > 0 ? (m.total / maxBar) * 100 : 0;
@@ -196,7 +212,7 @@ export default function Dashboard() {
                                     <div key={m.key} className="flex-1 flex flex-col items-center gap-1 group relative">
                                         {/* Tooltip */}
                                         <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                                            SAR {m.total.toLocaleString()}
+                                            {activeCurrency} {m.total.toLocaleString()}
                                         </div>
                                         <div className="w-full rounded-t-md transition-all duration-300"
                                             style={{
@@ -275,7 +291,7 @@ export default function Dashboard() {
                                 </div>
                                 <div className="text-right flex flex-col items-end ml-4">
                                     {canViewRevenue && (
-                                        <div className="font-mono font-bold text-gray-900 whitespace-nowrap group-hover:text-indigo-700 transition-colors">SAR {quote.grand_total?.toLocaleString()}</div>
+                                        <div className="font-mono font-bold text-gray-900 whitespace-nowrap group-hover:text-indigo-700 transition-colors">{curOf(quote)} {quote.grand_total?.toLocaleString()}</div>
                                     )}
                                     <div className="text-xs text-gray-400 mt-1">{quote.date}</div>
                                     <button
@@ -315,7 +331,7 @@ export default function Dashboard() {
                                                 <span className="text-sm font-medium text-gray-800 truncate max-w-[140px]" title={name}>{name}</span>
                                             </div>
                                             <span className="text-xs font-mono font-bold text-gray-600 whitespace-nowrap ml-2">
-                                                SAR {total.toLocaleString()}
+                                                {activeCurrency} {total.toLocaleString()}
                                             </span>
                                         </div>
                                         <div className="h-1.5 rounded-full bg-gray-100">

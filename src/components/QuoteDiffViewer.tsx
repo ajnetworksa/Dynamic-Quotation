@@ -1,41 +1,66 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, ArrowRight, Loader2 } from 'lucide-react';
+import { matchItems, sameValue } from '../lib/quoteDiff';
+import { formatMoney } from '../lib/money';
 
 interface DiffViewerProps {
   baseQuoteId: string;
   onClose: () => void;
 }
 
+// Small modal shell: dialog semantics, Escape closes, focus moves in and returns to the opener.
+function Modal({ labelledBy, onClose, children }: { labelledBy: string; onClose: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    ref.current?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('keydown', onKey); opener?.focus?.(); };
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={labelledBy} className="outline-none w-full flex justify-center">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export default function QuoteDiffViewer({ baseQuoteId, onClose }: DiffViewerProps) {
   const [versions, setVersions] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
   const [v1, setV1] = useState<string>('');
   const [v2, setV2] = useState<string>('');
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchVersions = async () => {
       try {
-        const res = await fetch(`/api/quotes/${baseQuoteId}/versions`, {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setVersions(data);
-          if (data.length >= 2) {
-            setV1(data[data.length - 2].quote_id); // Second to last
-            setV2(data[data.length - 1].quote_id); // Latest
-          } else if (data.length === 1) {
-            setV1(data[0].quote_id);
-            setV2(data[0].quote_id);
-          }
+        const res = await fetch(`/api/quotes/${baseQuoteId}/versions`, { signal: controller.signal });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setError(body.error || `Could not load versions (${res.status}).`);
+          return;
         }
-      } catch (err) {
-        console.error('Failed to fetch versions', err);
+        const data = await res.json();
+        // Order by revision number so "older -> newer" is right even if IDs sort oddly.
+        const rev = (id: string) => { const m = String(id).match(/-R(\d+)$/); return m ? parseInt(m[1], 10) : 0; };
+        const sorted = [...data].sort((a: any, b: any) => rev(a.quote_id) - rev(b.quote_id));
+        setVersions(sorted);
+        if (sorted.length >= 2) {
+          setV1(sorted[sorted.length - 2].quote_id); // second to last
+          setV2(sorted[sorted.length - 1].quote_id); // latest
+        }
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') setError('Network error while loading versions.');
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
     fetchVersions();
+    return () => controller.abort();
   }, [baseQuoteId]);
 
   const doc1 = versions.find(v => v.quote_id === v1);
@@ -43,116 +68,117 @@ export default function QuoteDiffViewer({ baseQuoteId, onClose }: DiffViewerProp
 
   if (isLoading) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-white p-6 rounded-lg flex items-center gap-2">
+      <Modal labelledBy="diff-title" onClose={onClose}>
+        <div className="bg-white p-6 rounded-lg flex items-center gap-2" id="diff-title">
           <Loader2 className="animate-spin text-indigo-600" /> Loading versions...
         </div>
-      </div>
+      </Modal>
     );
   }
 
-  if (versions.length < 2) {
+  if (error || versions.length < 2) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <Modal labelledBy="diff-title" onClose={onClose}>
         <div className="bg-white p-6 rounded-lg max-w-md w-full relative">
-          <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} aria-label="Close" className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
             <X size={20} />
           </button>
-          <h2 className="text-lg font-bold mb-2">Notice</h2>
-          <p className="text-gray-600">This quote has no previous revisions to compare.</p>
+          <h2 id="diff-title" className="text-lg font-bold mb-2">{error ? 'Could not compare' : 'Notice'}</h2>
+          <p className="text-gray-600">{error || 'This quote has no previous revisions to compare.'}</p>
         </div>
-      </div>
+      </Modal>
     );
   }
 
+  const cur1 = doc1?.currency || 'SAR';
+  const cur2 = doc2?.currency || 'SAR';
+  const money = (v: any, cur: string) => (typeof v === 'number' ? formatMoney(v, cur) : v ?? '—');
+
   const renderComparisonRow = (label: string, val1: any, val2: any, isCurrency = false) => {
-    const format = (v: any) => {
-      if (isCurrency) return typeof v === 'number' ? `SAR ${v.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : v;
-      return v;
-    };
-    const changed = val1 !== val2;
-    
+    const changed = !sameValue(val1, val2);
+    const show = (v: any, cur: string) => (isCurrency ? money(v, cur) : (v === null || v === undefined || v === '' ? '—' : String(v)));
     return (
       <tr className="border-b border-gray-100">
-        <td className="py-2 text-sm font-medium text-gray-500 w-1/4">{label}</td>
-        <td className={`py-2 text-sm w-3/8 ${changed ? 'bg-red-50 text-red-700' : 'text-gray-800'}`}>
-          {format(val1)}
-        </td>
-        <td className={`py-2 text-sm w-3/8 ${changed ? 'bg-green-50 text-green-700 font-medium' : 'text-gray-800'}`}>
-          {format(val2)}
-        </td>
+        <th scope="row" className="py-2 text-sm font-medium text-gray-500 w-1/4 text-left">{label}</th>
+        <td className={`py-2 px-2 text-sm w-[37.5%] ${changed ? 'bg-red-50 text-red-700' : 'text-gray-800'}`}>{show(val1, cur1)}</td>
+        <td className={`py-2 px-2 text-sm w-[37.5%] ${changed ? 'bg-green-50 text-green-700 font-medium' : 'text-gray-800'}`}>{show(val2, cur2)}</td>
       </tr>
     );
   };
 
-  const mapItems = (items1: any[], items2: any[]) => {
-    const all = [];
-    const maxLen = Math.max(items1.length, items2.length);
-    for (let i = 0; i < maxLen; i++) {
-      all.push({
-        i1: items1[i] || null,
-        i2: items2[i] || null
-      });
-    }
-    return all;
-  };
-
-  const itemPairs = (doc1 && doc2) ? mapItems(doc1.items, doc2.items) : [];
+  const itemPairs = (doc1 && doc2) ? matchItems(doc1.items || [], doc2.items || []) : [];
+  const changedCount = itemPairs.filter(p => p.status !== 'same').length;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <Modal labelledBy="diff-title" onClose={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
-        
+
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50 shrink-0">
-          <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50 shrink-0 flex-wrap gap-3">
+          <h2 id="diff-title" className="text-lg font-bold text-gray-800 flex items-center gap-2">
             Quote Version Diff
           </h2>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <select 
-                value={v1} 
+              <select
+                aria-label="Older version"
+                value={v1}
                 onChange={e => setV1(e.target.value)}
                 className="border border-gray-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
               >
                 {versions.map(v => <option key={v.quote_id} value={v.quote_id}>{v.quote_id}</option>)}
               </select>
-              <ArrowRight size={16} className="text-gray-400" />
-              <select 
-                value={v2} 
+              <ArrowRight size={16} className="text-gray-400" aria-hidden="true" />
+              <select
+                aria-label="Newer version"
+                value={v2}
                 onChange={e => setV2(e.target.value)}
                 className="border border-gray-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
               >
                 {versions.map(v => <option key={v.quote_id} value={v.quote_id}>{v.quote_id}</option>)}
               </select>
             </div>
-            <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded">
+            <button onClick={onClose} aria-label="Close" className="p-1 text-gray-400 hover:text-gray-600 rounded">
               <X size={24} />
             </button>
           </div>
         </div>
 
+        {v1 === v2 && (
+          <p role="status" className="px-6 pt-4 text-sm text-amber-700">You selected the same version on both sides, so nothing differs.</p>
+        )}
+
         {/* Content */}
         {doc1 && doc2 && (
           <div className="flex-1 overflow-auto p-6 flex flex-col gap-8">
-            
+
             {/* Header Data Diff */}
             <section>
               <h3 className="text-md font-bold text-indigo-900 mb-3 uppercase tracking-wider">Document Details</h3>
               <table className="w-full text-left">
                 <tbody>
                   {renderComparisonRow('Date', doc1.date, doc2.date)}
+                  {renderComparisonRow('Expiry', doc1.expiry_date, doc2.expiry_date)}
                   {renderComparisonRow('Status', doc1.status, doc2.status)}
+                  {renderComparisonRow('Customer', doc1.customer_name, doc2.customer_name)}
                   {renderComparisonRow('Subject', doc1.subject, doc2.subject)}
+                  {renderComparisonRow('Subtotal', doc1.subtotal, doc2.subtotal, true)}
+                  {renderComparisonRow('Discount', doc1.discount, doc2.discount, true)}
+                  {renderComparisonRow('VAT rate (%)', doc1.vat_rate, doc2.vat_rate)}
+                  {renderComparisonRow('VAT', doc1.tax, doc2.tax, true)}
                   {renderComparisonRow('Total Amount', doc1.grand_total, doc2.grand_total, true)}
+                  {renderComparisonRow('Payment terms', doc1.payment, doc2.payment)}
+                  {renderComparisonRow('Warranty', doc1.warranty, doc2.warranty)}
+                  {renderComparisonRow('Note', doc1.note, doc2.note)}
                 </tbody>
               </table>
             </section>
 
             {/* Line Items Diff */}
             <section>
-              <h3 className="text-md font-bold text-indigo-900 mb-3 uppercase tracking-wider">Line Items</h3>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <h3 className="text-md font-bold text-indigo-900 mb-1 uppercase tracking-wider">Line Items</h3>
+              <p className="text-xs text-gray-500 mb-3">{changedCount} of {itemPairs.length} line(s) differ. Lines are matched by item code or description, not by row position.</p>
+              <div className="border border-gray-200 rounded-lg overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-gray-100 border-b border-gray-200 text-gray-600">
                     <tr>
@@ -162,38 +188,20 @@ export default function QuoteDiffViewer({ baseQuoteId, onClose }: DiffViewerProp
                   </thead>
                   <tbody>
                     {itemPairs.map((pair, idx) => {
-                      const isEmpty1 = !pair.i1;
-                      const isEmpty2 = !pair.i2;
-                      const changedDesc = pair.i1?.description !== pair.i2?.description;
-                      const changedQty = pair.i1?.qty !== pair.i2?.qty;
-                      const changedPrice = pair.i1?.unit_price !== pair.i2?.unit_price;
-
+                      const { i1, i2, changed, status } = pair;
+                      const cell = (it: any, side: 'old' | 'new', cur: string) => it ? (
+                        <div className="space-y-1">
+                          <p className={`font-medium ${changed.description ? (side === 'old' ? 'text-red-700' : 'text-green-700') : 'text-gray-800'}`}>{it.description}</p>
+                          <div className="text-xs text-gray-500 flex gap-4 flex-wrap">
+                            <span className={changed.qty ? (side === 'old' ? 'text-red-600 font-bold' : 'text-green-600 font-bold') : ''}>Qty: {it.qty}{it.unit ? ` ${it.unit}` : ''}</span>
+                            <span className={changed.price ? (side === 'old' ? 'text-red-600 font-bold' : 'text-green-600 font-bold') : ''}>Price: {formatMoney(Number(it.unit_price) || 0, cur)}</span>
+                          </div>
+                        </div>
+                      ) : <span className="text-gray-400 italic">{side === 'old' ? 'Not in this version' : 'Removed'}</span>;
                       return (
                         <tr key={idx} className="border-b border-gray-200 last:border-0 hover:bg-gray-50">
-                          {/* Column 1 */}
-                          <td className={`p-3 align-top border-r ${isEmpty2 && !isEmpty1 ? 'bg-red-50' : ''}`}>
-                            {!isEmpty1 ? (
-                              <div className="space-y-1">
-                                <p className={`font-medium ${changedDesc ? 'text-red-700' : 'text-gray-800'}`}>{pair.i1.description}</p>
-                                <div className="text-xs text-gray-500 flex gap-4">
-                                  <span className={changedQty ? 'text-red-600 font-bold' : ''}>Qty: {pair.i1.qty}</span>
-                                  <span className={changedPrice ? 'text-red-600 font-bold' : ''}>Price: SAR {pair.i1.unit_price}</span>
-                                </div>
-                              </div>
-                            ) : <span className="text-gray-400 italic">No item at this row</span>}
-                          </td>
-                          {/* Column 2 */}
-                          <td className={`p-3 align-top ${isEmpty1 && !isEmpty2 ? 'bg-green-50' : ''}`}>
-                            {!isEmpty2 ? (
-                              <div className="space-y-1">
-                                <p className={`font-medium ${changedDesc ? 'text-green-700' : 'text-gray-800'}`}>{pair.i2.description}</p>
-                                <div className="text-xs text-gray-500 flex gap-4">
-                                  <span className={changedQty ? 'text-green-600 font-bold' : ''}>Qty: {pair.i2.qty}</span>
-                                  <span className={changedPrice ? 'text-green-600 font-bold' : ''}>Price: SAR {pair.i2.unit_price}</span>
-                                </div>
-                              </div>
-                            ) : <span className="text-gray-400 italic">Item removed</span>}
-                          </td>
+                          <td className={`p-3 align-top border-r ${status === 'removed' ? 'bg-red-50' : ''}`}>{cell(i1, 'old', cur1)}</td>
+                          <td className={`p-3 align-top ${status === 'added' ? 'bg-green-50' : ''}`}>{cell(i2, 'new', cur2)}</td>
                         </tr>
                       );
                     })}
@@ -205,6 +213,6 @@ export default function QuoteDiffViewer({ baseQuoteId, onClose }: DiffViewerProp
           </div>
         )}
       </div>
-    </div>
+    </Modal>
   );
 }

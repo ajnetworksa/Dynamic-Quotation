@@ -333,6 +333,7 @@ addColumnIfNotExists('quotes', 'bank_details_ar', 'TEXT');
 // `footer` was never created for fresh databases, so saving any quote failed with "no column named footer".
 addColumnIfNotExists('quotes', 'footer', 'TEXT');
 // Soft delete / recycle bin
+addColumnIfNotExists('quotes', 'currency', "TEXT DEFAULT 'SAR'");
 addColumnIfNotExists('quotes', 'deleted_at', 'TEXT');
 addColumnIfNotExists('quotes', 'deleted_by', 'TEXT');
 addColumnIfNotExists('quotes', 'retain_forever', 'INTEGER DEFAULT 0');
@@ -697,6 +698,7 @@ const QuoteSchema = z.object({
   tax: z.number().nonnegative(),
   grand_total: z.number().nonnegative(),
   vat_rate: z.number().min(0).max(100).optional().default(15),
+  currency: z.string().regex(/^[A-Z]{3}$/).optional(),
   markup: z.number().min(0).max(500).optional().default(8),
   expiry_date: z.string().nullable().optional(),
   status: z.enum(['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled']).optional().default('Draft'),
@@ -1424,7 +1426,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
       number: quote.quote_id,
       createdAt: createdAtSafe,
       validUntil: validUntilSafe,
-      currency: "SAR", // standard for legacy app
+      currency: quote.currency || "SAR",
       subject: (draftData?.subject !== undefined ? draftData.subject : quote.subject) || "",
       subjectAr: (draftData?.subjectAr !== undefined ? draftData.subjectAr : quote.subject_ar) || "",
       noteHeader: (draftData?.noteHeader !== undefined ? draftData.noteHeader : quote.note_header) || "NOTE:",
@@ -1574,7 +1576,7 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
       number: quote.quote_id || "DRAFT",
       createdAt: quote.date || new Date().toISOString().slice(0, 10),
       validUntil: quote.expiry_date || "",
-      currency: "SAR",
+      currency: quote.currency || "SAR",
       subject: quote.subject || "",
       subjectAr: quote.subject_ar || "",
       noteHeader: quote.note_header || "NOTE:",
@@ -2004,7 +2006,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    author_name, author_id, shared_with, version, force, is_new,
+    author_name, author_id, shared_with, version, force, is_new, currency,
     show_note, show_payment, show_warranty, show_manpower, show_mobilization, show_duration, show_bank_details, show_custom_field
   } = req.body;
   const shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
@@ -2257,6 +2259,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       }
     })();
     try { db.prepare('DELETE FROM id_reservations WHERE quote_id = ?').run(quote_id); } catch { }
+    if (currency) { try { db.prepare('UPDATE quotes SET currency = ? WHERE quote_id = ?').run(currency, quote_id); } catch { } }
     res.json({ success: true, version: finalVersion });
   } catch (error: any) {
     if (error.message === 'VERSION_CONFLICT') {
