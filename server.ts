@@ -89,31 +89,34 @@ const openai = new OpenAI({
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 5 } });
 
 // ── SECURITY: HTTP headers ────────────────────────────────────────────────────
-// helmet() automatically sets a suite of security headers, including:
-//   • X-Content-Type-Options: nosniff   (prevents MIME-sniffing attacks)
-//   • X-Frame-Options: SAMEORIGIN       (prevents clickjacking)
-//   • X-XSS-Protection                  (legacy XSS filter for older browsers)
-//   • Removes the "X-Powered-By: Express" header that leaks tech info
-//
-// To allow iframing from a specific origin, remove helmet() and configure manually.
+// helmet() sets a suite of security headers (nosniff, frame protection, no X-Powered-By ...).
+// Content-Security-Policy is ENFORCED in production (browsers refuse inline/third-party scripts, which blocks XSS payloads).
+// The single inline script in index.html (theme before first paint) is allowed by its SHA-256 hash, computed at startup,
+// so editing that script needs no config change. In development (Vite HMR needs inline scripts) the policy is report-only.
+const inlineScriptHashes: string[] = (() => {
+  try {
+    const distIndex = [fileURLToPath(new URL('./dist/index.html', import.meta.url)), path.resolve(process.cwd(), 'dist', 'index.html')].find(f => fs.existsSync(f));
+    if (!distIndex) return [];
+    const html = fs.readFileSync(distIndex, 'utf8');
+    return [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)]
+      .filter(m => m[1].trim().length > 0)
+      .map(m => `'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`);
+  } catch { return []; }
+})();
+const enforceCsp = process.env.NODE_ENV === 'production' && process.env.CSP_REPORT_ONLY !== 'true';
 app.use(helmet({
-  // Content-Security-Policy is disabled here because html2canvas & jsPDF
-  // load fonts and images from data: URLs which a strict CSP would block.
-  // If you are not using the PDF export in the browser, you can enable this.
-  // Report-only: browsers log violations in the console but nothing is blocked, so this cannot break the app.
-  // After a release with a clean console, change reportOnly to false to enforce it.
   contentSecurityPolicy: {
-    reportOnly: true,
+    reportOnly: !enforceCsp,
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", ...inlineScriptHashes],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:', 'blob:'],
       fontSrc: ["'self'", 'data:'],
       connectSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameAncestors: ["'self'"],
-      upgradeInsecureRequests: null, // not valid in a report-only policy (browsers log a console error)
+      upgradeInsecureRequests: null, // would force https on plain-http LAN installs
     },
   },
 }));
