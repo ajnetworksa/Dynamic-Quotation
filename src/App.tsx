@@ -10,10 +10,12 @@ import {
   Settings as SettingsIcon, LogOut, Shield,
   LayoutDashboard, KeyRound, X, ChevronDown,
   User, CheckCircle2, Lock, Eye, EyeOff,
-  Moon, Sun, Kanban, Truck, Trash2
+  Moon, Sun, Kanban, Truck, Trash2, ClipboardList
 } from 'lucide-react';
 import KanbanBoard from './components/KanbanBoard';
 import { RecycleBin } from './components/RecycleBin';
+import AuditLog from './components/AuditLog';
+import SecurityModal from './components/SecurityModal';
 import QuoteForm from './components/QuoteForm';
 import Dashboard from './components/Dashboard';
 import ProductDB from './components/ProductDB';
@@ -345,6 +347,7 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
   const [open, setOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
+  const [showSecurity, setShowSecurity] = useState(false);
   const [showPermissions, setShowPermissions] = useState(false);
   const [globalShowFeatureAccess, setGlobalShowFeatureAccess] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
@@ -489,6 +492,19 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
               )}
 
               <button
+                onClick={() => { setOpen(false); setShowSecurity(true); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-indigo-50 transition-colors text-left group mt-1"
+              >
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-200 transition-colors">
+                  <Shield size={15} className="text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Security</p>
+                  <p className="text-[10px] text-gray-400">Two-factor login and signed-in devices</p>
+                </div>
+              </button>
+
+              <button
                 onClick={() => { setOpen(false); handleLogout(); }}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-red-50 transition-colors text-left group mt-1"
               >
@@ -507,6 +523,7 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
 
       {showProfile && <ProfileModal user={user} onClose={() => setShowProfile(false)} />}
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
+      {showSecurity && <SecurityModal onClose={() => setShowSecurity(false)} />}
     </>
   );
 }
@@ -541,6 +558,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 )}
                 {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
                   <NavItem to="/recycle-bin" icon={Trash2} label="Recycle Bin" />
+                )}
+                {(user?.role === 'admin' || user?.permissions?.canViewAuditLog) && (
+                  <NavItem to="/audit-log" icon={ClipboardList} label="Audit Log" />
                 )}
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                   <NavItem to="/users" icon={Shield} label="Users" />
@@ -598,6 +618,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               <Route path="/quote" element={null} />
               {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
                 <Route path="/recycle-bin" element={<RecycleBin />} />
+              )}
+              {(user?.role === 'admin' || user?.permissions?.canViewAuditLog) && (
+                <Route path="/audit-log" element={<AuditLog />} />
               )}
               {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                 <Route path="/users" element={<UsersDB />} />
