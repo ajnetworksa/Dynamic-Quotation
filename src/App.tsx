@@ -66,7 +66,7 @@ function NavItem({ to, icon: Icon, label }: { to: string; icon: any; label: stri
     <Link
       to={to}
       aria-current={isActive ? 'page' : undefined}
-      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
+      className={`flex items-center gap-2 px-3 xl:px-4 py-2 rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
         isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
       }`}
     >
@@ -522,14 +522,14 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
       <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <div className="bg-indigo-600 p-2 rounded-lg">
                 <FileText className="text-white" size={24} />
               </div>
-              <h1 className="text-xl font-bold text-gray-900">AJ Network Solutions</h1>
+              <h1 className="text-xl font-bold text-gray-900 whitespace-nowrap">AJ Network Solutions</h1>
             </div>
-            <div className="flex items-center gap-4 w-full md:w-auto">
-              <nav aria-label="Main" className="flex gap-2 overflow-x-auto flex-1 md:flex-none pb-2 md:pb-0 scrollbar-hide items-center">
+            <div className="flex items-center gap-2 w-full md:w-auto md:flex-1 md:min-w-0 md:justify-end">
+              <nav aria-label="Main" className="flex gap-1 overflow-x-auto flex-1 min-w-0 pb-2 md:pb-0 scrollbar-hide items-center">
                 <NavItem to="/" icon={LayoutDashboard} label="Dashboard" />
                 <NavItem to="/quote" icon={FileText} label="Docs" />
                 <NavItem to="/products" icon={Database} label="Product DB" />
@@ -575,7 +575,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
       </header>
 
       <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full outline-none">
-        <div style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
+        <div className="max-md:overflow-x-auto" style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
           <QuoteForm />
         </div>
         <AnimatePresence mode="wait">

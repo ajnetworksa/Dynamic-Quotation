@@ -23,6 +23,7 @@ import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import nodemailer from 'nodemailer';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -108,6 +109,7 @@ app.use(helmet({
       connectSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameAncestors: ["'self'"],
+      upgradeInsecureRequests: null, // not valid in a report-only policy (browsers log a console error)
     },
   },
 }));
@@ -3830,7 +3832,17 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static('dist'));
+    // Serve the built frontend from ./dist next to this file (works from any working directory) ...
+    const distDir = fs.existsSync(fileURLToPath(new URL('./dist', import.meta.url)))
+      ? fileURLToPath(new URL('./dist', import.meta.url))
+      : path.resolve(process.cwd(), 'dist');
+    app.use(express.static(distDir));
+    // ... and fall back to index.html for client-side routes (/tracking, /quote ...). Without this a page refresh or a
+    // bookmarked deep link returned "Cannot GET /tracking". Unknown /api paths still get a JSON 404.
+    app.get(/^\/(?!api\/).*/, (req, res) => {
+      res.sendFile(path.join(distDir, 'index.html'));
+    });
+    app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
   }
 
   httpServer.listen(PORT, '0.0.0.0', () => {
