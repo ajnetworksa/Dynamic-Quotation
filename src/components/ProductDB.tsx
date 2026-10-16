@@ -1,4 +1,5 @@
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2, CheckSquare, Square, Languages } from 'lucide-react';
 
@@ -73,10 +74,10 @@ export default function ProductDB() {
         setShowAddSupplier(false);
       } else {
         const d = await res.json();
-        alert(d.error || 'Failed to add supplier');
+        toast(d.error || 'Failed to add supplier');
       }
     } catch (e) {
-      alert('Network error');
+      toast('Network error');
     } finally {
       setIsSavingSupplier(false);
     }
@@ -119,7 +120,7 @@ export default function ProductDB() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this product?')) return;
+    if (!await confirmAsync('Are you sure you want to delete this product?')) return;
     await fetch(`/api/products/${id}`, { method: 'DELETE' });
     fetchProducts();
   };
@@ -138,7 +139,7 @@ export default function ProductDB() {
     else setSelectedIds(new Set(currentItems.map(p => p.id)));
   };
   const handleBulkDelete = async () => {
-    if (!confirm(`Delete ${selectedIds.size} selected product(s)? This cannot be undone.`)) return;
+    if (!await confirmAsync(`Delete ${selectedIds.size} selected product(s)? This cannot be undone.`)) return;
     // One request / one transaction (the old loop sent a DELETE per row and could stop half-way silently).
     try {
       const res = await fetch('/api/products/bulk-delete', {
@@ -148,11 +149,11 @@ export default function ProductDB() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        alert(body.error || 'Bulk delete failed. Nothing was deleted.');
+        toast(body.error || 'Bulk delete failed. Nothing was deleted.');
         return;
       }
     } catch {
-      alert('Network error. Nothing was deleted.');
+      toast('Network error. Nothing was deleted.');
       return;
     }
     setSelectedIds(new Set());
@@ -411,7 +412,7 @@ export default function ProductDB() {
 
       {/* ── Price Sync Modal ────────────────────────────────────────────── */}
       {showPriceSync && (
-        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-purple-600 to-indigo-600">
@@ -460,10 +461,10 @@ export default function ProductDB() {
                           setSyncData(data);
                         } else {
                           const err = await res.json();
-                          alert(err.error || 'Failed to extract data');
+                          toast(err.error || 'Failed to extract data');
                         }
                       } catch (err) {
-                        alert('Network error during AI extraction');
+                        toast('Network error during AI extraction');
                       } finally {
                         setIsSyncing(false);
                       }
@@ -564,15 +565,15 @@ export default function ProductDB() {
                           body: JSON.stringify({ updates: syncData.filter(d => d.id) })
                         });
                         if (res.ok) {
-                          alert('Prices updated successfully!');
+                          toast('Prices updated successfully!');
                           setShowPriceSync(false);
                           setSyncData([]);
                           fetchProducts();
                         } else {
-                          alert('Failed to apply updates');
+                          toast('Failed to apply updates');
                         }
                       } catch (err) {
-                        alert('Network error during sync');
+                        toast('Network error during sync');
                       } finally {
                         setIsSyncing(false);
                       }
@@ -590,7 +591,7 @@ export default function ProductDB() {
       )}
       {/* ── Product Modal (Add / Edit) ────────────────────────────────────────────── */}
       {(isAdding || isEditing !== null) && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             {/* Header */}
             <div className={`px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r ${isAdding ? 'from-indigo-600 to-purple-600' : 'from-blue-600 to-cyan-600'}`}>
@@ -624,7 +625,7 @@ export default function ProductDB() {
                     type="button"
                     onClick={() => handleAutoTranslate(editForm.description || '')}
                     className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 hover:underline"
-                    title="Translate English product name to Arabic"
+                    title="Translate English product name to Arabic" aria-label="Translate English product name to Arabic"
                   >
                     <Languages size={12} /> Translate
                   </button>

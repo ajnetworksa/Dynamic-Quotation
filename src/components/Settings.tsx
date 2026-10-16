@@ -1,4 +1,5 @@
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
 import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages, Sparkles, Type } from 'lucide-react';
 import ExcelJS from 'exceljs';
@@ -419,7 +420,7 @@ export default function Settings() {
   };
 
   const handleClearLogs = async () => {
-    if (!confirm('Are you sure you want to clear all system logs?')) return;
+    if (!await confirmAsync('Are you sure you want to clear all system logs?')) return;
     try {
       const res = await fetch('/api/admin/logs', {
         method: 'DELETE',
@@ -497,11 +498,11 @@ export default function Settings() {
     }
   };
 
-  const handleImportDB = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportDB = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm('WARNING: Importing a database backup will overwrite all current data. Do you want to proceed?')) {
+    if (!await confirmAsync('WARNING: Importing a database backup will overwrite all current data. Do you want to proceed?')) {
       e.target.value = '';
       return;
     }
@@ -569,9 +570,9 @@ export default function Settings() {
           if (errorData.details && errorData.details.length > 0) {
             console.table(errorData.details.map((d: string) => ({ error: d })));
             const detailLines = errorData.details.map((d: string) => `• ${d}`).join('\n');
-            alert(`Import failed — the following rows could not be imported:\n\n${detailLines}`);
+            toast(`Import failed — the following rows could not be imported:\n\n${detailLines}`);
           } else {
-            alert(`Import failed: ${errorData.error || 'Unknown error'}`);
+            toast(`Import failed: ${errorData.error || 'Unknown error'}`);
           }
           setImportStatus('error');
           setTimeout(() => setImportStatus('idle'), 5000);
@@ -675,7 +676,7 @@ export default function Settings() {
         } else {
           const errData = await res.json().catch(() => ({}));
           console.error('[Settings] Stamp upload failed:', res.status, res.statusText, errData);
-          alert(`Stamp upload failed: ${res.status} ${res.statusText}. ${errData.error || ''}`);
+          toast(`Stamp upload failed: ${res.status} ${res.statusText}. ${errData.error || ''}`);
           setStampImageStatus('error');
           setTimeout(() => setStampImageStatus('idle'), 5000);
         }
@@ -818,14 +819,14 @@ export default function Settings() {
     }
   };
 
-  const handleResetDocumentTerms = () => {
-    if (confirm('Clear all Document Terms & Conditions fields?')) {
+  const handleResetDocumentTerms = async () => {
+    if (await confirmAsync('Clear all Document Terms & Conditions fields?')) {
       setDocumentTerms(DEFAULT_DOCUMENT_TERMS);
     }
   };
 
   const handleBulkUpdateAllQuotes = async () => {
-    const confirmUpdate = window.confirm(
+    const confirmUpdate = await confirmAsync(
       '⚠️ ADMIN BULK DATABASE UPDATE:\n\nThis will update the Notes and Terms (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details, and Footer) across ALL quotations in the database to match the current fields shown here.\n\nQuote items, pricing, discounts, dates, and customer details will NOT be changed.\n\nAre you sure you want to proceed?'
     );
     if (!confirmUpdate) return;
@@ -849,12 +850,12 @@ export default function Settings() {
       const data = await res.json();
       if (res.ok && data.success) {
         setBulkUpdateResult(`Successfully updated ${data.count} quotation(s) in the database!`);
-        alert(`Success! Updated ${data.count} quotation(s) across the database with the current document terms.`);
+        toast(`Success! Updated ${data.count} quotation(s) across the database with the current document terms.`);
       } else {
         throw new Error(data.error || 'Failed to bulk update quotes');
       }
     } catch (err: any) {
-      alert(`Error updating quotes: ${err.message}`);
+      toast(`Error updating quotes: ${err.message}`);
     } finally {
       setBulkUpdatingQuotes(false);
     }
@@ -1011,7 +1012,7 @@ export default function Settings() {
       const res = await fetch('/api/admin/backup');
       if (!res.ok) {
         const errorData = await res.json();
-        alert(`Failed to download backup: ${errorData.error}`);
+        toast(`Failed to download backup: ${errorData.error}`);
         return;
       }
       const blob = await res.blob();
@@ -1025,7 +1026,7 @@ export default function Settings() {
       document.body.removeChild(a);
     } catch (error) {
       console.error('Download error:', error);
-      alert('Error downloading backup');
+      toast('Error downloading backup');
     }
   };
 
@@ -1037,7 +1038,7 @@ export default function Settings() {
       });
       if (!res.ok) {
         const errorData = await res.json();
-        alert(`Failed to download ZIP backup: ${errorData.error}`);
+        toast(`Failed to download ZIP backup: ${errorData.error}`);
         setZipStatus('error');
         setTimeout(() => setZipStatus('idle'), 5000);
         return;
@@ -1086,9 +1087,9 @@ export default function Settings() {
       });
       if (res.ok) {
         fetchAutoBackups();
-        alert('Daily backup snapshot created successfully!');
+        toast('Daily backup snapshot created successfully!');
       } else {
-        alert('Failed to trigger daily backup snapshot.');
+        toast('Failed to trigger daily backup snapshot.');
       }
     } catch (err) {
       console.error('Error triggering daily backup snapshot:', err);
@@ -1101,7 +1102,7 @@ export default function Settings() {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       if (!res.ok) {
-        alert('Failed to download automated backup file.');
+        toast('Failed to download automated backup file.');
         return;
       }
       const blob = await res.blob();
@@ -1146,7 +1147,7 @@ export default function Settings() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm('CRITICAL WARNING: Restoring from a Complete System Archive (ZIP) will completely overwrite your current database and settings. This cannot be undone. Are you sure you want to proceed?')) {
+    if (!await confirmAsync('CRITICAL WARNING: Restoring from a Complete System Archive (ZIP) will completely overwrite your current database and settings. This cannot be undone. Are you sure you want to proceed?')) {
       e.target.value = '';
       return;
     }
@@ -1163,17 +1164,17 @@ export default function Settings() {
       });
       if (res.ok) {
         setRestoreStatus('success');
-        alert('System restored successfully! The page will now reload to apply all restored database changes.');
+        toast('System restored successfully! The page will now reload to apply all restored database changes.');
         window.location.reload();
       } else {
         const errorData = await res.json();
-        alert(`System restore failed: ${errorData.error || 'Unknown error'}`);
+        toast(`System restore failed: ${errorData.error || 'Unknown error'}`);
         setRestoreStatus('error');
         setTimeout(() => setRestoreStatus('idle'), 5000);
       }
     } catch (err) {
       console.error('ZIP restore error:', err);
-      alert('System restore failed due to a network error.');
+      toast('System restore failed due to a network error.');
       setRestoreStatus('error');
       setTimeout(() => setRestoreStatus('idle'), 5000);
     } finally {
@@ -1200,7 +1201,7 @@ export default function Settings() {
   };
 
   const handlePerformUpdate = async () => {
-    if (!confirm('Are you sure you want to update the system? The server will restart and you will be logged out.')) return;
+    if (!await confirmAsync('Are you sure you want to update the system? The server will restart and you will be logged out.')) return;
     setPerformUpdateStatus('loading');
     setUpdateError(null);
     try {
@@ -1211,7 +1212,7 @@ export default function Settings() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setPerformUpdateStatus('success');
-        alert('Update successful! The system is restarting. Please wait a few seconds and then reload the page.');
+        toast('Update successful! The system is restarting. Please wait a few seconds and then reload the page.');
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         window.location.reload();
@@ -1490,7 +1491,7 @@ export default function Settings() {
                       <button
                         onClick={() => handleDownloadAutoBackup(bk.filename)}
                         className="p-1.5 bg-white text-indigo-600 hover:text-indigo-800 rounded-lg hover:shadow-sm border border-gray-200 transition-all"
-                        title="Download Snapshot"
+                        title="Download Snapshot" aria-label="Download Snapshot"
                       >
                         <Download size={15} />
                       </button>
@@ -1798,7 +1799,7 @@ export default function Settings() {
                         saveStampDimensions(stampWidth, newH);
                       }}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all"
-                      title="Automatically calculate height so the stamp graphic forms a perfect 1:1 circle"
+                      title="Automatically calculate height so the stamp graphic forms a perfect 1:1 circle" aria-label="Automatically calculate height so the stamp graphic forms a perfect 1:1 circle"
                     >
                       <Sparkles size={14} /> Auto-Fix to 1:1 Circle
                     </button>
@@ -2179,7 +2180,7 @@ export default function Settings() {
               onClick={handleAutoTranslateTerms}
               disabled={translatingTerms}
               className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-gray-100 text-gray-700 text-sm font-medium rounded-lg transition-colors border border-gray-300 disabled:opacity-50"
-              title="Auto-translate English text to Arabic"
+              title="Auto-translate English text to Arabic" aria-label="Auto-translate English text to Arabic"
             >
               <RefreshCw size={15} className={translatingTerms ? "animate-spin" : ""} />
               {translatingTerms ? 'Translating...' : 'Translate to Arabic'}
@@ -2188,7 +2189,7 @@ export default function Settings() {
               type="button"
               onClick={handleResetDocumentTerms}
               className="px-3 py-2 bg-white hover:bg-red-50 hover:text-red-600 text-gray-600 text-sm font-medium rounded-lg transition-colors border border-gray-300"
-              title="Clear all fields"
+              title="Clear all fields" aria-label="Clear all fields"
             >
               Clear Fields
             </button>
@@ -2207,7 +2208,7 @@ export default function Settings() {
                 onClick={handleBulkUpdateAllQuotes}
                 disabled={bulkUpdatingQuotes}
                 className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
-                title="Update all existing quotes in the database with these terms"
+                title="Update all existing quotes in the database with these terms" aria-label="Update all existing quotes in the database with these terms"
               >
                 {bulkUpdatingQuotes ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}
                 <span>{bulkUpdatingQuotes ? 'Updating DB...' : 'Update All Quotes in DB'}</span>
@@ -2264,7 +2265,7 @@ export default function Settings() {
                 type="button"
                 onClick={() => handleWorkflowToggle('updateTermsButton')}
                 className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ml-4 ${workflowVisibility.updateTermsButton ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}
-                title={workflowVisibility.updateTermsButton ? 'Click to hide Update Terms button on quotes' : 'Click to show Update Terms button on quotes'}
+                title={workflowVisibility.updateTermsButton ? 'Click to hide Update Terms button on quotes' : 'Click to show Update Terms button on quotes'} aria-label={workflowVisibility.updateTermsButton ? 'Click to hide Update Terms button on quotes' : 'Click to show Update Terms button on quotes'}
               >
                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${workflowVisibility.updateTermsButton ? 'translate-x-6' : 'translate-x-1'}`} />
               </button>
@@ -3257,31 +3258,6 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* Inspection Protection Toggle within Developer Section */}
-        <div className="px-6 py-4 bg-purple-50/50 border-t border-purple-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Shield size={18} className="text-purple-600" />
-            <div>
-              <p className="text-sm font-bold text-gray-800">Source Inspection Protection</p>
-              <p className="text-xs text-gray-500">Disable Right-Click and DevTools shortcuts (F12, Ctrl+Shift+I) for non-admins.</p>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <button
-              onClick={() => handleWorkflowToggle('inspectionProtection' as any)}
-              className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none ${
-                workflowVisibility.inspectionProtection ? 'bg-purple-600' : 'bg-gray-200'
-              }`}
-            >
-              <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
-                workflowVisibility.inspectionProtection ? 'translate-x-8' : 'translate-x-1'
-              }`} />
-            </button>
-            <span className={`text-[10px] font-bold ${workflowVisibility.inspectionProtection ? 'text-purple-700' : 'text-gray-400'}`}>
-              {workflowVisibility.inspectionProtection ? 'ACTIVE' : 'DISABLED'}
-            </span>
-          </div>
-        </div>
       </div>
       
       {/* System Update Section */}

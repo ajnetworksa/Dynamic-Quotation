@@ -1,4 +1,5 @@
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -61,14 +62,14 @@ export default function CustomerDB() {
       });
       if (!res.ok) {
         const data = await res.json();
-        alert('Failed to add customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
+        toast('Failed to add customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
         return;
       }
       setIsAdding(false);
       setEditForm({});
       fetchCustomers();
     } catch (e) {
-      alert('Network error occurred while adding.');
+      toast('Network error occurred while adding.');
     }
   };
 
@@ -81,19 +82,19 @@ export default function CustomerDB() {
       });
       if (!res.ok) {
         const data = await res.json();
-        alert('Failed to update customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
+        toast('Failed to update customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
         return;
       }
       setIsEditing(null);
       setEditForm({});
       fetchCustomers();
     } catch (e) {
-      alert('Network error occurred while updating.');
+      toast('Network error occurred while updating.');
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this customer?')) return;
+    if (!await confirmAsync('Are you sure you want to delete this customer?')) return;
     await fetch(`/api/customers/${id}`, { method: 'DELETE' });
     fetchCustomers();
   };
@@ -111,7 +112,7 @@ export default function CustomerDB() {
     else setSelectedIds(new Set(currentItems.map(c => c.id)));
   };
   const handleBulkDelete = async () => {
-    if (!confirm(`Delete ${selectedIds.size} selected customer(s)? This cannot be undone.`)) return;
+    if (!await confirmAsync(`Delete ${selectedIds.size} selected customer(s)? This cannot be undone.`)) return;
     // One request / one transaction (the old loop sent a DELETE per row and could stop half-way silently).
     try {
       const res = await fetch('/api/customers/bulk-delete', {
@@ -121,11 +122,11 @@ export default function CustomerDB() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        alert(body.error || 'Bulk delete failed. Nothing was deleted.');
+        toast(body.error || 'Bulk delete failed. Nothing was deleted.');
         return;
       }
     } catch {
-      alert('Network error. Nothing was deleted.');
+      toast('Network error. Nothing was deleted.');
       return;
     }
     setSelectedIds(new Set());
@@ -326,7 +327,7 @@ export default function CustomerDB() {
 
       {/* Modal for Add / Edit Customer */}
       {(isAdding || isEditing !== null) && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
             <div className="bg-emerald-600 px-4 py-3 flex items-center justify-between text-white">
               <div className="flex items-center gap-2 font-medium">

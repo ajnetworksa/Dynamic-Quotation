@@ -1,4 +1,5 @@
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search, ChevronDown, ChevronUp, Package, Copy, ArrowRight, CheckSquare, Square } from 'lucide-react';
 
@@ -46,15 +47,15 @@ export default function SupplierDB() {
     if (!editForm.name) return;
     const res = await fetch('/api/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editForm) });
     if (res.ok) { setIsAdding(false); setEditForm({}); fetchSuppliers(); }
-    else { const d = await res.json(); alert(d.error || 'Failed'); }
+    else { const d = await res.json(); toast(d.error || 'Failed'); }
   };
   const handleUpdate = async (id: number) => {
     const res = await fetch(`/api/suppliers/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editForm) });
     if (res.ok) { setIsEditing(null); setEditForm({}); fetchSuppliers(); }
-    else { const d = await res.json(); alert(d.error || 'Failed'); }
+    else { const d = await res.json(); toast(d.error || 'Failed'); }
   };
   const handleDelete = async (id: number) => {
-    if (!confirm('Delete this supplier?')) return;
+    if (!await confirmAsync('Delete this supplier?')) return;
     await fetch(`/api/suppliers/${id}`, { method: 'DELETE' });
     fetchSuppliers();
   };
@@ -70,7 +71,7 @@ export default function SupplierDB() {
       body: JSON.stringify({ ...selectedProductForEdit, item_code: productEditForm.item_code || null, supplier_name: productEditForm.supplier_name || null }),
     });
     if (res.ok) { setSelectedProductForEdit(null); fetchProducts(); }
-    else { const d = await res.json(); alert(d.error || 'Failed'); }
+    else { const d = await res.json(); toast(d.error || 'Failed'); }
   };
 
   // Multi-select helpers
@@ -116,7 +117,7 @@ export default function SupplierDB() {
       clearSelection(bulkModal.supplierId);
       fetchProducts();
     } catch (e) {
-      alert('Error during bulk operation');
+      toast('Error during bulk operation');
     } finally {
       setIsBulkLoading(false);
     }
@@ -323,7 +324,7 @@ export default function SupplierDB() {
 
     {/* ── Single Product Edit Modal ── */}
     {selectedProductForEdit && (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
           <div className="bg-indigo-600 px-4 py-3 flex items-center justify-between text-white">
             <div className="flex items-center gap-2 font-medium"><Package size={18} /> Edit Product Assignment</div>
@@ -367,7 +368,7 @@ export default function SupplierDB() {
 
     {/* ── Bulk Copy / Move Modal ── */}
     {bulkModal && (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
           <div className={`px-4 py-3 flex items-center justify-between text-white ${bulkModal.mode === 'copy' ? 'bg-emerald-600' : 'bg-amber-500'}`}>
             <div className="flex items-center gap-2 font-medium">

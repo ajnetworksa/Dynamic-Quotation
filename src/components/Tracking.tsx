@@ -1,4 +1,5 @@
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
 import { ymdOf, parseQuoteDate } from '../lib/dates';
 import { STATUS_BADGE as SHARED_BADGES, STATUSES, normalizeStatus } from '../lib/status';
 const STATUS_BADGE: Record<string, string> = SHARED_BADGES;
@@ -180,20 +181,20 @@ export default function Tracking() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        alert(body.error || 'Failed to update status.');
+        toast(body.error || 'Failed to update status.');
         return;
       }
       setSelectedIds(new Set());
       setBulkStatus('');
       fetchQuotes();
     } catch (e) {
-      alert('Failed to update status.');
+      toast('Failed to update status.');
     }
   };
 
   const handleDownloadSelectedPdfs = async () => {
     if (selectedIds.size === 0) return;
-    const isOk = confirm(`Are you sure you want to download ${selectedIds.size} PDF files? This may take a moment.`);
+    const isOk = await confirmAsync(`Are you sure you want to download ${selectedIds.size} PDF files? This may take a moment.`);
     if (!isOk) return;
 
     for (const id of selectedIds) {
@@ -219,7 +220,7 @@ export default function Tracking() {
 
   const handleDownloadSelectedExcels = async () => {
     if (selectedIds.size === 0) return;
-    const isOk = confirm(`Are you sure you want to download ${selectedIds.size} Excel files? This may take a moment.`);
+    const isOk = await confirmAsync(`Are you sure you want to download ${selectedIds.size} Excel files? This may take a moment.`);
     if (!isOk) return;
 
     // Fetch filters for logic
@@ -500,7 +501,7 @@ export default function Tracking() {
 
   const handleDownloadMergedExcel = async () => {
     if (selectedIds.size === 0) return;
-    const isOk = confirm(`Download Project Summary for ${selectedIds.size} quotes?`);
+    const isOk = await confirmAsync(`Download Project Summary for ${selectedIds.size} quotes?`);
     if (!isOk) return;
 
     // Fetch company logo from settings (try direct endpoint and fallback)
@@ -682,7 +683,7 @@ export default function Tracking() {
 
   const handleDownloadDetailedSummary = async () => {
     if (selectedIds.size === 0) return;
-    const isOk = confirm(`Download Detailed Itemized Summary for ${selectedIds.size} quotes?`);
+    const isOk = await confirmAsync(`Download Detailed Itemized Summary for ${selectedIds.size} quotes?`);
     if (!isOk) return;
 
     // Fetch filters for MU / ZM / MAN / DB
@@ -983,12 +984,12 @@ export default function Tracking() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        alert(body.error || 'Failed to update status.');
+        toast(body.error || 'Failed to update status.');
         return;
       }
       setQuotes(prev => prev.map(q => q.quote_id === quoteId ? { ...q, status: newStatus } : q));
     } catch (e) {
-      alert('Failed to update status.');
+      toast('Failed to update status.');
     }
   };
 
@@ -1021,10 +1022,10 @@ export default function Tracking() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ followup_date: followupDate, followup_note: followupNote })
       });
-      if (!res.ok) { alert('Failed to save follow-up.'); return; }
+      if (!res.ok) { toast('Failed to save follow-up.'); return; }
       setFollowupQuoteId(null);
       fetchQuotes();
-    } catch (e) { alert('Failed to save follow-up.'); }
+    } catch (e) { toast('Failed to save follow-up.'); }
   };
 
   const saveNote = async () => {
@@ -1035,14 +1036,14 @@ export default function Tracking() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quote_note: noteText })
       });
-      if (!res.ok) { alert('Failed to save note.'); return; }
+      if (!res.ok) { toast('Failed to save note.'); return; }
       setQuotes(prev => prev.map(q => q.quote_id === noteQuoteId ? { ...q, quote_note: noteText } : q));
       setNoteQuoteId(null);
-    } catch (e) { alert('Failed to save note.'); }
+    } catch (e) { toast('Failed to save note.'); }
   };
 
   const exportCSV = () => {
-    if (filtered.length === 0) return alert('No records to export');
+    if (filtered.length === 0) return toast('No records to export');
     const header = showCreatedBy
       ? ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified', 'Created By']
       : ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified'];
@@ -1271,6 +1272,7 @@ export default function Tracking() {
               <th className="p-4 border-b w-10 text-center">
                 <input
                   type="checkbox"
+                  aria-label="Select all records"
                   className="cursor-pointer"
                   checked={filtered.length > 0 && selectedIds.size === filtered.length}
                   onChange={(e) => {
@@ -1279,15 +1281,15 @@ export default function Tracking() {
                   }}
                 />
               </th>
-              <th className={thClass} onClick={() => handleSort('quote_id')}>Document ID <SortIcon col="quote_id" /></th>
-              <th className={thClass} onClick={() => handleSort('type')}>Type <SortIcon col="type" /></th>
-              <th className={thClass} onClick={() => handleSort('status')}>Status <SortIcon col="status" /></th>
-              <th className={thClass} onClick={() => handleSort('date')}>Date <SortIcon col="date" /></th>
-              <th className={thClass} onClick={() => handleSort('customer_name')}>Customer <SortIcon col="customer_name" /></th>
+              <th className={thClass} onClick={() => handleSort('quote_id')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('quote_id'); } }} aria-sort={sortKey === 'quote_id' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Document ID <SortIcon col="quote_id" /></th>
+              <th className={thClass} onClick={() => handleSort('type')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('type'); } }} aria-sort={sortKey === 'type' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Type <SortIcon col="type" /></th>
+              <th className={thClass} onClick={() => handleSort('status')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('status'); } }} aria-sort={sortKey === 'status' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Status <SortIcon col="status" /></th>
+              <th className={thClass} onClick={() => handleSort('date')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('date'); } }} aria-sort={sortKey === 'date' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Date <SortIcon col="date" /></th>
+              <th className={thClass} onClick={() => handleSort('customer_name')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('customer_name'); } }} aria-sort={sortKey === 'customer_name' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Customer <SortIcon col="customer_name" /></th>
               <th className="p-4 border-b">Subject</th>
-              <th className={thClass} onClick={() => handleSort('grand_total')}>Total Amount <SortIcon col="grand_total" /></th>
-              <th className={thClass} onClick={() => handleSort('updated_at')}>Last Modified <SortIcon col="updated_at" /></th>
-              {showCreatedBy && <th className={thClass} onClick={() => handleSort('author_username')}>Created By <SortIcon col="author_username" /></th>}
+              <th className={thClass} onClick={() => handleSort('grand_total')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('grand_total'); } }} aria-sort={sortKey === 'grand_total' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Total Amount <SortIcon col="grand_total" /></th>
+              <th className={thClass} onClick={() => handleSort('updated_at')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('updated_at'); } }} aria-sort={sortKey === 'updated_at' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Last Modified <SortIcon col="updated_at" /></th>
+              {showCreatedBy && <th className={thClass} onClick={() => handleSort('author_username')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('author_username'); } }} aria-sort={sortKey === 'author_username' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Created By <SortIcon col="author_username" /></th>}
               <th className="p-4 border-b text-right">Actions</th>
             </tr>
           </thead>
@@ -1306,11 +1308,15 @@ export default function Tracking() {
                 <tr 
                   key={quote.id} 
                   onClick={() => handleRecall(quote.quote_id)}
+                  tabIndex={0}
+                  onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleRecall(quote.quote_id); } }}
+                  aria-label={`Open ${quote.quote_id}`}
                   className={`hover:bg-gray-50 even:bg-gray-50/50 transition-colors cursor-pointer ${overdue ? 'bg-amber-50/50' : ''}`}
                 >
                   <td className="p-4 text-center cursor-default" onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
+                      aria-label={`Select ${quote.quote_id}`}
                       className="cursor-pointer"
                       checked={selectedIds.has(quote.quote_id)}
                       onChange={(e) => {
@@ -1363,7 +1369,7 @@ export default function Tracking() {
                       {quote.author_name || quote.author_username ? (
                         <button
                           onClick={e => { e.stopPropagation(); setCreatorFilter(creatorFilter === (quote.author_name || quote.author_username) ? '' : (quote.author_name || quote.author_username || '')); }}
-                          title={`Filter by ${quote.author_name || quote.author_username}`}
+                          title={`Filter by ${quote.author_name || quote.author_username}`} aria-label={`Filter by ${quote.author_name || quote.author_username}`}
                           className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold border transition-colors ${
                             creatorFilter === (quote.author_name || quote.author_username)
                               ? 'bg-indigo-600 text-white border-indigo-600'
@@ -1386,7 +1392,7 @@ export default function Tracking() {
                         <button
                           onClick={() => fetchTimeline(quote.quote_id)}
                           className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                          title="View Timeline"
+                          title="View Timeline" aria-label="View Timeline"
                         >
                           <Clock size={18} />
                         </button>
@@ -1398,7 +1404,7 @@ export default function Tracking() {
                           setFollowupNote(quote.followup_note || '');
                         }}
                         className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                        title="Set Follow-up"
+                        title="Set Follow-up" aria-label="Set Follow-up"
                       >
                         <Bell size={18} />
                       </button>
@@ -1410,21 +1416,21 @@ export default function Tracking() {
                         className={`p-1.5 rounded-lg transition-colors ${
                           quote.quote_note ? 'text-amber-600 hover:bg-amber-50 bg-amber-50/50' : 'text-gray-400 hover:bg-gray-50'
                         }`}
-                        title={quote.quote_note ? `Note: ${quote.quote_note.slice(0, 60)}…` : 'Add internal note'}
+                        title={quote.quote_note ? `Note: ${quote.quote_note.slice(0, 60)}…` : 'Add internal note'} aria-label={quote.quote_note ? `Note: ${quote.quote_note.slice(0, 60)}…` : 'Add internal note'}
                       >
                         <StickyNote size={18} />
                       </button>
                       <button
                         onClick={() => handleRecall(quote.quote_id)}
                         className="flex items-center gap-1 px-3 py-1.5 text-sm bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"
-                        title="Open in Form"
+                        title="Open in Form" aria-label="Open in Form"
                       >
                         <FileText size={16} /> Open
                       </button>
                       <button
                         onClick={() => setDiffBaseId(quote.quote_id)}
                         className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                        title="Compare Versions"
+                        title="Compare Versions" aria-label="Compare Versions"
                       >
                         <Layers size={18} />
                       </button>
@@ -1432,12 +1438,12 @@ export default function Tracking() {
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
-                            if (!confirm('Move this record to the Recycle Bin?')) return;
+                            if (!await confirmAsync('Move this record to the Recycle Bin?')) return;
                             await fetch(`/api/quotes/${quote.quote_id}`, { method: 'DELETE' });
                             fetchQuotes();
                           }}
                           className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          title="Delete Record"
+                          title="Delete Record" aria-label="Delete Record"
                         >
                           <Trash2 size={18} />
                         </button>
@@ -1532,14 +1538,14 @@ export default function Tracking() {
               <button
                 onClick={handleDownloadMergedExcel}
                 className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors flex items-center gap-2"
-                title="Download simple overview with quote IDs, clients, subjects and totals"
+                title="Download simple overview with quote IDs, clients, subjects and totals" aria-label="Download simple overview with quote IDs, clients, subjects and totals"
               >
                 <FileSpreadsheet size={16} /> Project Summary
               </button>
               <button
                 onClick={handleDownloadDetailedSummary}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-                title="Download itemized multi-quote summary with pricing and profit breakdown"
+                title="Download itemized multi-quote summary with pricing and profit breakdown" aria-label="Download itemized multi-quote summary with pricing and profit breakdown"
               >
                 <FileSpreadsheet size={16} /> Detailed Summary
               </button>
@@ -1563,7 +1569,7 @@ export default function Tracking() {
 
       {/* History / Timeline Modal */}
       {timelineQuoteId && (
-        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-end" onClick={closeTimeline}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-end" onClick={closeTimeline}>
           <div className="bg-white h-full w-full max-w-md shadow-2xl flex flex-col animate-slide-in-right" onClick={e => e.stopPropagation()}>
 
             {/* Header */}
@@ -1638,19 +1644,19 @@ export default function Tracking() {
                           <button
                             onClick={async (e) => {
                               e.stopPropagation();
-                              if (!confirm('Are you sure you want to undo this action and restore the previous state?')) return;
+                              if (!await confirmAsync('Are you sure you want to undo this action and restore the previous state?')) return;
                               try {
                                 const res = await fetch(`/api/quotes/${timelineQuoteId}/undo/${log.id}`, { method: 'POST' });
                                 if (res.ok) {
-                                  alert('Quote restored successfully!');
+                                  toast('Quote restored successfully!');
                                   fetchTimeline(timelineQuoteId!);
                                   fetchQuotes();
                                 } else {
                                   const err = await res.json();
-                                  alert('Failed to undo: ' + err.error);
+                                  toast('Failed to undo: ' + err.error);
                                 }
                               } catch (err: any) {
-                                alert('Error: ' + err.message);
+                                toast('Error: ' + err.message);
                               }
                             }}
                             className="ml-auto flex items-center gap-1 px-2 py-0.5 bg-red-50 hover:bg-red-100 text-red-600 rounded text-[10px] font-bold uppercase transition-colors"
@@ -1709,7 +1715,7 @@ export default function Tracking() {
       {/* Follow-up Modal */}
       {
         followupQuoteId && (
-          <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center">
+          <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center">
             <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
               <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2"><Bell className="text-amber-500" /> Set Follow-up</h3>
               <div className="space-y-4">
@@ -1733,7 +1739,7 @@ export default function Tracking() {
 
       {/* Internal Note Modal */}
       {noteQuoteId && (
-        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center">
           <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
             <h3 className="text-xl font-bold text-gray-900 mb-1 flex items-center gap-2">
               <StickyNote className="text-amber-500" /> Internal Note

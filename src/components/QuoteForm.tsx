@@ -18,6 +18,7 @@
 // =============================================================================
 
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { round2, lineTotal, computeTotals, discountFromRate, rateFromDiscount, clampPercent, marginPercent } from '../lib/money';
 import { useSearchParams, useLocation } from 'react-router-dom';
@@ -1122,7 +1123,7 @@ export default function QuoteForm() {
   };
 
   const handleTranslateAll = async () => {
-    const isConfirm = confirm('This will force translate ALL Arabic fields based on current English content. Proceed?');
+    const isConfirm = await confirmAsync('This will force translate ALL Arabic fields based on current English content. Proceed?');
     if (!isConfirm) return;
 
     // 1. Subject
@@ -1192,7 +1193,7 @@ export default function QuoteForm() {
     }
     if (cfChanged) setCustomFields(newCFs);
 
-    alert('Translation process complete!');
+    toast('Translation process complete!');
   };
 
   const handleProductAutoTranslate = async (index: number, text: string, currentAr: string, force = true) => {
@@ -1477,7 +1478,7 @@ export default function QuoteForm() {
   };
 
   const clearForm = async () => {
-    if (!confirm('Quote Form will be cleaned up. Do you confirm?')) return;
+    if (!await confirmAsync('Quote Form will be cleaned up. Do you confirm?')) return;
     isClearingRef.current = true;
     if (cacheTimerRef.current) {
       clearTimeout(cacheTimerRef.current);
@@ -1544,7 +1545,7 @@ export default function QuoteForm() {
   };
 
   const handleUpdateDocumentTermsOnly = async () => {
-    if (!confirm('Update only the Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to the latest defaults from Settings?\n\nYour items, customer, and pricing will not be changed.')) return;
+    if (!await confirmAsync('Update only the Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to the latest defaults from Settings?\n\nYour items, customer, and pricing will not be changed.')) return;
     try {
       const freshTerms = await fetchDocumentTerms(true);
       if (!freshTerms) {
@@ -1558,7 +1559,7 @@ export default function QuoteForm() {
         });
       }, 50);
     } catch (err: any) {
-      alert(`Failed to update terms: ${err.message}`);
+      toast(`Failed to update terms: ${err.message}`);
     }
   };
 
@@ -1640,16 +1641,16 @@ export default function QuoteForm() {
             const temp = prev.filter(p => p.description.trim() !== '');
             return [...temp, ...mappedItems];
           });
-          alert('RFQ Parsed successfully! Prices are set to 0. Please verify descriptions.');
+          toast('RFQ Parsed successfully! Prices are set to 0. Please verify descriptions.');
         } else {
-          alert('AI did not find any items or returned an invalid format.');
+          toast('AI did not find any items or returned an invalid format.');
         }
       } else {
         const err = await res.json();
-        alert(`Failed: ${err.error || 'Server error'}`);
+        toast(`Failed: ${err.error || 'Server error'}`);
       }
     } catch (err: any) {
-      alert(`Upload error: ${err.message}`);
+      toast(`Upload error: ${err.message}`);
     } finally {
       setIsRfqLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1694,8 +1695,8 @@ export default function QuoteForm() {
     setItems(prev => [...prev, blankItem()]);
   };
 
-  const removeItem = (index: number) => {
-    if (!window.confirm('Are you sure you want to remove this item? (Ctrl+Z undoes it)')) return;
+  const removeItem = async (index: number) => {
+    if (!await confirmAsync('Are you sure you want to remove this item? (Ctrl+Z undoes it)')) return;
     pushHistory(items);
     const targetId = items[index]?.id;
     setItems(prev => {
@@ -1800,7 +1801,7 @@ export default function QuoteForm() {
   const performSave = async (force: boolean = false, overrideQuoteId?: string): Promise<boolean> => {
     const activeQuoteId = overrideQuoteId || quoteId;
     if (!activeQuoteId) {
-      alert('Cannot record without Quote ID!');
+      toast('Cannot record without Quote ID!');
       return false;
     }
 
@@ -1885,7 +1886,7 @@ export default function QuoteForm() {
         setSaveStatus('saved');
         setHasUnsavedRecalledEdits(false);
         setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-        alert(recallQuoteId === activeQuoteId ? 'Quote updated successfully!' : `Quote data (${activeQuoteId}) is recorded to Tracking section!`);
+        toast(recallQuoteId === activeQuoteId ? 'Quote updated successfully!' : `Quote data (${activeQuoteId}) is recorded to Tracking section!`);
         localStorage.removeItem(DRAFT_KEY); // clear local draft since officially recorded
         setShowOverwriteModal(false);
         setShowConflictModal(false);
@@ -1893,7 +1894,7 @@ export default function QuoteForm() {
       } else if (res.status === 409) {
         const errorData = await res.json();
         if (errorData.error === 'ID_TAKEN') {
-          alert("This Quote ID was just used by someone else! Generating a new one for you automatically...");
+          toast("This Quote ID was just used by someone else! Generating a new one for you automatically...");
           handleCreateNewId();
         } else {
           setShowConflictModal(true);
@@ -1901,37 +1902,37 @@ export default function QuoteForm() {
         return false;
       } else {
         const error = await res.json();
-        alert(`Failed to record quote: ${error.error}`);
+        toast(`Failed to record quote: ${error.error}`);
         return false;
       }
     } catch (e: any) {
-      alert(`Network error saving quote: ${e.message}`);
+      toast(`Network error saving quote: ${e.message}`);
       return false;
     }
   };
 
   const recordQuote = async (): Promise<boolean> => {
     if (!date) {
-      alert('Please input date!');
+      toast('Please input date!');
       return false;
     }
     if (grandTotal === 0) {
-      alert('Total is zero! Please check.');
+      toast('Total is zero! Please check.');
       return false;
     }
     // Lines with a price but no description are dropped on save while still counted in the totals, so refuse them.
     const orphanIdx = items.findIndex(i => (i.description || '').trim() === '' && (i.net_price || 0) > 0);
     if (orphanIdx !== -1) {
-      alert(`Item ${orphanIdx + 1} has a price but no description. Add a description or remove the line.`);
+      toast(`Item ${orphanIdx + 1} has a price but no description. Add a description or remove the line.`);
       return false;
     }
     const badQtyIdx = items.findIndex(i => (i.description || '').trim() !== '' && !(Number(i.qty) > 0));
     if (badQtyIdx !== -1) {
-      alert(`Item ${badQtyIdx + 1} has a quantity of zero. Enter a quantity greater than 0.`);
+      toast(`Item ${badQtyIdx + 1} has a quantity of zero. Enter a quantity greater than 0.`);
       return false;
     }
     if (!selectedCustomerId) {
-      alert('Please select a customer.');
+      toast('Please select a customer.');
       return false;
     }
 
@@ -1939,7 +1940,7 @@ export default function QuoteForm() {
     if (!activeId) {
       activeId = await generateQuoteId();
       if (!activeId) {
-        alert('Failed to generate Quote ID. Please try again.');
+        toast('Failed to generate Quote ID. Please try again.');
         return false;
       }
     }
@@ -1966,7 +1967,7 @@ export default function QuoteForm() {
     const newId = await generateQuoteId();
     // Use setTimeout so the new ID state applies before telling user to save again.
     setTimeout(() => {
-      alert(`A new Quote ID (${newId}) has been generated! You can now click Record to save.`);
+      toast(`A new Quote ID (${newId}) has been generated! You can now click Record to save.`);
     }, 100);
   };
 
@@ -2059,7 +2060,7 @@ export default function QuoteForm() {
   };
 
   const saveTemplate = () => {
-    if (!templateName.trim()) return alert('Please enter a template name.');
+    if (!templateName.trim()) return toast('Please enter a template name.');
     const data = {
       note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
       manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -2070,11 +2071,11 @@ export default function QuoteForm() {
     setTemplates(newTemplates);
     setShowTemplateModal(false);
     setTemplateName('');
-    alert(`Template "${templateName.trim()}" saved!`);
+    toast(`Template "${templateName.trim()}" saved!`);
   };
 
-  const deleteTemplate = (name: string) => {
-    if (!confirm(`Are you sure you want to delete the template "${name}"?`)) return;
+  const deleteTemplate = async (name: string) => {
+    if (!await confirmAsync(`Are you sure you want to delete the template "${name}"?`)) return;
     const newTemplates = templates.filter(t => t.name !== name);
     localStorage.setItem('quote_templates', JSON.stringify(newTemplates));
     setTemplates(newTemplates);
@@ -2104,7 +2105,7 @@ export default function QuoteForm() {
 
   // ── DUPLICATE QUOTE ───────────────────────────────────────────────────────────
   const handleDuplicate = async () => {
-    if (!confirm('This will copy the current quote into a new unrecorded draft with today\'s date. Proceed?')) return;
+    if (!await confirmAsync('This will copy the current quote into a new unrecorded draft with today\'s date. Proceed?')) return;
     setQuoteId('');
     setIsRecorded(false);
     // Clear the recall param so it saves as a new quote
@@ -2114,7 +2115,7 @@ export default function QuoteForm() {
     const exp = new Date();
     exp.setDate(exp.getDate() + 30);
     setExpiryDate(exp.toISOString().split('T')[0]);
-    alert('Quote duplicated! A new Quote ID will be assigned when you click Record.');
+    toast('Quote duplicated! A new Quote ID will be assigned when you click Record.');
   };
 
   const handleCreateRevision = () => {
@@ -2134,18 +2135,18 @@ export default function QuoteForm() {
     setQuoteId(newId);
     setStatus('Draft');
     setType('Quotation');
-    alert(`Revision created as ${newId}. You can now make changes and hit Record.`);
+    toast(`Revision created as ${newId}. You can now make changes and hit Record.`);
   };
 
   const handleConvertToInvoice = () => {
     setType('Tax Invoice');
     setStatus('Draft');
-    alert('Document converted to Tax Invoice! Remember to Record the document to save changes.');
+    toast('Document converted to Tax Invoice! Remember to Record the document to save changes.');
   };
 
   const handleSendEmail = async () => {
     if (!recallQuoteId) {
-      alert('You must Record this quote before you can email it.');
+      toast('You must Record this quote before you can email it.');
       return;
     }
 
@@ -2170,13 +2171,13 @@ export default function QuoteForm() {
 
       if (res.ok) {
         setStatus('Sent');
-        alert('Email sent successfully via SMTP!');
+        toast('Email sent successfully via SMTP!');
       } else {
         const error = await res.json();
-        alert(`Failed to send email: ${error.error}`);
+        toast(`Failed to send email: ${error.error}`);
       }
     } catch (err) {
-      alert('Error connecting to email service.');
+      toast('Error connecting to email service.');
     } finally {
       setIsSending(false);
     }
@@ -2275,7 +2276,7 @@ export default function QuoteForm() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(`PDF Generation error: ${err.message}`);
+      toast(`PDF Generation error: ${err.message}`);
     } finally {
       setIsGeneratingServerPDF(false);
     }
@@ -2599,7 +2600,7 @@ export default function QuoteForm() {
       setTimeout(() => URL.revokeObjectURL(url), 100);
     } catch (error) {
       console.error('Error generating PDF:', error);
-      alert('Failed to generate PDF');
+      toast('Failed to generate PDF');
     } finally {
       setExpandedNoteIndex(prevNoteIndex);
     }
@@ -2855,7 +2856,7 @@ export default function QuoteForm() {
       setTimeout(() => URL.revokeObjectURL(url), 100);
     } catch (error) {
       console.error('Error generating PDF with Stamp:', error);
-      alert('Failed to generate PDF with Stamp');
+      toast('Failed to generate PDF with Stamp');
     } finally {
       setExpandedNoteIndex(prevNoteIndex);
     }
@@ -3153,7 +3154,7 @@ export default function QuoteForm() {
           </div>
         </div>
         <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors" title="Clear all fields to start a new blank quote">
+          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors" title="Clear all fields to start a new blank quote" aria-label="Clear all fields to start a new blank quote">
             <RefreshCw size={18} /> Clear
           </button>
           {workflowVisibility.updateTermsButton && (
@@ -3161,7 +3162,7 @@ export default function QuoteForm() {
               type="button"
               onClick={handleUpdateDocumentTermsOnly}
               className="flex items-center gap-2 px-3.5 py-2 text-slate-700 bg-slate-100 dark:bg-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium cursor-pointer"
-              title="Update only Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to latest defaults from Settings"
+              title="Update only Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to latest defaults from Settings" aria-label="Update only Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to latest defaults from Settings"
             >
               <RefreshCw size={16} /> Update Terms
             </button>
@@ -3170,7 +3171,7 @@ export default function QuoteForm() {
             <button
               onClick={handleTranslateAll}
               className="flex items-center gap-1.5 px-3 py-2 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors font-medium text-sm"
-              title="Translate all Arabic fields based on English content"
+              title="Translate all Arabic fields based on English content" aria-label="Translate all Arabic fields based on English content"
             >
               <Languages size={17} /> Translate
             </button>
@@ -3178,7 +3179,7 @@ export default function QuoteForm() {
             <button
               onClick={toggleTranslationMode}
               className="px-2.5 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors flex items-center gap-1.5"
-              title={`Translation mode: ${translationMode === 'manual' ? 'Manual (Only translates when clicking Translate)' : 'Auto (Translates automatically)'}. Click to toggle.`}
+              title={`Translation mode: ${translationMode === 'manual' ? 'Manual (Only translates when clicking Translate)' : 'Auto (Translates automatically)'}. Click to toggle.`} aria-label={`Translation mode: ${translationMode === 'manual' ? 'Manual (Only translates when clicking Translate)' : 'Auto (Translates automatically)'}. Click to toggle.`}
             >
               <span className={`w-2 h-2 rounded-full ${translationMode === 'manual' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
               {translationMode === 'manual' ? 'Manual' : 'Auto'}
@@ -3186,14 +3187,14 @@ export default function QuoteForm() {
           </div>
           {recallQuoteId && (
             <>
-              <button onClick={handleDuplicate} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors" title="Copy all data to a new Quote ID">
+              <button onClick={handleDuplicate} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors" title="Copy all data to a new Quote ID" aria-label="Copy all data to a new Quote ID">
                 <Copy size={18} /> Duplicate
               </button>
-              <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID">
+              <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID" aria-label="Clone exact form into new Revision ID">
                 Create Revision
               </button>
               {type !== 'Tax Invoice' && (user.role === 'admin' || user.permissions?.canConvertInvoice) && workflowVisibility.invoice && (
-                <button onClick={handleConvertToInvoice} className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors" title="Switch type to Tax Invoice">
+                <button onClick={handleConvertToInvoice} className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors" title="Switch type to Tax Invoice" aria-label="Switch type to Tax Invoice">
                   To Invoice
                 </button>
               )}
@@ -3201,7 +3202,7 @@ export default function QuoteForm() {
           )}
           {/* ── TEMPLATE BUTTONS ───────────────────────────────────────────────────── */}
           {(user.role === 'admin' || user.permissions?.canSaveTemplate) && workflowVisibility.template && (
-            <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 border border-amber-200 dark:border-amber-800 rounded-lg transition-colors" title="Save current Terms as a reusable template">
+            <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 border border-amber-200 dark:border-amber-800 rounded-lg transition-colors" title="Save current Terms as a reusable template" aria-label="Save current Terms as a reusable template">
               <Bookmark size={18} /> Save Template
             </button>
           )}
@@ -3219,7 +3220,7 @@ export default function QuoteForm() {
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteTemplate(t.name); }}
                       className="p-2 text-gray-400 hover:text-red-500 opacity-0 group-hover/item:opacity-100 transition-opacity"
-                      title="Delete Template"
+                      title="Delete Template" aria-label="Delete Template"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -3247,11 +3248,11 @@ export default function QuoteForm() {
           <button onClick={() => triggerExport('pdf')} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
           </button>
-          <button onClick={() => triggerExport('server-pdf')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
+          <button onClick={() => triggerExport('server-pdf')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)" aria-label="Download vector-based searchable PDF generated on the server (React PDF)">
             {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (React)
           </button>
           {stampUrl && (
-            <button onClick={() => triggerExport('server-pdf-stamped')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors disabled:opacity-50 font-semibold" title="Download high-fidelity vector PDF with official company stamp">
+            <button onClick={() => triggerExport('server-pdf-stamped')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors disabled:opacity-50 font-semibold" title="Download high-fidelity vector PDF with official company stamp" aria-label="Download high-fidelity vector PDF with official company stamp">
               {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF + Stamp
             </button>
           )}
@@ -3322,9 +3323,9 @@ export default function QuoteForm() {
                     />
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={async () => {
                         if (!idUnlocked) {
-                          if (confirm('Quote IDs are automatically sequenced when you click Record. Are you sure you want to manually set a custom ID?')) {
+                          if (await confirmAsync('Quote IDs are automatically sequenced when you click Record. Are you sure you want to manually set a custom ID?')) {
                             setIdUnlocked(true);
                           }
                         } else {
@@ -3332,7 +3333,7 @@ export default function QuoteForm() {
                         }
                       }}
                       className="p-1 text-gray-400 hover:text-indigo-600 rounded transition-colors"
-                      title={idUnlocked ? 'Lock ID' : 'Unlock to manually customize Quote ID'}
+                      title={idUnlocked ? 'Lock ID' : 'Unlock to manually customize Quote ID'} aria-label={idUnlocked ? 'Lock ID' : 'Unlock to manually customize Quote ID'}
                     >
                       {idUnlocked ? <Unlock size={14} className="text-amber-600" /> : <Lock size={14} className="text-gray-400 hover:text-gray-600" />}
                     </button>
@@ -3738,7 +3739,7 @@ export default function QuoteForm() {
                                   : item.internal_note ? 'text-amber-500 hover:text-amber-700'
                                     : 'text-gray-400 hover:text-amber-500'
                                   }`}
-                                title={item.internal_note ? 'Edit private note' : 'Add private note'}
+                                title={item.internal_note ? 'Edit private note' : 'Add private note'} aria-label={item.internal_note ? 'Edit private note' : 'Add private note'}
                               >
                                 <StickyNote size={14} />
                               </button>
@@ -3763,7 +3764,7 @@ export default function QuoteForm() {
                               )}
                             </div>
                           )}
-                          <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
+                          <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item" aria-label="Remove Item">
                             <Trash2 size={14} />
                           </button>
                         </div>
@@ -3809,7 +3810,7 @@ export default function QuoteForm() {
                     type="button"
                     onClick={handleUpdateDocumentTermsOnly}
                     className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-md border border-indigo-200 dark:border-indigo-800 transition-colors shadow-2xs cursor-pointer"
-                    title="Update Notes, Payment, Warranty, Manpower, Mobilization, Duration & Bank Details from Settings defaults without changing items or customer"
+                    title="Update Notes, Payment, Warranty, Manpower, Mobilization, Duration & Bank Details from Settings defaults without changing items or customer" aria-label="Update Notes, Payment, Warranty, Manpower, Mobilization, Duration & Bank Details from Settings defaults without changing items or customer"
                   >
                     <RefreshCw size={12} className="shrink-0" />
                     <span>Update Notes &amp; Terms to Defaults</span>
@@ -4001,7 +4002,7 @@ export default function QuoteForm() {
                           />
                         </div>
                         <div data-html2canvas-ignore="true" className="print:hidden flex items-center gap-1 mx-1 mt-1 shrink-0 absolute right-[-30px] top-0 md:static">
-                          <button onClick={() => removeCustomField(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Field">
+                          <button onClick={() => removeCustomField(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Field" aria-label="Remove Field">
                             <Trash2 size={16} />
                           </button>
                         </div>
@@ -4084,6 +4085,10 @@ export default function QuoteForm() {
                           }}
                           className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-gray-200 hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
                           title={
+                            discountMode === 'amount' ? "Switch to Percentage (%)" :
+                            discountMode === 'percentage' ? `Switch to Both (% & ${currency})` :
+                            `Switch to Direct Amount (${currency})`
+                          } aria-label={
                             discountMode === 'amount' ? "Switch to Percentage (%)" :
                             discountMode === 'percentage' ? `Switch to Both (% & ${currency})` :
                             `Switch to Direct Amount (${currency})`
@@ -4320,7 +4325,7 @@ export default function QuoteForm() {
                                       ? prev.canEditGroups.filter(id => id !== g.id)
                                       : [...prev.canEditGroups, g.id]
                                   }))}
-                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
+                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'} aria-label={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
                                   className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
                                     ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
                                     : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
@@ -4375,7 +4380,7 @@ export default function QuoteForm() {
                                       ? prev.canEditUsers.filter(id => id !== u.id)
                                       : [...prev.canEditUsers, u.id]
                                   }))}
-                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
+                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'} aria-label={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
                                   className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
                                     ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
                                     : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
@@ -4433,7 +4438,7 @@ export default function QuoteForm() {
                         : item.internal_note ? 'text-amber-500 hover:text-amber-700'
                           : 'text-gray-400 hover:text-amber-500'
                         }`}
-                      title={item.internal_note ? 'Edit private note' : 'Add private note'}
+                      title={item.internal_note ? 'Edit private note' : 'Add private note'} aria-label={item.internal_note ? 'Edit private note' : 'Add private note'}
                     >
                       <StickyNote size={14} />
                     </button>
@@ -4459,7 +4464,7 @@ export default function QuoteForm() {
                   </div>
                 )}
 
-                <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
+                <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item" aria-label="Remove Item">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -4605,7 +4610,7 @@ export default function QuoteForm() {
 
         {/* Overwrite Confirmation Modal */}
         {showOverwriteModal && (
-          <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+          <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
             <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
               <h3 className="text-xl font-bold text-gray-900 mb-2">Quote ID Exists</h3>
               <p className="text-gray-600 mb-6">A quote with ID <span className="font-bold">{quoteId}</span> already exists. How would you like to proceed?</p>
@@ -4635,7 +4640,7 @@ export default function QuoteForm() {
 
         {/* Version Conflict Modal */}
         {showConflictModal && (
-          <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+          <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
             <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
               <h3 className="text-xl font-bold text-gray-900 mb-2">Version Conflict</h3>
               <p className="text-gray-600 mb-6">The server has a newer version of this quote. Another user may have modified it since you opened it.</p>
@@ -4676,7 +4681,7 @@ export default function QuoteForm() {
 
       {/* Save Template Modal */}
       {showTemplateModal && (
-        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
           <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
             <h3 className="text-xl font-bold text-gray-900 mb-2">Save Terms as Template</h3>
             <p className="text-gray-600 mb-4 text-sm">Save the current Note, Payment, Warranty, Duration, Mobilization, Manpower, Bank Details, and Footer as a reusable template.</p>
@@ -4714,7 +4719,7 @@ export default function QuoteForm() {
 
       {/* ── Add Product Modal ────────────────────────────────────────────── */}
       {addProductModal && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600">
@@ -4869,7 +4874,7 @@ export default function QuoteForm() {
 
       {/* ── Add Customer Modal ────────────────────────────────────────────── */}
       {addCustomerModal && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-teal-600">
               <div className="flex items-center gap-2">
@@ -4940,7 +4945,7 @@ export default function QuoteForm() {
                 className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-bold flex items-center gap-2"
                 disabled={addCustomerModal.isSaving}
                 onClick={async () => {
-                  if (!addCustomerModal.name.trim()) return alert('Name is required');
+                  if (!addCustomerModal.name.trim()) return toast('Name is required');
                   setAddCustomerModal(m => m ? { ...m, isSaving: true } : m);
                   try {
                     const res = await fetch('/api/customers', {
@@ -4987,7 +4992,7 @@ export default function QuoteForm() {
 
       {/* ── Confirm Record Before Export Modal ── */}
       {showExportRecordModal && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center p-4 print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-start gap-4 mb-4">
               <div className="p-3 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded-xl shrink-0">

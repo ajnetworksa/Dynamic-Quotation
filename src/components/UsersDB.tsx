@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { confirmAsync } from '../lib/notify';
 import { Plus, Trash2, Edit2, Save, X, Shield, User, Bot, FileSearch, Settings as SettingsIcon, Database, Users, Eye, UserCheck, Layers, ChevronDown, FileText, Bookmark, Send, Printer, History, KeyRound } from 'lucide-react';
 
 interface Permissions {
@@ -513,7 +514,7 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
+    if (!await confirmAsync('Are you sure you want to delete this user?')) return;
     const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
     if (res.ok) fetchUsers();
     else { const d = await res.json(); setError(d.error || 'Failed to delete user'); }
@@ -649,7 +650,7 @@ function GroupsTab({ groups, onGroupsChange }: { groups: PermissionGroup[]; onGr
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Delete this permission group?')) return;
+    if (!await confirmAsync('Delete this permission group?')) return;
     await fetch(`/api/permission-groups/${id}`, { method: 'DELETE' });
     onGroupsChange();
   };
