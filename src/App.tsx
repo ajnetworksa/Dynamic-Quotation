@@ -2,7 +2,8 @@
 // App.tsx — Root Application Layout
 // =============================================================================
 import React, { useState, useEffect, useRef } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
+import { readJson, clearSessionStorage } from './lib/storage';
 import {
   FileText, Database, Users, History,
   Settings as SettingsIcon, LogOut, Shield,
@@ -28,12 +29,22 @@ const originalFetch = window.fetch;
 Object.defineProperty(window, 'fetch', {
   value: async (input: RequestInfo | URL, init?: RequestInit) => {
     const token = localStorage.getItem('token');
-    if (token) {
+    // SECURITY: only attach the session token to same-origin requests (never leak it to third parties).
+    let sameOrigin = true;
+    try {
+      const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+      sameOrigin = new URL(rawUrl, window.location.origin).origin === window.location.origin;
+    } catch { sameOrigin = true; }
+    if (token && sameOrigin) {
       init = init || {};
-      init.headers = { ...init.headers, 'Authorization': `Bearer ${token}` };
+      // Use Headers so Headers instances / arrays passed by callers are preserved.
+      const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+      if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+      init.headers = headers;
     }
     const response = await originalFetch(input, init);
-    if (response.status === 401 && window.location.pathname !== '/login') {
+    if (response.status === 401 && sameOrigin && window.location.pathname !== '/login') {
+      // Keep the unsaved draft on session expiry so the user does not lose work; only a manual logout wipes it.
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.dispatchEvent(new Event('auth-change'));
@@ -360,7 +371,12 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
   useEffect(() => {
     if (!inspectionProtection) return;
 
-    const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+    // Never block the context menu on editable fields (paste / copy / spellcheck must keep working).
+    const isEditable = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+    };
+    const handleContextMenu = (e: MouseEvent) => { if (!isEditable(e.target)) e.preventDefault(); };
     const handleKeyDown = (e: KeyboardEvent) => {
       // Disable F12
       if (e.keyCode === 123) e.preventDefault();
@@ -596,6 +612,8 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
                 <Route path="/settings" element={<Settings />} />
               )}
+              {/* Unknown paths (or pages the user lacks permission for) go home instead of a blank screen */}
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </motion.div>
         </AnimatePresence>
@@ -608,7 +626,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
 // ── App Root ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
-  const [user, setUser] = useState<any>(JSON.parse(localStorage.getItem('user') || 'null'));
+  const [user, setUser] = useState<any>(readJson<any>('user', null));
   const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('theme') === 'dark');
 
   useEffect(() => {
@@ -624,7 +642,7 @@ export default function App() {
   useEffect(() => {
     const handleAuthChange = () => {
       setIsAuthenticated(!!localStorage.getItem('token'));
-      setUser(JSON.parse(localStorage.getItem('user') || 'null'));
+      setUser(readJson<any>('user', null));
     };
     window.addEventListener('auth-change', handleAuthChange);
 
@@ -662,8 +680,8 @@ export default function App() {
 
   const handleLogout = async () => {
     try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    // Wipe the draft too so the next user on a shared browser never sees it.
+    clearSessionStorage();
     setIsAuthenticated(false);
     setUser(null);
   };

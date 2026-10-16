@@ -1,3 +1,4 @@
+import { getStoredUser } from '../lib/storage';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award, Repeat2 } from 'lucide-react';
@@ -43,7 +44,9 @@ export default function Dashboard() {
         }
     };
 
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    // Local-time "YYYY-MM" key (toISOString is UTC and shifts the month near midnight).
+    const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const currentMonth = monthKey(new Date());
     const thisMonthQuotes = quotes.filter(q => q.date && q.date.startsWith(currentMonth));
 
     const stats = {
@@ -55,14 +58,20 @@ export default function Dashboard() {
         acceptedCount: quotes.filter(q => q.status === 'Accepted').length,
         rejectedCount: quotes.filter(q => q.status === 'Rejected').length,
         sentCount: quotes.filter(q => q.status === 'Sent').length,
-        winRate: quotes.length > 0 ? Math.round((quotes.filter(q => q.status === 'Accepted').length / quotes.length) * 100) : 0,
+        // Win rate = won / decided (accepted + rejected). Drafts and open quotes do not count against it.
+        winRate: (() => {
+            const won = quotes.filter(q => q.status === 'Accepted' || q.status === 'Invoiced').length;
+            const lost = quotes.filter(q => q.status === 'Rejected').length;
+            return won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
+        })(),
     };
 
     // Last 6 months bar chart data
     const last6Months = Array.from({ length: 6 }, (_, i) => {
-        const d = new Date();
-        d.setMonth(d.getMonth() - (5 - i));
-        const key = d.toISOString().slice(0, 7);
+        // Build from the 1st of the month: setMonth on the 29th-31st overflowed into the wrong month.
+        const now = new Date();
+        const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+        const key = monthKey(d);
         const label = d.toLocaleString('default', { month: 'short' });
         const total = quotes
             .filter(q => q.date?.startsWith(key) && q.status === 'Accepted')
@@ -108,7 +117,7 @@ export default function Dashboard() {
         .sort((a, b) => b[1].count - a[1].count)
         .slice(0, 8);
 
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+    const currentUser = getStoredUser();
     const canViewRevenue = currentUser.role === 'admin' || !!currentUser.permissions?.canViewRevenue;
 
     return (
@@ -205,9 +214,14 @@ export default function Dashboard() {
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
                         <h3 className="text-lg font-bold text-gray-800 mb-3 self-start">Conversion Metrics</h3>
                         <div className="flex-1 w-full flex items-center justify-center">
-                            <div className="w-40 h-40 rounded-full border-[14px] border-emerald-500 flex items-center justify-center relative shadow-inner">
-                                <div className="absolute inset-0 border-[14px] border-gray-100 rounded-full" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 50%, 0 50%)' }} />
-                                <div className="flex flex-col">
+                            <div
+                                className="w-40 h-40 rounded-full flex items-center justify-center relative shadow-inner"
+                                style={{ background: `conic-gradient(#10b981 ${stats.winRate * 3.6}deg, #f3f4f6 0deg)` }}
+                                role="img"
+                                aria-label={`Win rate ${stats.winRate}%`}
+                            >
+                                <div className="absolute inset-[14px] bg-white rounded-full" />
+                                <div className="flex flex-col relative">
                                     <span className="text-3xl font-black text-emerald-600">{stats.winRate}%</span>
                                     <span className="text-xs font-bold text-gray-500 uppercase mt-1">Win Rate</span>
                                 </div>
