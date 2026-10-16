@@ -69,6 +69,19 @@ echo "--- csv import"
 echo "customers import: $(curl -s -X POST -H "$H" -H "$J" -d '{"rows":[{"name":"Alpha Co","mobile":"0501112222"},{"name":"Beta Co","mobile":"+966501112222"},{"name":"Gamma"}]}' $B/api/customers/import)"
 echo "products import: $(curl -s -X POST -H "$H" -H "$J" -d '{"rows":[{"description":"Cable A","unit_price":10,"item_code":"C-A"},{"description":"Cable A2","unit_price":12,"item_code":"c-a"}],"onDuplicate":"update"}' $B/api/products/import)"
 echo "bad product price: $(curl -s -X POST -H "$H" -H "$J" -d '{"rows":[{"description":"x","unit_price":-5}]}' $B/api/products/import | head -c 120)"
+
+echo "--- catalog permission + encrypted backup"
+echo "bob (no canEditCatalog) create customer: $(curl -s -o /dev/null -w %{http_code} -X POST -H "Authorization: Bearer $BT2" -H "$J" -d '{"name":"Nope"}' $B/api/customers)"
+curl -s -X POST -H "$H" -H "$J" -d '{"name":"BeforeBackup Co"}' $B/api/customers >/dev/null
+curl -s -X POST -H "$H" -H "$J" -d '{"passphrase":"short"}' $B/api/admin/backup-encrypted | head -c 110; echo
+curl -s -X POST -H "$H" -H "$J" -d '{"passphrase":"a very long passphrase 123"}' -o $S/backup.enc $B/api/admin/backup-encrypted
+echo "backup file magic: $(head -c 8 $S/backup.enc) size $(stat -c %s $S/backup.enc)"
+curl -s -X POST -H "$H" -H "$J" -d '{"name":"AfterBackup Co"}' $B/api/customers >/dev/null
+echo "restore wrong passphrase: $(curl -s -X POST -H "$H" -F "file=@$S/backup.enc" -F "passphrase=this is definitely wrong" $B/api/admin/restore-encrypted)"
+echo "restore right passphrase: $(curl -s -X POST -H "$H" -F "file=@$S/backup.enc" -F "passphrase=a very long passphrase 123" $B/api/admin/restore-encrypted)"
+echo "customers after restore: $(curl -s -H "$H" $B/api/customers | python3 -c 'import sys,json;print(sorted(c["name"] for c in json.load(sys.stdin) if "Backup" in c["name"]))')"
+echo "health after restore: $(curl -s $B/api/health)"
+ls $S/../ >/dev/null 2>&1; echo "pre-restore snapshot kept: $(ls $REPO/backups | grep -c pre_restore)"
 echo "--- audit log"
 echo "audit entries: $(curl -s "$B/api/audit-log?limit=100" -H "$H" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["total"], sorted(set(i["action"] for i in d["items"]))[:6])')"
 echo "bob (no perm) audit: $(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $BT2" $B/api/audit-log)"

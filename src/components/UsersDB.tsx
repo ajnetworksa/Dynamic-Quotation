@@ -29,6 +29,7 @@ interface Permissions {
   canUseKanban?: boolean;
   canManageRecycleBin?: boolean;
   canViewAuditLog?: boolean;
+  canEditCatalog?: boolean;
 }
 
 interface AppUser {
@@ -49,6 +50,7 @@ interface PermissionGroup {
 const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.ReactNode; description: string }[] = [
   { key: 'canManageUsers', label: 'Manage Users', icon: <Shield size={14} />, description: 'Create, edit, and delete system users and their permissions.' },
   { key: 'canManageSettings', label: 'Manage Settings', icon: <SettingsIcon size={14} />, description: 'Access global system settings, backup, and branding.' },
+  { key: 'canEditCatalog', label: 'Edit Catalog', icon: <Edit2 size={14} />, description: 'Add and edit customers, products and suppliers (and import them from CSV).' },
   { key: 'canViewAuditLog', label: 'Audit Log', icon: <History size={14} />, description: 'View the audit log of logins, user changes, exports and deletions.' },
   { key: 'canManageRecycleBin', label: 'Recycle Bin', icon: <Trash2 size={14} />, description: 'View, restore and permanently delete quotations in the Recycle Bin.' },
   { key: 'canDeleteData', label: 'Delete Records', icon: <Trash2 size={14} />, description: 'Permanently remove quotation and customer records.' },
