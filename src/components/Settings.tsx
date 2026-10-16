@@ -2,6 +2,7 @@ import { getStoredUser } from '../lib/storage';
 import { toast, confirmAsync } from '../lib/notify';
 import CompanyProfileSettings from './CompanyProfileSettings';
 import EncryptedBackupPanel from './EncryptedBackupPanel';
+import ChoiceSettingCard from './settings/ChoiceSettingCard';
 import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages, Sparkles, Type } from 'lucide-react';
 import ExcelJS from 'exceljs';
@@ -131,12 +132,8 @@ export default function Settings() {
   const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
-  const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
-  const [rowReorderStatus, setRowReorderStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Discount Calculation Mode: 'amount' = Direct SAR amount, 'percentage' = Percentage % of Subtotal, 'both' = Show and allow both
-  const [discountMode, setDiscountMode] = useState<'amount' | 'percentage' | 'both'>('amount');
-  const [discountModeStatus, setDiscountModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // PDF Generation Engine
   const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
@@ -147,8 +144,6 @@ export default function Settings() {
   const [devModeStatus, setDevModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Translation Mode: 'manual' = Only translate when clicking Translate, 'auto' = Auto-translate on blur/typing
-  const [translationMode, setTranslationMode] = useState<'manual' | 'auto'>('manual');
-  const [translationModeStatus, setTranslationModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // System Update
   const [updateStatus, setUpdateStatus] = useState<{ current: string; latest: string; hasUpdate: boolean; changelog: string } | null>(null);
@@ -316,16 +311,6 @@ export default function Settings() {
       })
       .catch(console.error);
 
-    fetch('/api/settings/rowReorderMode')
-      .then(res => res.json())
-      .then(data => { if (data.value) setRowReorderMode(data.value as 'click' | 'drag'); })
-      .catch(console.error);
-
-    fetch('/api/settings/discountMode')
-      .then(res => res.json())
-      .then(data => { if (data.value) setDiscountMode(data.value as 'amount' | 'percentage' | 'both'); })
-      .catch(console.error);
-
     fetch('/api/settings/pdfSystem')
       .then(res => res.json())
       .then(data => {
@@ -361,16 +346,6 @@ export default function Settings() {
     fetch('/api/settings/quotePrefix')
       .then(res => res.json())
       .then(data => { if (data.value) setQuotePrefix(data.value); })
-      .catch(console.error);
-
-    fetch('/api/settings/translationMode')
-      .then(res => res.json())
-      .then(data => {
-        if (data.value) {
-          setTranslationMode(data.value as 'manual' | 'auto');
-          localStorage.setItem('translationMode', data.value);
-        }
-      })
       .catch(console.error);
 
     fetch('/api/settings/documentTerms', {
@@ -931,52 +906,6 @@ export default function Settings() {
       setMuFilterStatus('error');
     }
     setTimeout(() => setMuFilterStatus('idle'), 3000);
-  };
-
-  const handleRowReorderToggle = async (val: 'click' | 'drag') => {
-    setRowReorderMode(val);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'rowReorderMode', value: val })
-      });
-      setRowReorderStatus('success');
-    } catch {
-      setRowReorderStatus('error');
-    }
-    setTimeout(() => setRowReorderStatus('idle'), 2000);
-  };
-
-  const handleTranslationModeToggle = async (val: 'manual' | 'auto') => {
-    setTranslationMode(val);
-    localStorage.setItem('translationMode', val);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'translationMode', value: val })
-      });
-      setTranslationModeStatus('success');
-    } catch {
-      setTranslationModeStatus('error');
-    }
-    setTimeout(() => setTranslationModeStatus('idle'), 2000);
-  };
-
-  const handleDiscountModeToggle = async (val: 'amount' | 'percentage' | 'both') => {
-    setDiscountMode(val);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'discountMode', value: val })
-      });
-      setDiscountModeStatus('success');
-    } catch {
-      setDiscountModeStatus('error');
-    }
-    setTimeout(() => setDiscountModeStatus('idle'), 2000);
   };
 
   const handlePdfSystemToggle = async (val: 'client' | 'server') => {
@@ -3052,177 +2981,45 @@ export default function Settings() {
       </div>
 
       {/* Row Reorder Mode */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-lg">⠿</div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Row Reorder Mode</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Choose how items are reordered in the Quote Form</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between gap-8">
-          <div className="space-y-3 flex-1">
-            <div
-              onClick={() => handleRowReorderToggle('click')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                rowReorderMode === 'click' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                rowReorderMode === 'click' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {rowReorderMode === 'click' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">↑ ↓ Click Arrows</p>
-                <p className="text-sm text-gray-500 mt-0.5">Up and down arrow buttons appear beside each row. Click once per step to move rows.</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleRowReorderToggle('drag')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                rowReorderMode === 'drag' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                rowReorderMode === 'drag' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {rowReorderMode === 'drag' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">⠿ Drag &amp; Drop</p>
-                <p className="text-sm text-gray-500 mt-0.5">A grip handle replaces the arrows. Click and drag any row to reorder it instantly.</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            {rowReorderStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
-            {rowReorderStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
-          </div>
-        </div>
-      </div>
+      <ChoiceSettingCard
+        settingKey="rowReorderMode"
+        title="Row Reorder Mode"
+        subtitle="Choose how items are reordered in the Quote Form"
+        icon={<div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-lg">⠿</div>}
+        defaultValue="click"
+        options={[
+          { value: 'click', title: '↑ ↓ Click Arrows', description: 'Up and down arrow buttons appear beside each row. Click once per step to move rows.' },
+          { value: 'drag', title: '⠿ Drag & Drop', description: 'A grip handle replaces the arrows. Click and drag any row to reorder it instantly.' },
+        ]}
+      />
 
       {/* Translation Mode */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
-            <Languages size={20} />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Translation Mode / وضع الترجمة</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Control whether Arabic translation happens automatically or only when clicking the Translate button</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between gap-8">
-          <div className="space-y-3 flex-1">
-            <div
-              onClick={() => handleTranslationModeToggle('manual')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                translationMode === 'manual' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                translationMode === 'manual' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {translationMode === 'manual' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Manual (Only when clicking "Translate")</p>
-                <p className="text-sm text-gray-500 mt-0.5">Translation will only run when you explicitly click the "Translate" button. No automatic translation occurs while typing or changing fields.</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleTranslationModeToggle('auto')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                translationMode === 'auto' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                translationMode === 'auto' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {translationMode === 'auto' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Auto (Translate on blur / typing)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Automatically translates descriptions, notes, and items when you finish typing or select products.</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            {translationModeStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
-            {translationModeStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
-          </div>
-        </div>
-      </div>
+      <ChoiceSettingCard
+        settingKey="translationMode"
+        title="Translation Mode / وضع الترجمة"
+        subtitle="Control whether Arabic translation happens automatically or only when clicking the Translate button"
+        icon={<div className="p-2 bg-indigo-100 rounded-lg text-indigo-700"><Languages size={20} /></div>}
+        defaultValue="manual"
+        onChange={v => { try { localStorage.setItem('translationMode', v); } catch { /* storage unavailable */ } }}
+        options={[
+          { value: 'manual', title: 'Manual (Only when clicking "Translate")', description: 'Translation will only run when you explicitly click the "Translate" button. No automatic translation occurs while typing or changing fields.' },
+          { value: 'auto', title: 'Auto (Translate on blur / typing)', description: 'Automatically translates descriptions, notes, and items when you finish typing or select products.' },
+        ]}
+      />
 
       {/* Discount Calculation Mode */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
-            <Percent size={20} />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Discount Calculation Mode</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Select how discounts are entered and calculated in the Quotation form</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between gap-8">
-          <div className="space-y-3 flex-1">
-            <div
-              onClick={() => handleDiscountModeToggle('amount')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                discountMode === 'amount' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                discountMode === 'amount' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {discountMode === 'amount' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Direct Amount (SAR)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Discount is entered directly as a fixed currency amount in SAR (e.g. SAR 500.00).</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleDiscountModeToggle('percentage')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                discountMode === 'percentage' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                discountMode === 'percentage' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {discountMode === 'percentage' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Percentage (%)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Discount is entered as a percentage (e.g. 10%). The system automatically calculates the SAR reduction based on the Subtotal.</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleDiscountModeToggle('both')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                discountMode === 'both' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                discountMode === 'both' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {discountMode === 'both' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Both (Percentage &amp; Amount)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Displays both the percentage (%) input and the direct SAR amount simultaneously. Editing either input automatically recalculates the other.</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            {discountModeStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
-            {discountModeStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
-          </div>
-        </div>
-      </div>
+      <ChoiceSettingCard
+        settingKey="discountMode"
+        title="Discount Calculation Mode"
+        subtitle="Select how discounts are entered and calculated in the Quotation form"
+        icon={<div className="p-2 bg-indigo-100 rounded-lg text-indigo-700 font-bold text-sm">%</div>}
+        defaultValue="amount"
+        options={[
+          { value: 'amount', title: 'Direct Amount', description: 'Discount is entered directly as a fixed currency amount (in the quote currency).' },
+          { value: 'percentage', title: 'Percentage (%)', description: 'Discount is entered as a percentage (e.g. 10%). The system automatically calculates the reduction based on the Subtotal.' },
+          { value: 'both', title: 'Both (Percentage & Amount)', description: 'Displays both the percentage (%) input and the direct amount simultaneously. Editing either input automatically recalculates the other.' },
+        ]}
+      />
 
       {/* Developer Mode */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
