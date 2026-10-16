@@ -16,6 +16,7 @@ import { renderToBuffer } from '@react-pdf/renderer';
 import { QuotePdfDocument } from './src/pdf/quote-document.tsx';
 import { computeTotals, round2 } from './src/lib/money.ts';
 import { checkAiSql, runAiQuery } from './src/lib/aiQuery.ts';
+import { STATUSES, isStatus } from './src/lib/status.ts';
 import express from 'express';
 import http from 'http';
 import { createServer as createViteServer } from 'vite';
@@ -745,7 +746,7 @@ const QuoteSchema = z.object({
 
 const BulkStatusSchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(500),
-  status: z.enum(['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled']),
+  status: z.enum(STATUSES),
 });
 
 const FollowupSchema = z.object({
@@ -2507,7 +2508,7 @@ const handleSingleQuoteStatus = (req: express.Request, res: express.Response) =>
   const { status } = req.body;
   const quoteIdentifier = req.params.quote_id;
   if (!status || !quoteIdentifier) return res.status(400).json({ error: 'status and quote_id required' });
-  if (!['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled'].includes(status)) {
+  if (!isStatus(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
   const actor = (req as any).user?.username || 'system';
