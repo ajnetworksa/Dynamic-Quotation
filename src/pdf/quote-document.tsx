@@ -3,14 +3,21 @@ import { Document, Page, Text, View, StyleSheet, Image, Font, Svg, Defs, LinearG
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { round2 } from "../lib/money";
 
 // Fonts are bundled in assets/fonts so PDF generation works offline (the old CDN URLs are only a fallback).
-// Run the server from the project root (it already does: quotes.db and dist/ are resolved the same way).
-const FONT_DIR = path.resolve(process.cwd(), "assets", "fonts");
+// Resolved relative to this file (src/pdf -> ../../assets/fonts), so it works from any working directory.
+const FONT_DIRS = [
+  fileURLToPath(new URL("../../assets/fonts/", import.meta.url)),
+  path.resolve(process.cwd(), "assets", "fonts"),
+];
 const localFont = (file: string, cdn: string) => {
-  const p = path.join(FONT_DIR, file);
-  return fs.existsSync(p) ? p : cdn;
+  for (const dir of FONT_DIRS) {
+    const p = path.join(dir, file);
+    if (fs.existsSync(p)) return p;
+  }
+  return cdn;
 };
 Font.register({
   family: "Tajawal",

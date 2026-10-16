@@ -26,6 +26,7 @@ interface Permissions {
   canShareQuote?: boolean;
   canEditSharedQuote?: boolean;
   canUseKanban?: boolean;
+  canManageRecycleBin?: boolean;
 }
 
 interface AppUser {
@@ -46,6 +47,7 @@ interface PermissionGroup {
 const ALL_PERMISSIONS: { key: keyof Permissions; label: string; icon: React.ReactNode; description: string }[] = [
   { key: 'canManageUsers', label: 'Manage Users', icon: <Shield size={14} />, description: 'Create, edit, and delete system users and their permissions.' },
   { key: 'canManageSettings', label: 'Manage Settings', icon: <SettingsIcon size={14} />, description: 'Access global system settings, backup, and branding.' },
+  { key: 'canManageRecycleBin', label: 'Recycle Bin', icon: <Trash2 size={14} />, description: 'View, restore and permanently delete quotations in the Recycle Bin.' },
   { key: 'canDeleteData', label: 'Delete Records', icon: <Trash2 size={14} />, description: 'Permanently remove quotation and customer records.' },
   { key: 'canDatabaseMaintenance', label: 'DB Maintenance', icon: <Database size={14} />, description: 'Perform database cleanup and administrative tasks.' },
   { key: 'canOverridePrice', label: 'Price Analysis', icon: <Bot size={14} />, description: 'View cost base and apply manual price overrides in the analysis sidebar.' },
@@ -219,7 +221,8 @@ function UserFormPanel({
         <input
           type="password"
           className="p-2 border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-          placeholder={isEditing ? 'New password (leave blank to keep)' : 'Password'}
+          placeholder={isEditing ? 'New password (min 10 chars, blank = keep)' : 'Password (min 10 characters)'}
+          minLength={isEditing ? undefined : 10}
           value={editForm.password || ''}
           onChange={e => setEditForm(prev => ({ ...prev, password: e.target.value }))}
         />
@@ -464,7 +467,14 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
   };
 
   const handleAdd = async () => {
-    if (!editForm.username || !editForm.password || !editForm.role) return;
+    if (!editForm.username || !editForm.password || !editForm.role) {
+      setError('Username, password and role are required.');
+      return;
+    }
+    if (editForm.password.length < 10) {
+      setError('Password must be at least 10 characters.');
+      return;
+    }
     setError('');
     const res = await fetch('/api/users', {
       method: 'POST',

@@ -1408,7 +1408,7 @@ export default function Tracking() {
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
-                            if (!confirm('Are you sure you want to delete this record?')) return;
+                            if (!confirm('Move this record to the Recycle Bin?')) return;
                             await fetch(`/api/quotes/${quote.quote_id}`, { method: 'DELETE' });
                             fetchQuotes();
                           }}

@@ -2657,7 +2657,7 @@ export default function Settings() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Password / App Password</label>
-              <input type="password" placeholder="••••••••" value={smtpConfig.pass} onChange={e => setSmtpConfig({ ...smtpConfig, pass: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+              <input type="password" placeholder={(smtpConfig as any).passSet ? 'Saved (leave blank to keep)' : '••••••••'} value={smtpConfig.pass} onChange={e => setSmtpConfig({ ...smtpConfig, pass: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
             </div>
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">From Name</label>

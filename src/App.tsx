@@ -9,9 +9,10 @@ import {
   Settings as SettingsIcon, LogOut, Shield,
   LayoutDashboard, KeyRound, X, ChevronDown,
   User, CheckCircle2, Lock, Eye, EyeOff,
-  Moon, Sun, Kanban, Truck
+  Moon, Sun, Kanban, Truck, Trash2
 } from 'lucide-react';
 import KanbanBoard from './components/KanbanBoard';
+import { RecycleBin } from './components/RecycleBin';
 import QuoteForm from './components/QuoteForm';
 import Dashboard from './components/Dashboard';
 import ProductDB from './components/ProductDB';
@@ -216,7 +217,7 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     setError('');
     if (newPw !== confirm) { setError('New passwords do not match.'); return; }
-    if (newPw.length < 4) { setError('New password must be at least 4 characters.'); return; }
+    if (newPw.length < 10) { setError('New password must be at least 10 characters.'); return; }
     setLoading(true);
     try {
       const res = await fetch('/api/me/change-password', {
@@ -560,6 +561,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 {(user?.role === 'admin' || user?.permissions?.canUseKanban) && (
                   <NavItem to="/kanban" icon={Kanban} label="Kanban" />
                 )}
+                {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
+                  <NavItem to="/recycle-bin" icon={Trash2} label="Recycle Bin" />
+                )}
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                   <NavItem to="/users" icon={Shield} label="Users" />
                 )}
@@ -606,6 +610,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 <Route path="/kanban" element={<KanbanBoard />} />
               )}
               <Route path="/quote" element={null} />
+              {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
+                <Route path="/recycle-bin" element={<RecycleBin />} />
+              )}
               {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                 <Route path="/users" element={<UsersDB />} />
               )}

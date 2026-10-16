@@ -139,8 +139,21 @@ export default function ProductDB() {
   };
   const handleBulkDelete = async () => {
     if (!confirm(`Delete ${selectedIds.size} selected product(s)? This cannot be undone.`)) return;
-    for (const id of selectedIds) {
-      await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    // One request / one transaction (the old loop sent a DELETE per row and could stop half-way silently).
+    try {
+      const res = await fetch('/api/products/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.error || 'Bulk delete failed. Nothing was deleted.');
+        return;
+      }
+    } catch {
+      alert('Network error. Nothing was deleted.');
+      return;
     }
     setSelectedIds(new Set());
     fetchProducts();
