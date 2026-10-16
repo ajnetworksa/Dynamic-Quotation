@@ -15,16 +15,27 @@ export interface ConfirmRequest {
   resolve: (ok: boolean) => void;
 }
 
+export interface PromptRequest {
+  id: number;
+  message: string;
+  placeholder: string;
+  defaultValue: string;
+  required: boolean;
+  resolve: (value: string | null) => void;
+}
+
 type Listener = () => void;
 let nextId = 1;
 let toasts: ToastItem[] = [];
 let confirms: ConfirmRequest[] = [];
+let prompts: PromptRequest[] = [];
 const listeners = new Set<Listener>();
 const emit = () => listeners.forEach(l => l());
 
 export const subscribe = (l: Listener) => { listeners.add(l); return () => { listeners.delete(l); }; };
 export const getToasts = () => toasts;
 export const getConfirms = () => confirms;
+export const getPrompts = () => prompts;
 
 /** Pick a sensible style from the wording of legacy alert() messages. */
 export function inferKind(message: string): ToastKind {
@@ -75,4 +86,20 @@ export function resolveConfirm(id: number, ok: boolean) {
   confirms = confirms.filter(c => c.id !== id);
   emit();
   req.resolve(ok);
+}
+
+/** Ask for a short piece of text (e.g. a reason). Resolves with the text, or null when cancelled. */
+export function promptAsync(message: string, opts: { placeholder?: string; defaultValue?: string; required?: boolean } = {}): Promise<string | null> {
+  return new Promise<string | null>(resolve => {
+    prompts = [...prompts, { id: nextId++, message, placeholder: opts.placeholder || '', defaultValue: opts.defaultValue || '', required: !!opts.required, resolve }];
+    emit();
+  });
+}
+
+export function resolvePrompt(id: number, value: string | null) {
+  const req = prompts.find(p => p.id === id);
+  if (!req) return;
+  prompts = prompts.filter(p => p.id !== id);
+  emit();
+  req.resolve(value);
 }

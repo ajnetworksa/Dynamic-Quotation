@@ -137,6 +137,82 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
   check('quote is in the Recycle Bin', true);
   await page.screenshot({ path: `${SHOTS}/recycle-bin.png` });
 
+  // ── restore from the recycle bin, then client approval link (public page, separate browser context) ──
+  await page.goto(BASE + '/recycle-bin');
+  await page.waitForSelector('text=AJ-10001');
+  await page.evaluate(() => fetch('/api/recycle-bin/AJ-10001/restore', { method: 'POST' }));
+  const link = await page.evaluate(async () => (await (await fetch('/api/quotes/AJ-10001/share-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ days: 7 }) })).json()).url);
+  const anon = await browser.newContext({ viewport: { width: 420, height: 900 } });
+  const ap = await anon.newPage();
+  const apErrors = [];
+  ap.on('pageerror', e => apErrors.push(e.message));
+  await ap.goto(link);
+  await ap.waitForSelector('h1');
+  check('approval page shows the document without login', (await ap.locator('body').innerText()).includes('AJ-10001') && (await ap.locator('body').innerText()).includes('Cable CAT6'));
+  const [asw, acw] = await ap.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+  check('approval page fits a phone screen', asw <= acw, `${asw}/${acw}`);
+  check('approval page never shows costs or markup', !/markup|manual|original/i.test(await ap.locator('body').innerText()));
+  await ap.screenshot({ path: `${SHOTS}/approval-phone.png`, fullPage: true });
+  await ap.click('button:has-text("Accept")');
+  await ap.fill('#ap-name', 'Sara Client');
+  await ap.check('input[type=checkbox]');
+  await ap.click('button:has-text("Confirm acceptance")');
+  await ap.waitForSelector('text=has been accepted');
+  check('client can accept online', true);
+  await anon.close();
+  const st = await page.evaluate(async () => (await (await fetch('/api/quotes/AJ-10001')).json()).status);
+  check('quote status became Accepted', st === 'Accepted', st);
+  await page.goto(BASE + '/tracking');
+  await page.waitForSelector('tr:has-text("AJ-10001")');
+  await page.locator('tr:has-text("AJ-10001")').first().locator('button[aria-label="View Timeline"]').first().click();
+  await page.waitForSelector('text=Client approval link');
+  check('history drawer has payments and approval-link panels', (await page.locator('text=Payments').count()) > 0);
+  await page.screenshot({ path: `${SHOTS}/history-drawer.png` });
+  await page.keyboard.press('Escape');
+
+  // ── kanban drag & drop ──
+  await page.evaluate(() => fetch('/api/quotes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quote_id: 'AJ-10050', date: '2026-10-16', subject: 'dnd', items: [{ description: 'x', qty: 1, unit: 'pc', unit_price: 5, net_price: 5 }], status: 'Draft', type: 'Quotation', subtotal: 5, tax: 0.75, grand_total: 5.75, is_new: true }) }));
+  await page.goto(BASE + '/kanban');
+  await page.waitForSelector('[data-column="Draft"] >> text=AJ-10050');
+  await page.locator('[data-column="Draft"] [role=button]:has-text("AJ-10050")').dragTo(page.locator('[data-column="Sent"]'));
+  await page.waitForSelector('[data-column="Sent"] >> text=AJ-10050');
+  check('kanban drag and drop moves a card to Sent', true);
+  const dndStatus = await page.evaluate(async () => (await (await fetch('/api/quotes/AJ-10050')).json()).status);
+  check('drag and drop saved on the server', dndStatus === 'Sent', dndStatus);
+  await page.locator('[data-column="Sent"] [role=button]:has-text("AJ-10050")').dragTo(page.locator('[data-column="Rejected"]'));
+  await page.waitForSelector('[role=dialog] textarea');
+  await page.fill('[role=dialog] textarea', 'Too expensive');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('[data-column="Rejected"] >> text=AJ-10050');
+  const reason = await page.evaluate(async () => (await (await fetch('/api/quotes/AJ-10050')).json()).lost_reason);
+  check('rejecting asks for a reason and stores it', reason === 'Too expensive', String(reason));
+
+  // ── CSV import UI ──
+  await page.goto(BASE + '/customers');
+  await page.waitForLoadState('networkidle');
+  await page.click('button:has-text("Import CSV")');
+  await page.setInputFiles('#csv-file', { name: 'c.csv', mimeType: 'text/csv', buffer: Buffer.from('Company,Phone,Email\nCSV One,0501110001,one@x.com\nCSV Two,0501110002,\nAcme E2E,0501110003,\n') });
+  await page.waitForSelector('text=duplicates');
+  const summary = await page.locator('[role=dialog]').innerText();
+  check('CSV preview flags the existing customer as duplicate', /1\s*duplicates/.test(summary) && /2\s*new/.test(summary), summary.replace(/\s+/g, ' ').slice(0, 160));
+  await page.click('button:has-text("Import 2 rows")');
+  await page.waitForSelector('[role=status]:has-text("Import complete")');
+  check('CSV import adds the new rows', (await page.locator('text=CSV One').count()) > 0);
+
+  // ── security modal + audit log page ──
+  await page.goto(BASE + '/');
+  await page.click('button[aria-label=Profile]');
+  await page.click('text=Two-factor login and signed-in devices');
+  await page.waitForSelector('text=Account security');
+  await page.click('button:has-text("Set up")');
+  await page.waitForSelector('img[alt^="QR code"]');
+  check('2FA setup shows a QR code', true);
+  await page.screenshot({ path: `${SHOTS}/security.png` });
+  await page.keyboard.press('Escape');
+  await page.goto(BASE + '/audit-log');
+  await page.waitForSelector('td:has-text("LOGIN")');
+  check('audit log lists logins', true);
+
   // ── phone width: no page-level horizontal scroll ──
   await page.setViewportSize({ width: 390, height: 800 });
   for (const route of ['/', '/kanban', '/tracking', '/quote']) {

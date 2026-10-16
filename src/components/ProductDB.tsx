@@ -1,4 +1,6 @@
 import { getStoredUser } from '../lib/storage';
+import CsvImportModal from './CsvImportModal';
+import { productKey } from '../lib/importDedupe';
 import { toast, confirmAsync } from '../lib/notify';
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2, CheckSquare, Square, Languages } from 'lucide-react';
@@ -31,6 +33,7 @@ export default function ProductDB() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [showImport, setShowImport] = useState(false);
   const user = getStoredUser();
 
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
@@ -267,6 +270,29 @@ export default function ProductDB() {
           )}
         </div>
       )}
+      {showImport && (
+        <CsvImportModal
+          title="Import products from CSV"
+          templateName="products-template.csv"
+          columns={[
+            { key: 'description', label: 'Description', required: true, aliases: ['name', 'item', 'product', 'item description', 'الوصف'] },
+            { key: 'unit_price', label: 'Unit Price', required: true, aliases: ['price', 'cost', 'unit cost', 'rate', 'السعر'] },
+            { key: 'unit', label: 'Unit', aliases: ['uom', 'measure'] },
+            { key: 'item_code', label: 'Item Code', aliases: ['code', 'sku', 'part number', 'part no', 'part'] },
+            { key: 'supplier_name', label: 'Supplier', aliases: ['supplier name', 'vendor', 'brand'] },
+            { key: 'description_ar', label: 'Description (Arabic)', aliases: ['arabic', 'description ar', 'arabic description'] },
+          ]}
+          sample={[['CAT6 UTP cable 305m', '420.50', 'Roll', 'CAB-C6-305', 'Acme Cables', '']]}
+          existingKeys={new Set(products.map(p => productKey(p)))}
+          keysOf={r => [productKey(r)]}
+          validate={r => { const n = parseFloat(String(r.unit_price).replace(/[^0-9.\-]/g, '')); return Number.isFinite(n) && n >= 0 ? null : 'Price is not a number'; }}
+          toPayload={r => ({ description: r.description, description_ar: r.description_ar, unit: r.unit, unit_price: parseFloat(String(r.unit_price).replace(/[^0-9.\-]/g, '')), item_code: r.item_code, supplier_name: r.supplier_name })}
+          endpoint="/api/products/import"
+          duplicateOptions={{ label: 'If the product already exists:', field: 'onDuplicate', default: 'skip', options: [{ value: 'skip', label: 'Skip it' }, { value: 'update', label: 'Update its price' }] }}
+          onDone={fetchProducts}
+          onClose={() => setShowImport(false)}
+        />
+      )}
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
@@ -300,6 +326,12 @@ export default function ProductDB() {
                 <Bot size={18} /> Smart Update
               </button>
             )}
+ <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap"
+            >
+              <Upload size={18} /> Import CSV
+            </button>
             <button
               onClick={() => { 
                 setIsAdding(true); 
