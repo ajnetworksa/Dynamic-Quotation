@@ -170,7 +170,9 @@ const apiLimiter = rateLimit({
 const BCRYPT_ROUNDS = 12;
 
 // Initialize SQLite Database
-let db = new Database('quotes.db');
+// DB_PATH lets Docker keep the database in a mounted directory (default: ./quotes.db, unchanged for existing installs).
+const DB_FILE = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.resolve(process.cwd(), 'quotes.db');
+let db = new Database(DB_FILE);
 db.pragma('journal_mode = WAL'); // Enable Write-Ahead Logging for better concurrency with multiple tabs
 
 
@@ -1534,7 +1536,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
         showStamp,
-      })
+      }) as any
     );
 
     res.contentType("application/pdf");
@@ -1680,7 +1682,7 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
         showStamp: Boolean(showStamp),
-      })
+      }) as any
     );
 
     res.contentType("application/pdf");
@@ -2844,7 +2846,7 @@ app.get('/api/admin/backup-zip', requireAuth, requirePermission('canDatabaseMain
 // ── DATABASE OPTIMIZATION ENDPOINT ───────────────────────────────────────────
 app.post('/api/admin/db/optimize', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
   try {
-    const dbPath = path.resolve(process.cwd(), 'quotes.db');
+    const dbPath = DB_FILE;
     const oldStats = fs.statSync(dbPath);
 
     // Run safe sqlite maintenance
@@ -2921,8 +2923,8 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     db.close();
 
     // 5. Replace DB file with safe automated fallback recovery
-    const mainDbPath = path.resolve(process.cwd(), 'quotes.db');
-    const fallbackDbPath = path.resolve(process.cwd(), 'quotes.db.bak');
+    const mainDbPath = DB_FILE;
+    const fallbackDbPath = DB_FILE + '.bak';
 
     if (fs.existsSync(mainDbPath)) {
       fs.copyFileSync(mainDbPath, fallbackDbPath);
@@ -2947,7 +2949,7 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     }
 
     // 6. Re-open connection
-    db = new Database('quotes.db');
+    db = new Database(DB_FILE);
     db.pragma('journal_mode = WAL');
 
     res.json({ success: true });
@@ -2955,7 +2957,7 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     console.error('ZIP System restore failed:', error);
     // Safety fallback: ensure database connection is re-opened if crashed
     try {
-      db = new Database('quotes.db');
+      db = new Database(DB_FILE);
       db.pragma('journal_mode = WAL');
     } catch (reopenErr) {
       console.error('Critical: Failed to emergency re-open database connection:', reopenErr);
@@ -3652,7 +3654,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
 
     let rows;
     try {
-      rows = runAiQuery(path.resolve(process.cwd(), 'quotes.db'), currentUser, cleanedQuery, 200);
+      rows = runAiQuery(DB_FILE, currentUser, cleanedQuery, 200);
     } catch (sqlErr: any) {
       logSystemError('AI Assistant', 'SQLException', `Database execution error: ${sqlErr.message}`, `Query: ${cleanedQuery}\n\nStack: ${sqlErr.stack || sqlErr}`);
       return res.json({ answer: 'I could not run that query. Please rephrase your question.' });

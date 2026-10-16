@@ -164,7 +164,7 @@ export default function QuoteForm() {
     d.setDate(d.getDate() + 30);
     return d.toISOString().split('T')[0];
   });
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | number>('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerFocused, setCustomerFocused] = useState(false);
@@ -190,7 +190,7 @@ export default function QuoteForm() {
   const [focusedDescriptionIndex, setFocusedDescriptionIndex] = useState<number | null>(null);
   const descriptionRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
   const descriptionArRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
-  const blurTimeoutRef = useRef<NodeJS.Timeout>();
+  const blurTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   // Measured position of the active description textarea — updated by useEffect so it's always fresh
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   // Standalone modal for adding a new product (outside textarea focus chain)
@@ -3537,7 +3537,7 @@ export default function QuoteForm() {
                         onPointerCancel={rowReorderMode === 'drag' ? pointerCancelDrag : undefined}
                       >
                         <div
-                          ref={el => rowRefs.current[index] = el}
+                          ref={el => { rowRefs.current[index] = el; }}
                           className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 [&_input]:text-[inherit] [&_textarea]:text-[inherit] items-stretch print:items-stretch transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
                           ${dragIndex === index ? 'opacity-30' : 'opacity-100'}

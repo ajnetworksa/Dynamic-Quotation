@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   app:
     build: .
@@ -7,12 +5,20 @@ services:
     ports:
       - "3000:3000"
     volumes:
+      # Existing installs: the database file stays where it was. Create it first (touch quotes.db) or Docker will
+      # create a DIRECTORY with that name and the container will refuse to start (the entrypoint explains why).
       - ./quotes.db:/app/quotes.db
       - ./uploads:/app/uploads
+      # Automatic backups and pre-restore snapshots survive redeploys.
+      - ./backups:/app/backups
+      # Cleaner layout for NEW installs (optional): replace the quotes.db line above with
+      #   - ./data:/app/data
+      # and add  DB_PATH=/app/data/quotes.db  to the environment below.
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - APP_URL=${APP_URL}
+      # First-run admin password (10+ chars). If unset a random one is printed once in `docker logs`.
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
     restart: unless-stopped
