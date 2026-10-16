@@ -217,6 +217,18 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
   const unit = await page.locator(`${row1} input.font-mono`).first().inputValue();
   check('the quote line is filled with the product price plus markup (99.50 x 1.08)', unit === '107.46', unit);
 
+  // ── settings: generic choice cards save and persist ──
+  await page.goto(BASE + '/settings');
+  await page.waitForLoadState('networkidle');
+  await page.locator('[role=radiogroup][aria-label="Discount Calculation Mode"] [role=radio]:has-text("Percentage (%)"):not(:has-text("Both"))').click();
+  await page.waitForSelector('text=Saved');
+  await page.reload();
+  await page.waitForLoadState('networkidle');
+  const pct = await page.locator('[role=radiogroup][aria-label="Discount Calculation Mode"] [role=radio]:has-text("Percentage (%)"):not(:has-text("Both"))').getAttribute('aria-checked');
+  check('choice setting persists after reload', pct === 'true', String(pct));
+  await page.locator('[role=radiogroup][aria-label="Discount Calculation Mode"] [role=radio]').first().click();
+  await page.waitForSelector('text=Saved');
+
   // ── security modal + audit log page ──
   await page.goto(BASE + '/');
   await page.click('button[aria-label=Profile]');
