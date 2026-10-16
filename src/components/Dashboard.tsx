@@ -1,4 +1,5 @@
 import { getStoredUser } from '../lib/storage';
+import { t, useLang } from '../lib/i18n';
 import { wonQuotes, isWon } from '../lib/status';
 import { monthKeyOf } from '../lib/dates';
 import { useState, useEffect } from 'react';
@@ -26,6 +27,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function Dashboard() {
+    useLang();
     const [quotes, setQuotes] = useState<Quote[]>([]);
     const [chosenCurrency, setChosenCurrency] = useState('');
     const navigate = useNavigate();
@@ -191,7 +193,7 @@ export default function Dashboard() {
                             {card.icon}
                         </div>
                         <div>
-                            <p className="text-xs font-medium text-gray-500 leading-tight">{card.label}</p>
+                            <p className="text-xs font-medium text-gray-500 leading-tight">{t(card.label)}</p>
                             <p className="text-lg font-bold text-gray-900 mt-0.5 leading-tight">{card.value}</p>
                         </div>
                     </motion.div>
@@ -231,7 +233,7 @@ export default function Dashboard() {
 
                     {/* Conversion Metrics */}
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                        <h3 className="text-lg font-bold text-gray-800 mb-3 self-start">Conversion Metrics</h3>
+                        <h3 className="text-lg font-bold text-gray-800 mb-3 self-start">{t('Conversion Metrics')}</h3>
                         <div className="flex-1 w-full flex items-center justify-center">
                             <div
                                 className="w-40 h-40 rounded-full flex items-center justify-center relative shadow-inner"
@@ -242,7 +244,7 @@ export default function Dashboard() {
                                 <div className="absolute inset-[14px] bg-white rounded-full" />
                                 <div className="flex flex-col relative">
                                     <span className="text-3xl font-black text-emerald-600">{stats.winRate}%</span>
-                                    <span className="text-xs font-bold text-gray-500 uppercase mt-1">Win Rate</span>
+                                    <span className="text-xs font-bold text-gray-500 uppercase mt-1">{t('Win Rate')}</span>
                                 </div>
                             </div>
                         </div>

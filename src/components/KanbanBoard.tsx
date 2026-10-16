@@ -4,6 +4,7 @@ import {
   Loader2, ChevronRight, DollarSign, Clock, X, AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { t, useLang } from '../lib/i18n';
 
 // Pipeline stages in order. Rejected / Cancelled are closed states reachable via the reject button
 // (or set elsewhere, e.g. Tracking) and are shown so those quotes never disappear from the board.
@@ -39,6 +40,7 @@ const shortDate = (d: string) => {
 };
 
 export default function KanbanBoard() {
+  useLang();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -97,14 +99,14 @@ export default function KanbanBoard() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Quotation Kanban</h1>
-          <p className="text-gray-500 dark:text-gray-400">Track and manage your quotation pipeline</p>
+          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">{t('Quotation Kanban')}</h1>
+          <p className="text-gray-500 dark:text-gray-400">{t('Track and manage your quotation pipeline')}</p>
         </div>
         <button
           onClick={() => navigate('/quote')}
           className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100 dark:shadow-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
         >
-          + New Quote
+          {t('+ New Quote')}
         </button>
       </div>
 
@@ -127,7 +129,7 @@ export default function KanbanBoard() {
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full ${DOT_COLORS[status]}`} />
-                <h2 className="font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider text-xs">{status}</h2>
+                <h2 className="font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider text-xs">{t(status)}</h2>
                 <span className="bg-white dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-[10px] font-bold px-1.5 py-0.5 rounded-md border border-gray-200 dark:border-gray-600">
                   {columnQuotes.length}
                 </span>
@@ -137,7 +139,7 @@ export default function KanbanBoard() {
 
             <div className="flex flex-col gap-3">
               {columnQuotes.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-6">No quotes</p>
+                <p className="text-xs text-gray-400 text-center py-6">{t('No quotes')}</p>
               )}
               <AnimatePresence mode="popLayout">
                 {columnQuotes.map(quote => {
