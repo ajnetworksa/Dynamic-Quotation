@@ -19,6 +19,7 @@
 
 import { getStoredUser } from '../lib/storage';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { round2, lineTotal, computeTotals, discountFromRate, rateFromDiscount, clampPercent, marginPercent } from '../lib/money';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
 import html2canvas from 'html2canvas';
@@ -201,7 +202,8 @@ export default function QuoteForm() {
   const [subjectAr, setSubjectAr] = useState('');
   const [items, setItems] = useState<QuoteItem[]>([]);
   const [itemsHistory, setItemsHistory] = useState<QuoteItem[][]>([]);
-  const [discount, setDiscount] = useState(0);
+  // rawDiscount is what the user typed; `discount` (derived below) is the amount actually applied (capped at the subtotal).
+  const [rawDiscount, setDiscount] = useState(0);
   const [discountRate, setDiscountRate] = useState(0);
   const [discountMode, setDiscountMode] = useState<'amount' | 'percentage' | 'both'>('amount');
   const lastDiscountEditedRef = useRef<'rate' | 'amount'>('amount');
@@ -312,11 +314,12 @@ export default function QuoteForm() {
       if ((item.manual_price !== undefined && item.manual_price !== null) || item.original_price === undefined || item.original_price === null) {
         return item;
       }
-      const newUnitPrice = item.original_price * (1 + markup / 100);
+      // Same rounding as updateItem/fetchQuote so every path produces identical prices.
+      const newUnitPrice = round2(item.original_price * (1 + markup / 100));
       return {
         ...item,
         unit_price: newUnitPrice,
-        net_price: newUnitPrice * item.qty
+        net_price: lineTotal(item.qty, newUnitPrice)
       };
     }));
   }, [markup]);
@@ -1641,6 +1644,10 @@ export default function QuoteForm() {
   };
 
   const updateItem = (index: number, field: keyof QuoteItem, value: any) => {
+    // Quantities and prices can never be negative (a negative line silently reduced the quote total).
+    if ((field === 'qty' || field === 'unit_price' || field === 'manual_price') && typeof value === 'number' && !isNaN(value) && value < 0) {
+      value = 0;
+    }
     setItems(prevItems => {
       const newItems = [...prevItems];
       newItems[index] = { ...newItems[index], [field]: value };
@@ -1719,7 +1726,10 @@ export default function QuoteForm() {
     return '--';
   };
 
-  const subtotal = items.reduce((sum, item) => sum + (item.net_price || 0), 0);
+  // All money figures come from the shared module (src/lib/money.ts) so form, PDF and exports agree.
+  const totals = computeTotals({ lineNets: items.map(i => i.net_price || 0), discount: rawDiscount, vatRate });
+  const subtotal = totals.subtotal;
+  const discount = totals.discount;
 
   let baseTotal = 0;
   let markupProfit = 0;
@@ -1744,24 +1754,24 @@ export default function QuoteForm() {
     }
   });
 
+  // Profit is what is left after the discount is given away.
+  markupProfit = round2(markupProfit - discount);
+
   useEffect(() => {
     if (discountMode === 'percentage') {
-      const computed = Number(((subtotal * (discountRate || 0)) / 100).toFixed(2));
-      setDiscount(computed);
+      setDiscount(discountFromRate(subtotal, discountRate));
     } else if (discountMode === 'both') {
       if (lastDiscountEditedRef.current === 'rate') {
-        const computed = Number(((subtotal * (discountRate || 0)) / 100).toFixed(2));
-        setDiscount(computed);
+        setDiscount(discountFromRate(subtotal, discountRate));
       } else {
-        const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
-        setDiscountRate(rate);
+        setDiscountRate(rateFromDiscount(subtotal, discount));
       }
     }
   }, [subtotal, discountRate, discountMode]);
 
-  const discountedSubtotal = Math.max(0, subtotal - discount);
-  const tax = discountedSubtotal * (vatRate / 100);
-  const grandTotal = discountedSubtotal + tax;
+  const discountedSubtotal = totals.discountedSubtotal;
+  const tax = totals.tax;
+  const grandTotal = totals.grandTotal;
 
   const performSave = async (force: boolean = false, overrideQuoteId?: string): Promise<boolean> => {
     const activeQuoteId = overrideQuoteId || quoteId;
@@ -1881,6 +1891,17 @@ export default function QuoteForm() {
     }
     if (grandTotal === 0) {
       alert('Total is zero! Please check.');
+      return false;
+    }
+    // Lines with a price but no description are dropped on save while still counted in the totals, so refuse them.
+    const orphanIdx = items.findIndex(i => (i.description || '').trim() === '' && (i.net_price || 0) > 0);
+    if (orphanIdx !== -1) {
+      alert(`Item ${orphanIdx + 1} has a price but no description. Add a description or remove the line.`);
+      return false;
+    }
+    const badQtyIdx = items.findIndex(i => (i.description || '').trim() !== '' && !(Number(i.qty) > 0));
+    if (badQtyIdx !== -1) {
+      alert(`Item ${badQtyIdx + 1} has a quantity of zero. Enter a quantity greater than 0.`);
       return false;
     }
     if (!selectedCustomerId) {
@@ -4071,13 +4092,15 @@ export default function QuoteForm() {
                           <input
                             type="number"
                             className="w-24 text-right outline-none bg-white border border-gray-300 rounded px-1.5 py-0.5 font-bold text-sm focus:border-indigo-500 shadow-sm"
-                            value={discount || ''}
+                            value={rawDiscount || ''}
                             onChange={e => {
                               lastDiscountEditedRef.current = 'amount';
-                              const val = Math.max(0, parseFloat(e.target.value) || 0);
+                              // Never accept more than the subtotal: the PDF would otherwise print a discount larger than the items.
+                              const val = Math.min(Math.max(0, parseFloat(e.target.value) || 0), subtotal > 0 ? subtotal : Infinity);
                               setDiscount(val);
-                              setDiscountRate(subtotal > 0 ? Number(((val / subtotal) * 100).toFixed(2)) : 0);
+                              setDiscountRate(rateFromDiscount(subtotal, val));
                             }}
+                            max={subtotal > 0 ? subtotal : undefined}
                             min="0"
                             step="0.01"
                             placeholder="0.00"
@@ -4105,7 +4128,7 @@ export default function QuoteForm() {
                       type="number"
                       className="w-9 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
                       value={vatRate}
-                      onChange={e => setVatRate(parseFloat(e.target.value) || 0)}
+                      onChange={e => setVatRate(clampPercent(parseFloat(e.target.value) || 0))}
                       min="0"
                       max="100"
                     />%
@@ -4423,7 +4446,9 @@ export default function QuoteForm() {
                   <input
                     type="number"
                     value={markup}
-                    onChange={e => setMarkup(parseFloat(e.target.value) || 0)}
+                    onChange={e => setMarkup(Math.min(1000, Math.max(-99, parseFloat(e.target.value) || 0)))}
+                    min={-99}
+                    max={1000}
                     className="w-16 p-1 bg-yellow-300 text-black font-bold outline-none text-center rounded border border-yellow-400"
                   />
                 </div>
@@ -4511,6 +4536,10 @@ export default function QuoteForm() {
                 <div className="flex justify-between items-center px-1 bg-green-50 rounded">
                   <span className="text-green-800">MU</span>
                   <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between items-center px-1 text-sm">
+                  <span className="text-gray-600" title="Profit as a share of the sale price (after discount). Markup is profit as a share of cost.">Margin %</span>
+                  <span className="font-mono">{marginPercent(discountedSubtotal, markupProfit)}%</span>
                 </div>
 
                 <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">

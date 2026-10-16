@@ -1321,7 +1321,9 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
     const showStamp = req.query.stamp === 'true';
 
     const pdfSettings = {
-      companyName: "AJ Network Solutions", // default fallback
+      companyName: settingsMap.companyName || "AJ Network Solutions", // default fallback
+      phone: settingsMap.companyPhone || null,
+      email: settingsMap.companyEmail || null,
       brandColor,
       taxLabel: `VAT ${quote.vat_rate || 15}%`,
       logoUrl: settingsMap.logo || null,
@@ -1466,7 +1468,9 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
     const isInvoice = (quote.type || '').toLowerCase().includes('invoice');
 
     const pdfSettings = {
-      companyName: "AJ Network Solutions",
+      companyName: settingsMap.companyName || "AJ Network Solutions",
+      phone: settingsMap.companyPhone || null,
+      email: settingsMap.companyEmail || null,
       brandColor,
       taxLabel: `VAT ${quote.vat_rate || 15}%`,
       logoUrl: settingsMap.logo || null,
