@@ -82,6 +82,15 @@ echo "restore right passphrase: $(curl -s -X POST -H "$H" -F "file=@$S/backup.en
 echo "customers after restore: $(curl -s -H "$H" $B/api/customers | python3 -c 'import sys,json;print(sorted(c["name"] for c in json.load(sys.stdin) if "Backup" in c["name"]))')"
 echo "health after restore: $(curl -s $B/api/health)"
 ls $S/../ >/dev/null 2>&1; echo "pre-restore snapshot kept: $(ls $REPO/backups | grep -c pre_restore)"
+
+echo "--- recurring documents"
+TODAY=$(date +%F)
+echo "create monthly schedule (starts today): $(curl -s -X POST -H "$H" -H "$J" -d "{\"frequency\":\"monthly\",\"start_date\":\"$TODAY\"}" $B/api/quotes/AJ-10001/recurring)"
+echo "schedule: $(curl -s -H "$H" $B/api/quotes/AJ-10001/recurring | python3 -c 'import sys,json;d=json.load(sys.stdin)[0];print(d["frequency"], "runs="+str(d["runs"]), "next>today:", d["next_run"]>"'$TODAY'", d["last_created_id"])')"
+echo "generated draft: $(curl -s -H "$H" $B/api/quotes | python3 -c 'import sys,json;l=json.load(sys.stdin);g=[q for q in l if q["quote_id"] not in ("AJ-10001","AJ-10002")];print([(q["quote_id"],q["status"],q["grand_total"],q["date"]==  "'$TODAY'") for q in g][:2])')"
+echo "items copied: $(curl -s -H "$H" $B/api/quotes | python3 -c 'import sys,json;l=json.load(sys.stdin);print(len([q for q in l if q["quote_id"] not in ("AJ-10001","AJ-10002")]))')"
+echo "payments not copied: $(curl -s -H "$H" $B/api/quotes | python3 -c 'import sys,json;l=json.load(sys.stdin);print([q["paid_total"] for q in l if q["quote_id"] not in ("AJ-10001","AJ-10002")])')"
+echo "stop schedule: $(curl -s -X DELETE -H "$H" $B/api/recurring/1)"
 echo "--- audit log"
 echo "audit entries: $(curl -s "$B/api/audit-log?limit=100" -H "$H" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["total"], sorted(set(i["action"] for i in d["items"]))[:6])')"
 echo "bob (no perm) audit: $(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $BT2" $B/api/audit-log)"
