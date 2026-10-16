@@ -275,12 +275,13 @@ export default function Dashboard() {
                             >
                                 <div>
                                     <div className="flex gap-2 items-center flex-wrap">
-                                        <span
-                                            className="font-bold text-indigo-900 cursor-pointer group-hover:text-indigo-600 transition-colors"
+                                        <button
+                                            type="button"
+                                            className="font-bold text-indigo-900 cursor-pointer group-hover:text-indigo-600 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 rounded"
                                             onClick={() => handleRecall(quote.quote_id)}
                                         >
                                             {quote.quote_id}
-                                        </span>
+                                        </button>
                                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${STATUS_COLORS[quote.status || 'Draft'] || STATUS_COLORS.Draft}`}>
                                             {quote.status || 'Draft'}
                                         </span>
@@ -296,7 +297,7 @@ export default function Dashboard() {
                                     <div className="text-xs text-gray-400 mt-1">{quote.date}</div>
                                     <button
                                         onClick={() => handleRecall(quote.quote_id)}
-                                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-2 group-hover:translate-x-0"
+                                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity transform translate-x-2 group-hover:translate-x-0"
                                     >
                                         Open <Send size={11} />
                                     </button>
@@ -384,7 +385,7 @@ export default function Dashboard() {
                                             <td className="px-5 py-3 text-center">
                                                 <button
                                                     onClick={() => navigate(`/tracking?customer=${encodeURIComponent(name)}`)}
-                                                    title={`View all quotes for ${name}`}
+                                                    title={`View all quotes for ${name}`} aria-label={`View all quotes for ${name}`}
                                                     className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 font-bold text-sm hover:bg-indigo-600 hover:text-white transition-colors cursor-pointer"
                                                 >{v.count}</button>
                                             </td>

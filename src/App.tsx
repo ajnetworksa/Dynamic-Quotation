@@ -158,7 +158,7 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
@@ -235,7 +235,7 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
@@ -344,7 +344,6 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
   const [showChangePw, setShowChangePw] = useState(false);
   const [showPermissions, setShowPermissions] = useState(false);
   const [globalShowFeatureAccess, setGlobalShowFeatureAccess] = useState(true);
-  const [inspectionProtection, setInspectionProtection] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click
@@ -363,41 +362,13 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
           if (config.showFeatureAccess !== undefined) {
             setGlobalShowFeatureAccess(config.showFeatureAccess);
           }
-          if (config.inspectionProtection !== undefined) {
-            setInspectionProtection(config.inspectionProtection);
-          }
         }
       })
       .catch(console.error);
   }, []);
 
-  useEffect(() => {
-    if (!inspectionProtection) return;
-
-    // Never block the context menu on editable fields (paste / copy / spellcheck must keep working).
-    const isEditable = (t: EventTarget | null) => {
-      const el = t as HTMLElement | null;
-      return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
-    };
-    const handleContextMenu = (e: MouseEvent) => { if (!isEditable(e.target)) e.preventDefault(); };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Disable F12
-      if (e.keyCode === 123) e.preventDefault();
-      // Disable Ctrl+Shift+I (Inspect)
-      if (e.ctrlKey && e.shiftKey && e.keyCode === 73) e.preventDefault();
-      // Disable Ctrl+Shift+J (Console)
-      if (e.ctrlKey && e.shiftKey && e.keyCode === 74) e.preventDefault();
-      // Disable Ctrl+U (View Source)
-      if (e.ctrlKey && e.keyCode === 85) e.preventDefault();
-    };
-
-    document.addEventListener('contextmenu', handleContextMenu);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('contextmenu', handleContextMenu);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [inspectionProtection]);
+  // (The right-click / F12 'Source Inspection Protection' was removed: it gave no real protection because the JS
+  //  bundle is public, and it broke copy/paste for users. Leftover `inspectionProtection` settings are ignored.)
 
   const displayName = user?.name || user?.username;
   const initials = (displayName || 'U').slice(0, 2).toUpperCase();
@@ -423,7 +394,7 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
         <button
           onClick={() => setOpen(v => !v)}
           className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-xl hover:bg-gray-100 transition-colors"
-          title="Profile"
+          title="Profile" aria-label="Profile"
         >
           {/* Avatar */}
           <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
@@ -577,7 +548,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               <button
                 onClick={() => setIsDarkMode(!isDarkMode)}
                 className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition-colors"
-                title={isDarkMode ? 'Light Mode' : 'Dark Mode'}
+                title={isDarkMode ? 'Light Mode' : 'Dark Mode'} aria-label={isDarkMode ? 'Light Mode' : 'Dark Mode'}
               >
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
