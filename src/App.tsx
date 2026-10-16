@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { readJson, clearSessionStorage } from './lib/storage';
+import { t, useLang, setLang } from './lib/i18n';
 import {
   FileText, Database, Users, History,
   Settings as SettingsIcon, LogOut, Shield,
@@ -58,6 +59,7 @@ Object.defineProperty(window, 'fetch', {
 
 // ── NavItem ───────────────────────────────────────────────────────────────────
 function NavItem({ to, icon: Icon, label }: { to: string; icon: any; label: string }) {
+  useLang(); // re-render when the language changes
   const location = useLocation();
   const isActive = location.pathname === to;
   return (
@@ -69,7 +71,7 @@ function NavItem({ to, icon: Icon, label }: { to: string; icon: any; label: stri
       }`}
     >
       <Icon size={20} />
-      <span className="font-medium">{label}</span>
+      <span className="font-medium">{t(label)}</span>
     </Link>
   );
 }
@@ -512,10 +514,11 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
 // ── Main Layout ───────────────────────────────────────────────────────────────
 function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: any; handleLogout: () => void; isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) {
   const location = useLocation();
+  const lang = useLang();
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col">
-      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:bg-white focus:text-indigo-700 focus:px-3 focus:py-2 focus:rounded-lg focus:shadow-lg">Skip to content</a>
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:bg-white focus:text-indigo-700 focus:px-3 focus:py-2 focus:rounded-lg focus:shadow-lg">{t('Skip to content')}</a>
       <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
@@ -546,6 +549,14 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                   <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
                 )}
               </nav>
+              {/* Language toggle (English / Arabic, switches page direction too) */}
+              <button
+                onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
+                className="px-2 py-1 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 text-sm font-semibold transition-colors"
+                title={t('Language')} aria-label={t('Language')}
+              >
+                {lang === 'ar' ? 'EN' : 'عربي'}
+              </button>
               {/* Theme Toggle */}
               <button
                 onClick={() => setIsDarkMode(!isDarkMode)}
