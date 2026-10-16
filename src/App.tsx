@@ -16,6 +16,7 @@ import KanbanBoard from './components/KanbanBoard';
 import { RecycleBin } from './components/RecycleBin';
 import AuditLog from './components/AuditLog';
 import SecurityModal from './components/SecurityModal';
+import ApprovalPage from './components/ApprovalPage';
 import QuoteForm from './components/QuoteForm';
 import Dashboard from './components/Dashboard';
 import ProductDB from './components/ProductDB';
@@ -708,6 +709,10 @@ export default function App() {
     setIsAuthenticated(false);
     setUser(null);
   };
+
+  // Public client approval page: reachable without a login, e.g. https://host/approve/<token>
+  const approveMatch = window.location.pathname.match(/^\/approve\/([A-Za-z0-9_-]+)\/?$/);
+  if (approveMatch) return <ApprovalPage token={approveMatch[1]} />;
 
   if (!isAuthenticated) return <Login onLogin={handleLogin} />;
 

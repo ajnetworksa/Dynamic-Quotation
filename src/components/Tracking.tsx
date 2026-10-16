@@ -1,5 +1,7 @@
 import { getStoredUser } from '../lib/storage';
-import { toast, confirmAsync } from '../lib/notify';
+import { toast, confirmAsync, promptAsync } from '../lib/notify';
+import PaymentsPanel from './PaymentsPanel';
+import ShareLinkPanel from './ShareLinkPanel';
 import { ymdOf, parseQuoteDate } from '../lib/dates';
 import { STATUS_BADGE as SHARED_BADGES, STATUSES, normalizeStatus } from '../lib/status';
 const STATUS_BADGE: Record<string, string> = SHARED_BADGES;
@@ -26,6 +28,9 @@ interface Quote {
   author_username?: string;
   author_name?: string;
   quote_note?: string;
+  lost_reason?: string | null;
+  paid_total?: number;
+  currency?: string;
 }
 
 // STATUS_BADGE / STATUSES come from src/lib/status.ts (shared with Kanban and Dashboard).
@@ -174,10 +179,16 @@ export default function Tracking() {
   const handleBulkStatusApply = async () => {
     if (!bulkStatus || selectedIds.size === 0) return;
     try {
+      let reason: string | undefined;
+      if (bulkStatus === 'Rejected') {
+        const answer = await promptAsync('Why were these quotes rejected? (optional)', { placeholder: 'e.g. price too high, chose a competitor' });
+        if (answer === null) return;
+        reason = answer || undefined;
+      }
       const res = await fetch('/api/quotes/bulk-status', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: Array.from(selectedIds), status: bulkStatus })
+        body: JSON.stringify({ ids: Array.from(selectedIds), status: bulkStatus, reason })
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -977,17 +988,23 @@ export default function Tracking() {
 
   const updateSingleStatus = async (quoteId: string, newStatus: string) => {
     try {
+      let reason: string | undefined;
+      if (newStatus === 'Rejected') {
+        const answer = await promptAsync('Why was this quote rejected? (optional)', { placeholder: 'e.g. price too high, chose a competitor' });
+        if (answer === null) { fetchQuotes(); return; } // cancelled: put the dropdown back
+        reason = answer || undefined;
+      }
       const res = await fetch('/api/quotes/bulk-status', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [quoteId], status: newStatus })
+        body: JSON.stringify({ ids: [quoteId], status: newStatus, reason })
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         toast(body.error || 'Failed to update status.');
         return;
       }
-      setQuotes(prev => prev.map(q => q.quote_id === quoteId ? { ...q, status: newStatus } : q));
+      setQuotes(prev => prev.map(q => q.quote_id === quoteId ? { ...q, status: newStatus, lost_reason: reason ?? null } : q));
     } catch (e) {
       toast('Failed to update status.');
     }
@@ -1349,6 +1366,9 @@ export default function Tracking() {
                       <option value="Invoiced">Invoiced</option>
                       <option value="Cancelled">Cancelled</option>
                     </select>
+                    {quote.status === 'Rejected' && quote.lost_reason && (
+                      <div className="text-[10px] text-red-600 mt-1 max-w-[140px] truncate" title={quote.lost_reason}>Reason: {quote.lost_reason}</div>
+                    )}
                   </td>
                   <td className="p-4 text-gray-600">
                     {formatDisplayDate(quote.date)}
@@ -1360,7 +1380,14 @@ export default function Tracking() {
                   </td>
                   <td className="p-4 font-medium text-gray-900 cursor-text">{quote.customer_name}</td>
                   <td className="p-4 text-gray-600 truncate max-w-[200px] cursor-text" title={quote.subject}>{quote.subject}</td>
-                  <td className="p-4 font-mono font-medium text-gray-900">{quote.grand_total?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td className="p-4 font-mono font-medium text-gray-900">
+                    {quote.grand_total?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {(quote.paid_total || 0) > 0 && (
+                      <div className={`text-[10px] font-sans font-semibold ${quote.paid_total! >= (quote.grand_total || 0) - 0.005 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {quote.paid_total! >= (quote.grand_total || 0) - 0.005 ? 'Paid in full' : `Paid ${quote.paid_total!.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                      </div>
+                    )}
+                  </td>
                   <td className="p-4 text-gray-500 text-sm">
                     {quote.updated_at ? new Date(quote.updated_at).toLocaleString() : '-'}
                   </td>
@@ -1582,6 +1609,12 @@ export default function Tracking() {
               </h3>
               <button onClick={closeTimeline} className="text-gray-400 hover:text-gray-700 transition-colors"><X size={22} /></button>
             </div>
+
+            {/* Payments (add / remove, balance due) */}
+            {timelineQuote && (
+              <PaymentsPanel quoteId={timelineQuoteId} currency={timelineQuote.currency || 'SAR'} onChanged={fetchQuotes} />
+            )}
+            {timelineQuote && <ShareLinkPanel quoteId={timelineQuoteId} onChanged={fetchQuotes} />}
 
             {/* Quote Summary Card */}
             {timelineQuote && (

@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useSyncExternalStore } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from 'lucide-react';
-import { subscribe, getToasts, getConfirms, dismissToast, resolveConfirm, ToastKind } from '../lib/notify';
+import { subscribe, getToasts, getConfirms, getPrompts, dismissToast, resolveConfirm, resolvePrompt, ToastKind, PromptRequest } from '../lib/notify';
 
 const STYLES: Record<ToastKind, { box: string; icon: React.ReactNode }> = {
   success: { box: 'bg-emerald-50 border-emerald-300 text-emerald-900', icon: <CheckCircle2 size={18} className="text-emerald-600 shrink-0" aria-hidden="true" /> },
@@ -49,12 +49,47 @@ function ConfirmDialog({ id, message, confirmLabel, cancelLabel, danger }: { id:
   );
 }
 
+function PromptDialog({ req }: { req: PromptRequest }) {
+  const [value, setValue] = useState(req.defaultValue);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    inputRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); resolvePrompt(req.id, null); } };
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('keydown', onKey, true); opener?.focus?.(); };
+  }, [req.id]);
+  const canSubmit = !req.required || value.trim().length > 0;
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4" onMouseDown={e => { if (e.target === e.currentTarget) resolvePrompt(req.id, null); }}>
+      <form
+        role="dialog" aria-modal="true" aria-labelledby={`prompt-msg-${req.id}`}
+        onSubmit={e => { e.preventDefault(); if (canSubmit) resolvePrompt(req.id, value.trim()); }}
+        className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6"
+      >
+        <label id={`prompt-msg-${req.id}`} htmlFor={`prompt-input-${req.id}`} className="block text-gray-800 whitespace-pre-line mb-3">{req.message}</label>
+        <textarea
+          id={`prompt-input-${req.id}`} ref={inputRef} value={value} onChange={e => setValue(e.target.value)} rows={3} maxLength={500} placeholder={req.placeholder}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (canSubmit) resolvePrompt(req.id, value.trim()); } }}
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+        />
+        <div className="flex justify-end gap-3 mt-4">
+          <button type="button" onClick={() => resolvePrompt(req.id, null)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancel</button>
+          <button type="submit" disabled={!canSubmit} className="px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 disabled:opacity-50">OK</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 /** Mount once near the app root. Renders toasts (aria-live) and confirm dialogs. */
 export default function NotifyHost() {
   useDialogAccessibility();
   const toasts = useSyncExternalStore(subscribe, getToasts);
   const confirms = useSyncExternalStore(subscribe, getConfirms);
+  const prompts = useSyncExternalStore(subscribe, getPrompts);
   const current = confirms[0];
+  const currentPrompt = prompts[0];
 
   return (
     <>
@@ -70,6 +105,7 @@ export default function NotifyHost() {
         ))}
       </div>
       {current && <ConfirmDialog key={current.id} {...current} />}
+      {!current && currentPrompt && <PromptDialog key={currentPrompt.id} req={currentPrompt} />}
     </>
   );
 }

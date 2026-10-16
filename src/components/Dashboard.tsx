@@ -2,6 +2,7 @@ import { getStoredUser } from '../lib/storage';
 import { t, useLang } from '../lib/i18n';
 import { wonQuotes, isWon } from '../lib/status';
 import { monthKeyOf } from '../lib/dates';
+import { RangeKey, RANGE_LABELS, inRange, followUpsDue, expiringSoon, lossReasons, openQuoteAging } from '../lib/dashboardStats';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award, Repeat2 } from 'lucide-react';
@@ -17,6 +18,10 @@ interface Quote {
     status?: string;
     type?: string;
     updated_at?: string;
+    currency?: string;
+    followup_date?: string | null;
+    expiry_date?: string | null;
+    lost_reason?: string | null;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -28,7 +33,10 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function Dashboard() {
     useLang();
-    const [quotes, setQuotes] = useState<Quote[]>([]);
+    const [allQuotes, setQuotes] = useState<Quote[]>([]);
+    const [range, setRange] = useState<RangeKey>('all');
+    // Everything below (stats, charts, top customers) works on the quotes inside the chosen date range.
+    const quotes = inRange(allQuotes, range);
     const [chosenCurrency, setChosenCurrency] = useState('');
     const navigate = useNavigate();
 
@@ -60,6 +68,12 @@ export default function Dashboard() {
     const activeCurrency = currencies.includes(chosenCurrency) ? chosenCurrency : (currencies.includes('SAR') ? 'SAR' : currencies[0] || 'SAR');
     const won: any[] = wonQuotes(quotes as any[]).filter(q => curOf(q) === activeCurrency);
     const sumTotal = (list: any[]) => list.reduce((s, q) => s + (Number(q.grand_total) || 0), 0);
+
+    // Attention widgets use ALL quotes (they are about now, not about the selected period).
+    const followUps = followUpsDue(allQuotes);
+    const expiring = expiringSoon(allQuotes, 7);
+    const aging = openQuoteAging(allQuotes);
+    const reasons = lossReasons(quotes);
 
     const stats = {
         totalDocs: quotes.length,
@@ -160,6 +174,14 @@ export default function Dashboard() {
                 </div>
             </div>
 
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+                <label htmlFor="dash-range" className="font-semibold text-gray-600">Period</label>
+                <select id="dash-range" value={range} onChange={e => setRange(e.target.value as RangeKey)} className="border border-gray-300 rounded px-2 py-1 bg-white">
+                    {(Object.keys(RANGE_LABELS) as RangeKey[]).map(k => <option key={k} value={k}>{RANGE_LABELS[k]}</option>)}
+                </select>
+                <span className="text-gray-400">Applies to the statistics, chart and top customers below.</span>
+            </div>
+
             {currencies.length > 1 && canViewRevenue && (
                 <div className="flex items-center gap-2 text-sm">
                     <label htmlFor="dash-currency" className="font-semibold text-gray-600">Currency</label>
@@ -256,6 +278,62 @@ export default function Dashboard() {
                     </div>
                 </div>
             )}
+
+            {/* Action widgets: what needs attention now (not limited by the period above) */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <section aria-labelledby="w-followups" className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <h3 id="w-followups" className="text-lg font-bold text-gray-800 mb-3">Follow-ups due</h3>
+                    {followUps.length === 0 ? <p className="text-sm text-gray-400">Nothing due. Set follow-up dates in Tracking.</p> : (
+                        <ul className="divide-y divide-gray-100">
+                            {followUps.slice(0, 6).map(q => (
+                                <li key={q.quote_id}>
+                                    <button onClick={() => handleRecall(q.quote_id)} className="w-full text-left py-2 hover:bg-gray-50 rounded px-1">
+                                        <span className="font-semibold text-indigo-700">{q.quote_id}</span>
+                                        <span className="text-sm text-gray-600"> · {q.customer_name || 'No customer'}</span>
+                                        <span className="block text-xs text-amber-600">Due {String(q.followup_date).slice(0, 10)}</span>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
+
+                <section aria-labelledby="w-expiring" className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <h3 id="w-expiring" className="text-lg font-bold text-gray-800 mb-3">Expiring offers</h3>
+                    {expiring.length === 0 ? <p className="text-sm text-gray-400">No sent quotes are expiring within 7 days.</p> : (
+                        <ul className="divide-y divide-gray-100">
+                            {expiring.slice(0, 6).map(q => (
+                                <li key={q.quote_id}>
+                                    <button onClick={() => handleRecall(q.quote_id)} className="w-full text-left py-2 hover:bg-gray-50 rounded px-1">
+                                        <span className="font-semibold text-indigo-700">{q.quote_id}</span>
+                                        <span className="text-sm text-gray-600"> · {q.customer_name || 'No customer'}</span>
+                                        <span className={`block text-xs ${q.daysLeft < 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                                            {q.daysLeft < 0 ? `Expired ${-q.daysLeft} day(s) ago` : q.daysLeft === 0 ? 'Expires today' : `Expires in ${q.daysLeft} day(s)`}
+                                        </span>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
+
+                <section aria-labelledby="w-pipeline" className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <h3 id="w-pipeline" className="text-lg font-bold text-gray-800 mb-3">Open quotes by age</h3>
+                    <ul className="space-y-1 mb-4">
+                        {aging.map(b => (
+                            <li key={b.label} className="flex justify-between text-sm"><span className="text-gray-600">{b.label}</span><span className="font-mono font-bold text-gray-800">{b.count}</span></li>
+                        ))}
+                    </ul>
+                    <h4 className="text-sm font-bold text-gray-700 mb-1">Top rejection reasons</h4>
+                    {reasons.length === 0 ? <p className="text-sm text-gray-400">No reasons recorded yet (asked when a quote is rejected).</p> : (
+                        <ul className="space-y-1">
+                            {reasons.map(r => (
+                                <li key={r.reason} className="flex justify-between text-sm"><span className="text-gray-600 truncate pr-2">{r.reason}</span><span className="font-mono font-bold text-gray-800">{r.count}</span></li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
+            </div>
 
             {/* Bottom Row: Recent Activity + Top Customers */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

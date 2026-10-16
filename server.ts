@@ -18,6 +18,7 @@ import { computeTotals, round2 } from './src/lib/money.ts';
 import { checkAiSql, runAiQuery } from './src/lib/aiQuery.ts';
 import { STATUSES, isStatus } from './src/lib/status.ts';
 import { generateSecret, verifyTotp, otpauthUrl } from './src/lib/totp.ts';
+import { customerKeys, productKey } from './src/lib/importDedupe.ts';
 import QRCode from 'qrcode';
 import express from 'express';
 import http from 'http';
@@ -340,6 +341,7 @@ addColumnIfNotExists('quotes', 'bank_details_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'footer', 'TEXT');
 // Soft delete / recycle bin
 addColumnIfNotExists('quotes', 'currency', "TEXT DEFAULT 'SAR'");
+addColumnIfNotExists('quotes', 'lost_reason', 'TEXT');
 // Two-factor authentication + session metadata (for the 'active sessions' list)
 addColumnIfNotExists('users', 'totp_secret', 'TEXT');
 addColumnIfNotExists('users', 'totp_enabled', 'INTEGER DEFAULT 0');
@@ -405,6 +407,39 @@ for (const sql of [
 ]) {
   try { db.exec(sql); } catch (e) { console.error('Index creation failed:', sql, e); }
 }
+
+// ── Payments received against a quote / invoice ──────────────────────────────
+db.exec(`CREATE TABLE IF NOT EXISTS quote_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quote_id TEXT NOT NULL,
+  amount REAL NOT NULL,
+  paid_on TEXT NOT NULL,
+  method TEXT,
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+)`);
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_payments_quote ON quote_payments(quote_id)'); } catch { }
+
+// ── Client approval links (public, token-based) ────────────────────────────────
+db.exec(`CREATE TABLE IF NOT EXISTS quote_shares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,
+  quote_id TEXT NOT NULL,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  first_viewed_at TEXT,
+  last_viewed_at TEXT,
+  view_count INTEGER NOT NULL DEFAULT 0,
+  decision TEXT,
+  responded_at TEXT,
+  signer_name TEXT,
+  decision_reason TEXT,
+  responder_ip TEXT
+)`);
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_shares_quote ON quote_shares(quote_id)'); } catch { }
 
 // ── Audit log: who did what (logins, user/permission changes, exports, restores, deletes ...) ──
 db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
@@ -775,6 +810,7 @@ const QuoteSchema = z.object({
 const BulkStatusSchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(500),
   status: z.enum(STATUSES),
+  reason: z.string().max(500).optional(),
 });
 
 const FollowupSchema = z.object({
@@ -787,6 +823,12 @@ const SettingSchema = z.object({
   // Express body limits protect against abuse; allow large base64 strings
   value: z.string().max(15000000),
 });
+
+// Sum of payments for the PDF "Amount paid / Balance due" lines.
+const paidAmounts = (quoteId: string, total: number) => {
+  const paid = round2((db.prepare('SELECT COALESCE(SUM(amount), 0) AS s FROM quote_payments WHERE quote_id = ?').get(quoteId) as any).s);
+  return { amountPaid: paid, amountDue: round2(Math.max(0, (Number(total) || 0) - paid)) };
+};
 
 // ── Audit helper ─────────────────────────────────────────────────────────────
 const auditLog = (entry: { actor?: string | null; actorId?: number | null; ip?: string | null; action: string; target?: string | null; details?: string | null; status?: number | null }) => {
@@ -1251,6 +1293,69 @@ app.post('/api/customers/bulk-delete', requireAuth, requirePermission('canDelete
   res.json({ success: true, deleted: n });
 });
 
+// ── CSV import (the browser parses the file and shows a preview; the server re-checks duplicates and inserts in ONE transaction) ──
+const CustomerImportSchema = z.object({
+  rows: z.array(z.object({
+    name: z.string().trim().min(1).max(200),
+    address: z.string().max(500).optional().default(''),
+    contact: z.string().max(200).optional().default(''),
+    mobile: z.string().max(60).optional().default(''),
+    email: z.string().max(200).optional().default(''),
+  })).min(1).max(5000),
+  skipDuplicates: z.boolean().optional().default(true),
+});
+app.post('/api/customers/import', requireAuth, validate(CustomerImportSchema), (req, res) => {
+  const { rows, skipDuplicates } = req.body as z.infer<typeof CustomerImportSchema>;
+  const existing = new Set<string>();
+  for (const c of db.prepare('SELECT name, mobile, email FROM customers').all() as any[]) customerKeys(c).forEach(k => existing.add(k));
+  const insert = db.prepare('INSERT INTO customers (name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?)');
+  let created = 0, skipped = 0;
+  db.transaction(() => {
+    for (const r of rows) {
+      const keys = customerKeys(r);
+      if (skipDuplicates && keys.some(k => existing.has(k))) { skipped++; continue; }
+      insert.run(r.name, r.address || null, r.contact || null, r.mobile || null, r.email || null);
+      keys.forEach(k => existing.add(k));
+      created++;
+    }
+  })();
+  res.json({ success: true, created, skipped });
+});
+
+const ProductImportSchema = z.object({
+  rows: z.array(z.object({
+    description: z.string().trim().min(1).max(500),
+    description_ar: z.string().max(500).optional().default(''),
+    unit: z.string().max(50).optional().default(''),
+    unit_price: z.number().finite().min(0).max(1e9),
+    item_code: z.string().max(100).optional().default(''),
+    supplier_name: z.string().max(200).optional().default(''),
+  })).min(1).max(5000),
+  onDuplicate: z.enum(['skip', 'update']).optional().default('skip'),
+});
+app.post('/api/products/import', requireAuth, validate(ProductImportSchema), (req, res) => {
+  const { rows, onDuplicate } = req.body as z.infer<typeof ProductImportSchema>;
+  const byKey = new Map<string, number>();
+  for (const p of db.prepare('SELECT id, description, item_code FROM products').all() as any[]) byKey.set(productKey(p), p.id);
+  const insert = db.prepare('INSERT INTO products (description, description_ar, unit, unit_price, item_code, supplier_name) VALUES (?, ?, ?, ?, ?, ?)');
+  const update = db.prepare('UPDATE products SET unit_price = ?, description_ar = COALESCE(NULLIF(?, \'\'), description_ar), unit = COALESCE(NULLIF(?, \'\'), unit), supplier_name = COALESCE(NULLIF(?, \'\'), supplier_name) WHERE id = ?');
+  let created = 0, updated = 0, skipped = 0;
+  db.transaction(() => {
+    for (const r of rows) {
+      const key = productKey(r);
+      const id = byKey.get(key);
+      if (id !== undefined) {
+        if (onDuplicate === 'update') { update.run(round2(r.unit_price), r.description_ar, r.unit, r.supplier_name, id); updated++; } else skipped++;
+        continue;
+      }
+      const info = insert.run(r.description, r.description_ar || null, r.unit || null, round2(r.unit_price), r.item_code || null, r.supplier_name || null);
+      byKey.set(key, Number(info.lastInsertRowid));
+      created++;
+    }
+  })();
+  res.json({ success: true, created, updated, skipped });
+});
+
 app.delete('/api/products/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
   const stmt = db.prepare('DELETE FROM products WHERE id = ?');
   stmt.run(req.params.id);
@@ -1384,7 +1489,8 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 
     const quotes = canSeeAll
       ? db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
+                 (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
@@ -1396,7 +1502,8 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           const placeholders = visibleAuthorIds.map(() => '?').join(',');
 
           const owned = db.prepare(`
-              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
+                     (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
               FROM quotes q 
               LEFT JOIN customers c ON q.customer_id = c.id
               LEFT JOIN users u ON q.author_id = u.id
@@ -1406,7 +1513,8 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 
           // Also fetch quotes shared with this user
           const all = db.prepare(`
-              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
+                     (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
               FROM quotes q 
               LEFT JOIN customers c ON q.customer_id = c.id
               LEFT JOIN users u ON q.author_id = u.id
@@ -1467,7 +1575,7 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
   res.json({ ...quote, items });
 });
 
-app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
+const quotePdfHandler = async (req: express.Request, res: express.Response) => {
   const currentUser = (req as any).user;
 
   try {
@@ -1665,6 +1773,7 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
         showStamp,
+        ...(isInvoice ? paidAmounts(quote.quote_id, quote.grand_total) : {}),
       }) as any
     );
 
@@ -1675,7 +1784,8 @@ app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
     console.error('PDF Generation Error:', error);
     res.status(500).json({ error: error.message || 'Failed to generate PDF' });
   }
-});
+};
+app.get('/api/quotes/:quote_id/pdf', requireAuth, quotePdfHandler);
 
 // ── In-Memory / Unrecorded Quote PDF Render ──────────────────────────────────
 app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
@@ -1811,6 +1921,7 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
         showStamp: Boolean(showStamp),
+        ...(isInvoice && quote.quote_id ? paidAmounts(quote.quote_id, quote.grand_total ?? quote.total) : {}),
       }) as any
     );
 
@@ -2426,6 +2537,178 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
   }
 });
 
+// ── Approval links API ───────────────────────────────────────────────────────
+const publicLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Please try again later.' } });
+const respondLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please try again later.' } });
+
+const baseUrlFor = (req: express.Request) => {
+  const configured = (process.env.APP_URL || '').trim();
+  if (/^https?:\/\//i.test(configured)) return configured.replace(/\/+$/, '');
+  return `${req.protocol}://${req.get('host')}`;
+};
+
+const canShareWithClient = (user: any, quote: { author_id: number }) =>
+  user.role === 'admin' || quote.author_id === user.id || !!user.permissions?.canEmailQuote || !!user.permissions?.canShareQuote;
+
+const ShareLinkSchema = z.object({ days: z.number().int().min(1).max(365).optional().default(30) });
+
+app.post('/api/quotes/:quote_id/share-link', requireAuth, validate(ShareLinkSchema), (req, res) => {
+  const user = (req as any).user;
+  const quote = db.prepare('SELECT quote_id, author_id, shared_with, status FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
+  if (!quote) return res.status(404).json({ error: 'Quote not found' });
+  if (!isQuoteVisibleToUser(quote, user) || !canShareWithClient(user, quote)) return res.status(403).json({ error: 'Access denied.' });
+  const token = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + req.body.days * 86400000).toISOString();
+  db.prepare('INSERT INTO quote_shares (token_hash, quote_id, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
+    .run(hashToken(token), quote.quote_id, user.username, new Date().toISOString(), expiresAt);
+  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote.quote_id, 'Client approval link created', user.username, new Date().toISOString());
+  // The raw token is shown ONCE here; only its hash is stored.
+  res.json({ url: `${baseUrlFor(req)}/approve/${token}`, expires_at: expiresAt });
+});
+
+app.get('/api/quotes/:quote_id/share-links', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const quote = db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+  if (!quote) return res.status(404).json({ error: 'Quote not found' });
+  if (!isQuoteVisibleToUser(quote, user)) return res.status(403).json({ error: 'Access denied.' });
+  res.json(db.prepare('SELECT id, created_by, created_at, expires_at, revoked, first_viewed_at, last_viewed_at, view_count, decision, responded_at, signer_name, decision_reason FROM quote_shares WHERE quote_id = ? ORDER BY id DESC').all(quote.quote_id));
+});
+
+app.delete('/api/share-links/:id', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const link = db.prepare('SELECT s.id, q.author_id, q.shared_with FROM quote_shares s JOIN quotes q ON q.quote_id = s.quote_id WHERE s.id = ?').get(Number(req.params.id)) as any;
+  if (!link) return res.status(404).json({ error: 'Link not found' });
+  if (!isQuoteVisibleToUser(link, user) || !canShareWithClient(user, link)) return res.status(403).json({ error: 'Access denied.' });
+  db.prepare('UPDATE quote_shares SET revoked = 1 WHERE id = ?').run(link.id);
+  res.json({ success: true });
+});
+
+// Look up an active link by its raw token. Returns the share row + quote, or an error status/message.
+const resolveShare = (rawToken: string): { share: any; quote: any } | { status: number; error: string } => {
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(rawToken)) return { status: 404, error: 'This link is not valid.' };
+  const share = db.prepare('SELECT * FROM quote_shares WHERE token_hash = ?').get(hashToken(rawToken)) as any;
+  if (!share) return { status: 404, error: 'This link is not valid.' };
+  if (share.revoked) return { status: 410, error: 'This link has been withdrawn. Please contact the sender for a new one.' };
+  if (new Date(share.expires_at) < new Date()) return { status: 410, error: 'This link has expired. Please contact the sender for a new one.' };
+  const quote = db.prepare(`
+    SELECT q.*, c.name AS customer_name FROM quotes q LEFT JOIN customers c ON q.customer_id = c.id
+    WHERE q.quote_id = ? AND q.deleted_at IS NULL`).get(share.quote_id) as any;
+  if (!quote) return { status: 404, error: 'This document is no longer available.' };
+  return { share, quote };
+};
+
+// PUBLIC (no login): what the client sees. Costs, markup, author and internal notes are never included.
+app.get('/api/public/quotes/:token', publicLimiter, (req, res) => {
+  const r = resolveShare(req.params.token);
+  if ('error' in r) return res.status(r.status).json({ error: r.error });
+  const { share, quote } = r;
+  const now = new Date().toISOString();
+  db.prepare('UPDATE quote_shares SET last_viewed_at = ?, first_viewed_at = COALESCE(first_viewed_at, ?), view_count = view_count + 1 WHERE id = ?').run(now, now, share.id);
+  if (!share.first_viewed_at) {
+    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote.quote_id, 'Viewed by client (approval link)', 'client', now);
+  }
+  const items = (db.prepare('SELECT description, description_ar, qty, unit, unit_price, net_price FROM quote_items WHERE quote_id = ?').all(quote.quote_id) as any[]);
+  const settings: Record<string, string> = {};
+  for (const row of db.prepare("SELECT key, value FROM settings WHERE key IN ('companyName', 'logo')").all() as any[]) settings[row.key] = row.value;
+  const termDefs: Array<[string, string, string]> = [['Payment terms', 'payment', 'show_payment'], ['Warranty', 'warranty', 'show_warranty'], ['Duration', 'duration', 'show_duration'], ['Notes', 'note', 'show_note']];
+  const terms = termDefs.filter(([, f, flag]) => (quote[f] || '').trim() && quote[flag] !== 0).map(([label, f]) => ({ label, text: quote[f] }));
+  const today = new Date().toISOString().slice(0, 10);
+  res.json({
+    company: { name: settings.companyName || 'AJ Network Solutions', logo: settings.logo || null },
+    quote: {
+      quote_id: quote.quote_id, type: quote.type || 'Quotation', date: quote.date, expiry_date: quote.expiry_date, subject: quote.subject,
+      customer_name: quote.customer_name, currency: quote.currency || 'SAR', vat_rate: quote.vat_rate,
+      subtotal: quote.subtotal, discount: quote.discount, tax: quote.tax, grand_total: quote.grand_total, status: quote.status,
+    },
+    items, terms,
+    expired: !!(quote.expiry_date && String(quote.expiry_date).slice(0, 10) < today),
+    canRespond: ['Draft', 'Sent'].includes(quote.status || 'Draft') && !share.decision,
+    decision: share.decision ? { decision: share.decision, signer_name: share.signer_name, responded_at: share.responded_at } : (quote.status === 'Accepted' || quote.status === 'Invoiced' ? { decision: 'accepted', signer_name: null, responded_at: null } : null),
+  });
+});
+
+// PUBLIC: PDF of the document, reusing the normal PDF generator.
+app.get('/api/public/quotes/:token/pdf', publicLimiter, async (req, res) => {
+  const r = resolveShare(req.params.token);
+  if ('error' in r) return res.status(r.status).json({ error: r.error });
+  const systemUser = { id: -1, role: 'admin', permissions: {} };
+  const proxy: any = { params: { quote_id: r.quote.quote_id }, query: { stamp: 'true' }, user: systemUser, headers: req.headers };
+  await quotePdfHandler(proxy, res);
+});
+
+const RespondSchema = z.object({
+  decision: z.enum(['accept', 'reject']),
+  name: z.string().trim().min(2, 'Please type your full name').max(120),
+  reason: z.string().max(500).optional().default(''),
+  consent: z.literal(true, { message: 'Please confirm to continue' }),
+});
+app.post('/api/public/quotes/:token/respond', respondLimiter, validate(RespondSchema), (req, res) => {
+  const r = resolveShare(req.params.token);
+  if ('error' in r) return res.status(r.status).json({ error: r.error });
+  const { share, quote } = r;
+  if (share.decision || !['Draft', 'Sent'].includes(quote.status || 'Draft')) {
+    return res.status(409).json({ error: 'A decision has already been recorded for this document.' });
+  }
+  const { decision, name, reason } = req.body;
+  const today = new Date().toISOString().slice(0, 10);
+  if (decision === 'accept' && quote.expiry_date && String(quote.expiry_date).slice(0, 10) < today) {
+    return res.status(410).json({ error: 'This offer has expired. Please contact us to renew it.' });
+  }
+  const now = new Date().toISOString();
+  const newStatus = decision === 'accept' ? 'Accepted' : 'Rejected';
+  const lost = decision === 'reject' && reason.trim() ? reason.trim() : null;
+  db.transaction(() => {
+    db.prepare('UPDATE quotes SET status = ?, updated_at = ?, lost_reason = ? WHERE quote_id = ?').run(newStatus, now, lost, quote.quote_id);
+    db.prepare('UPDATE quote_shares SET decision = ?, responded_at = ?, signer_name = ?, decision_reason = ?, responder_ip = ? WHERE id = ?')
+      .run(decision === 'accept' ? 'accepted' : 'rejected', now, name, lost, req.ip || null, share.id);
+    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)')
+      .run(quote.quote_id, `${decision === 'accept' ? 'Accepted' : 'Rejected'} online by ${name}${lost ? ` (reason: ${lost})` : ''}`, 'client', now);
+  })();
+  auditLog({ actor: `client:${name}`, ip: req.ip, action: `PUBLIC ${decision} via approval link`, target: quote.quote_id, status: 200 });
+  res.json({ success: true, status: newStatus });
+});
+
+// ── Payments API ─────────────────────────────────────────────────────────────
+const PaymentSchema = z.object({
+  amount: z.number().finite().positive().max(1e9),
+  paid_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  method: z.string().max(40).optional().default(''),
+  note: z.string().max(300).optional().default(''),
+});
+const paymentQuote = (req: express.Request, res: express.Response) => {
+  const row = db.prepare('SELECT quote_id, author_id, shared_with, grand_total FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
+  if (!row) { res.status(404).json({ error: 'Quote not found' }); return null; }
+  if (!isQuoteVisibleToUser(row, (req as any).user)) { res.status(403).json({ error: 'Access denied.' }); return null; }
+  return row;
+};
+const paymentSummary = (quoteId: string, total: number) => {
+  const payments = db.prepare('SELECT * FROM quote_payments WHERE quote_id = ? ORDER BY paid_on, id').all(quoteId);
+  const paid = round2((payments as any[]).reduce((s, p) => s + p.amount, 0));
+  return { payments, total: round2(total), paid, due: round2(Math.max(0, total - paid)), settled: paid >= total - 0.004 && total > 0 };
+};
+app.get('/api/quotes/:quote_id/payments', requireAuth, (req, res) => {
+  const q = paymentQuote(req, res); if (!q) return;
+  res.json(paymentSummary(q.quote_id, q.grand_total));
+});
+app.post('/api/quotes/:quote_id/payments', requireAuth, validate(PaymentSchema), (req, res) => {
+  const q = paymentQuote(req, res); if (!q) return;
+  const { amount, paid_on, method, note } = req.body;
+  const already = paymentSummary(q.quote_id, q.grand_total);
+  if (round2(already.paid + amount) > round2(q.grand_total) + 0.004) {
+    return res.status(400).json({ error: `This would overpay the document (balance due is ${already.due.toFixed(2)}).` });
+  }
+  db.prepare('INSERT INTO quote_payments (quote_id, amount, paid_on, method, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(q.quote_id, round2(amount), paid_on, method || null, note || null, (req as any).user.username, new Date().toISOString());
+  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(q.quote_id, `Payment received: ${round2(amount).toFixed(2)}${method ? ` (${method})` : ''}`, (req as any).user.username, new Date().toISOString());
+  res.json(paymentSummary(q.quote_id, q.grand_total));
+});
+app.delete('/api/quotes/:quote_id/payments/:id', requireAuth, (req, res) => {
+  const q = paymentQuote(req, res); if (!q) return;
+  db.prepare('DELETE FROM quote_payments WHERE id = ? AND quote_id = ?').run(Number(req.params.id), q.quote_id);
+  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(q.quote_id, 'Payment removed', (req as any).user.username, new Date().toISOString());
+  res.json(paymentSummary(q.quote_id, q.grand_total));
+});
+
 // ── Audit log viewer ─────────────────────────────────────────────────────────
 const requireAuditAccess = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const u = (req as any).user;
@@ -2550,7 +2833,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
     const quote = db.prepare(`
-      SELECT q.quote_id, q.date, q.status, q.type, q.updated_at, q.author_id,
+      SELECT q.quote_id, q.date, q.status, q.type, q.updated_at, q.author_id, q.currency, q.lost_reason, q.shared_with,
              c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
@@ -2559,7 +2842,8 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
     `).get(quoteId) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
-    if (!canSeeAll && quote.author_id !== currentUser.id) {
+    // Owners, 'view all' users and people the quote is shared with may read its history.
+    if (!isQuoteVisibleToUser(quote, currentUser)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -2567,7 +2851,8 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
       'SELECT * FROM activity_log WHERE quote_id = ? ORDER BY timestamp ASC'
     ).all(quoteId);
 
-    res.json({ quote, logs });
+    const { shared_with: _sw, ...publicQuote } = quote; // do not expose the share list to the client
+    res.json({ quote: publicQuote, logs });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -2640,8 +2925,9 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
 
 // ── Bulk Status Update ────────────────────────────────────────────────────────
 app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (req, res) => {
-  const { ids, status } = req.body;
+  const { ids, status, reason } = req.body;
   if (!Array.isArray(ids) || !status) return res.status(400).json({ error: 'ids and status required' });
+  const lostReason = status === 'Rejected' && typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 500) : null;
   const actor = (req as any).user?.username || 'system';
   const ts = new Date().toISOString();
   try {
@@ -2656,8 +2942,9 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
     }
     db.transaction(() => {
       for (const id of ids) {
-        db.prepare('UPDATE quotes SET status = ?, updated_at = ? WHERE quote_id = ?').run(status, ts, id);
-        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(id, `Status changed to ${status}`, actor, ts);
+        // lost_reason is set on Rejected and cleared on any other status.
+        db.prepare('UPDATE quotes SET status = ?, updated_at = ?, lost_reason = ? WHERE quote_id = ?').run(status, ts, lostReason, id);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(id, `Status changed to ${status}${lostReason ? ` (reason: ${lostReason})` : ''}`, actor, ts);
       }
     })();
     res.json({ success: true });
@@ -2668,7 +2955,8 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
 
 // ── Single Quote Status Update (Kanban & Quick Status) ────────────────────────
 const handleSingleQuoteStatus = (req: express.Request, res: express.Response) => {
-  const { status } = req.body;
+  const { status, reason } = req.body;
+  const lostReason = status === 'Rejected' && typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 500) : null;
   const quoteIdentifier = req.params.quote_id;
   if (!status || !quoteIdentifier) return res.status(400).json({ error: 'status and quote_id required' });
   if (!isStatus(status)) {
@@ -2690,8 +2978,8 @@ const handleSingleQuoteStatus = (req: express.Request, res: express.Response) =>
     const targetQuoteId = existing.quote_id;
 
     db.transaction(() => {
-      db.prepare('UPDATE quotes SET status = ?, updated_at = ? WHERE quote_id = ?').run(status, ts, targetQuoteId);
-      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(targetQuoteId, `Status changed to ${status}`, actor, ts);
+      db.prepare('UPDATE quotes SET status = ?, updated_at = ?, lost_reason = ? WHERE quote_id = ?').run(status, ts, lostReason, targetQuoteId);
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(targetQuoteId, `Status changed to ${status}${lostReason ? ` (reason: ${lostReason})` : ''}`, actor, ts);
     })();
 
     res.json({ success: true, quote_id: targetQuoteId, status });

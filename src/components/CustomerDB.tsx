@@ -1,8 +1,10 @@
 import { getStoredUser } from '../lib/storage';
 import { toast, confirmAsync } from '../lib/notify';
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import CsvImportModal from './CsvImportModal';
+import { customerKeys } from '../lib/importDedupe';
 
 interface Customer {
   id: number;
@@ -25,6 +27,7 @@ export default function CustomerDB() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [showImport, setShowImport] = useState(false);
   const user = getStoredUser();
   const navigate = useNavigate();
 
@@ -184,6 +187,26 @@ export default function CustomerDB() {
           )}
         </div>
       )}
+      {showImport && (
+        <CsvImportModal
+          title="Import customers from CSV"
+          templateName="customers-template.csv"
+          columns={[
+            { key: 'name', label: 'Name', required: true, aliases: ['company', 'customer', 'customer name', 'company name', 'الاسم'] },
+            { key: 'address', label: 'Address', aliases: ['location', 'العنوان'] },
+            { key: 'contact', label: 'Contact', aliases: ['contact person', 'contact name', 'person'] },
+            { key: 'mobile', label: 'Mobile', aliases: ['phone', 'tel', 'telephone', 'cell', 'mobile number', 'الجوال'] },
+            { key: 'email', label: 'Email', aliases: ['e-mail', 'mail', 'email address'] },
+          ]}
+          sample={[['Acme Trading Co', 'Riyadh', 'Ahmed Ali', '0501234567', 'ahmed@acme.example']]}
+          existingKeys={new Set(customers.flatMap(c => customerKeys(c)))}
+          keysOf={r => customerKeys(r)}
+          toPayload={r => ({ name: r.name, address: r.address, contact: r.contact, mobile: r.mobile, email: r.email })}
+          endpoint="/api/customers/import"
+          onDone={fetchCustomers}
+          onClose={() => setShowImport(false)}
+        />
+      )}
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
@@ -209,6 +232,12 @@ export default function CustomerDB() {
                 </button>
               )}
             </div>
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap"
+            >
+              <Upload size={18} /> Import CSV
+            </button>
             <button
               onClick={() => { setIsAdding(true); setEditForm({}); }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap"
