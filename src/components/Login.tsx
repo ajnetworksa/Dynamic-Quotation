@@ -6,6 +6,8 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [needsCode, setNeedsCode] = useState(false); // account has two-factor on
+  const [totp, setTotp] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -18,13 +20,16 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, rememberMe })
+        body: JSON.stringify({ username, password, rememberMe, ...(needsCode ? { totp } : {}) })
       });
 
       // Error responses (e.g. 429 from the rate limiter, 502 from a proxy) are not always JSON.
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.token) {
         onLogin(data.token, data.user);
+      } else if (data.twoFactorRequired) {
+        setNeedsCode(true);
+        setError(totp ? (data.error || 'Invalid authentication code.') : '');
       } else if (res.status === 429) {
         setError(data.error || 'Too many attempts. Please wait a few minutes and try again.');
       } else {
@@ -104,6 +109,25 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
               </button>
             </div>
           </div>
+
+          {needsCode && (
+            <div>
+              <label htmlFor="login-totp" className="block text-sm font-medium text-gray-700 mb-2">Authentication code</label>
+              <input
+                id="login-totp"
+                name="totp"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                maxLength={6}
+                required
+                value={totp}
+                onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))}
+                className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono tracking-widest text-center"
+                placeholder="6-digit code from your authenticator app"
+              />
+            </div>
+          )}
 
           <div className="flex items-center">
             <input

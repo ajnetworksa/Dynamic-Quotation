@@ -8,7 +8,7 @@ const AR: Record<string, string> = {
   // navigation
   'Dashboard': 'لوحة التحكم', 'Docs': 'المستندات', 'Product DB': 'المنتجات', 'Customer DB': 'العملاء',
   'Supplier DB': 'الموردون', 'Tracking': 'المتابعة', 'Kanban': 'كانبان', 'Recycle Bin': 'سلة المحذوفات',
-  'Users': 'المستخدمون', 'Settings': 'الإعدادات', 'Skip to content': 'تخطي إلى المحتوى',
+  'Users': 'المستخدمون', 'Audit Log': 'سجل التدقيق', 'Settings': 'الإعدادات', 'Skip to content': 'تخطي إلى المحتوى',
   // statuses
   'Draft': 'مسودة', 'Sent': 'مرسل', 'Accepted': 'مقبول', 'Rejected': 'مرفوض', 'Invoiced': 'تمت الفوترة', 'Cancelled': 'ملغي',
   // kanban / dashboard

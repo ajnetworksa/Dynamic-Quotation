@@ -17,6 +17,8 @@ import { QuotePdfDocument } from './src/pdf/quote-document.tsx';
 import { computeTotals, round2 } from './src/lib/money.ts';
 import { checkAiSql, runAiQuery } from './src/lib/aiQuery.ts';
 import { STATUSES, isStatus } from './src/lib/status.ts';
+import { generateSecret, verifyTotp, otpauthUrl } from './src/lib/totp.ts';
+import QRCode from 'qrcode';
 import express from 'express';
 import http from 'http';
 import { createServer as createViteServer } from 'vite';
@@ -146,7 +148,7 @@ app.use((req, res, next) => {
 //   • max        → max requests allowed in that window (10 = 10 attempts)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15-minute window
-  max: 10,                   // max 10 login attempts per IP per window
+  max: Number(process.env.LOGIN_RATE_LIMIT_MAX) || 10, // max login attempts per IP per window (env override is for automated tests)
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
@@ -338,6 +340,12 @@ addColumnIfNotExists('quotes', 'bank_details_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'footer', 'TEXT');
 // Soft delete / recycle bin
 addColumnIfNotExists('quotes', 'currency', "TEXT DEFAULT 'SAR'");
+// Two-factor authentication + session metadata (for the 'active sessions' list)
+addColumnIfNotExists('users', 'totp_secret', 'TEXT');
+addColumnIfNotExists('users', 'totp_enabled', 'INTEGER DEFAULT 0');
+addColumnIfNotExists('sessions', 'created_at', 'TEXT');
+addColumnIfNotExists('sessions', 'user_agent', 'TEXT');
+addColumnIfNotExists('sessions', 'ip', 'TEXT');
 addColumnIfNotExists('quotes', 'deleted_at', 'TEXT');
 addColumnIfNotExists('quotes', 'deleted_by', 'TEXT');
 addColumnIfNotExists('quotes', 'retain_forever', 'INTEGER DEFAULT 0');
@@ -397,6 +405,20 @@ for (const sql of [
 ]) {
   try { db.exec(sql); } catch (e) { console.error('Index creation failed:', sql, e); }
 }
+
+// ── Audit log: who did what (logins, user/permission changes, exports, restores, deletes ...) ──
+db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  actor TEXT,
+  actor_id INTEGER,
+  ip TEXT,
+  action TEXT NOT NULL,
+  target TEXT,
+  details TEXT,
+  status INTEGER
+)`);
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)'); } catch { }
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -575,7 +597,7 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
     return res.status(401).json({ error: 'Session expired. Please log in again.' });
   }
 
-  const user = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(session.user_id);
+  const user = db.prepare('SELECT id, username, name, role, permissions, totp_enabled FROM users WHERE id = ?').get(session.user_id);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
   // Parse permissions JSON safely
@@ -766,6 +788,45 @@ const SettingSchema = z.object({
   value: z.string().max(15000000),
 });
 
+// ── Audit helper ─────────────────────────────────────────────────────────────
+const auditLog = (entry: { actor?: string | null; actorId?: number | null; ip?: string | null; action: string; target?: string | null; details?: string | null; status?: number | null }) => {
+  try {
+    db.prepare('INSERT INTO audit_log (ts, actor, actor_id, ip, action, target, details, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(new Date().toISOString(), entry.actor ?? null, entry.actorId ?? null, entry.ip ?? null, entry.action, entry.target ?? null, (entry.details ?? '').slice(0, 1000) || null, entry.status ?? null);
+  } catch (e) {
+    console.error('Audit log write failed:', e);
+  }
+};
+
+// Request id + structured (JSON) request log. Errors and slow requests are always logged; set LOG_REQUESTS=true for all.
+app.use('/api', (req, res, next) => {
+  const id = crypto.randomUUID();
+  (req as any).requestId = id;
+  res.setHeader('X-Request-Id', id);
+  const started = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - started;
+    const user = (req as any).user;
+    if (process.env.LOG_REQUESTS === 'true' || res.statusCode >= 400 || ms > 1500) {
+      console.log(JSON.stringify({ t: new Date().toISOString(), id, method: req.method, path: req.originalUrl.split('?')[0], status: res.statusCode, ms, user: user?.username }));
+    }
+    // Automatic audit trail for every successful state-changing call (except high-volume / low-value ones),
+    // plus reads of sensitive exports. Login events are written explicitly in the login handler.
+    const noisy = /^\/api\/(translate|ai\/chat|quotes\/[^/]+\/autosave|login|logout|quotes\/next-id)/.test(req.originalUrl);
+    const isMutation = req.method !== 'GET' && req.method !== 'HEAD' && res.statusCode < 400;
+    const sensitiveRead = req.method === 'GET' && res.statusCode < 400 && /^\/api\/(db\/export|admin\/backup)/.test(req.originalUrl);
+    if (user && !noisy && (isMutation || sensitiveRead)) {
+      auditLog({
+        actor: user.username, actorId: user.id, ip: req.ip,
+        action: `${req.method} ${(req.route?.path as string) || req.originalUrl.split('?')[0]}`,
+        target: Object.values(req.params || {}).join(', ') || null,
+        status: res.statusCode,
+      });
+    }
+  });
+  next();
+});
+
 // Liveness/readiness probe for Docker, load balancers and uptime monitors (no auth, no data).
 app.get('/api/health', (req, res) => {
   try {
@@ -789,7 +850,7 @@ app.use('/api/', apiLimiter);
 // credentials regardless of whether the username or password was wrong.
 // This prevents user-enumeration (knowing which usernames exist).
 app.post('/api/login', loginLimiter, async (req, res) => {
-  const { username, password, rememberMe } = req.body;
+  const { username, password, rememberMe, totp } = req.body;
 
   // ── Input validation ──────────────────────────────────────────────────────
   // Reject blanks, non-strings, or anything suspiciously long (>128 chars).
@@ -803,6 +864,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 
   // Per-account lockout after repeated failures (same generic message, no user enumeration).
   if (isLockedOut(username.trim())) {
+    auditLog({ actor: username.trim(), ip: req.ip, action: 'LOGIN locked out', status: 429 });
     return res.status(429).json({ error: 'Too many failed attempts for this account. Try again in 15 minutes.' });
   }
 
@@ -812,18 +874,31 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   // We also handle the case where user is null safely to avoid timing differences.
   const passwordMatch = user ? await bcrypt.compare(password, user.password) : false;
 
+  if (user && passwordMatch && user.totp_enabled) {
+    // Password was right but the account has two-factor on: a valid 6-digit code is also required.
+    if (!totp) return res.status(401).json({ error: 'Enter the 6-digit code from your authenticator app.', twoFactorRequired: true });
+    if (!verifyTotp(user.totp_secret, String(totp))) {
+      recordLoginFailure(username.trim());
+      auditLog({ actor: user.username, actorId: user.id, ip: req.ip, action: 'LOGIN failed (2FA code)', status: 401 });
+      return res.status(401).json({ error: 'Invalid authentication code.', twoFactorRequired: true });
+    }
+  }
+
   if (user && passwordMatch) {
     clearLoginFailures(username.trim());
+    auditLog({ actor: user.username, actorId: user.id, ip: req.ip, action: 'LOGIN success', status: 200 });
     const token = crypto.randomBytes(32).toString('hex');
     // Sessions expire after 30 days if rememberMe is true, otherwise 12 hours (0.5 days).
     const days = rememberMe ? 30 : 0.5;
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
     // Only the hash is stored; the raw token goes to the browser once.
-    db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(hashToken(token), user.id, expiresAt);
+    db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at, user_agent, ip) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(hashToken(token), user.id, expiresAt, new Date().toISOString(), String(req.headers['user-agent'] || '').slice(0, 300), req.ip || null);
     const permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
     res.json({ token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions } });
   } else {
     recordLoginFailure(username.trim());
+    auditLog({ actor: username.trim(), ip: req.ip, action: 'LOGIN failed', status: 401 });
     res.status(401).json({ error: 'Invalid credentials' });
   }
 });
@@ -837,7 +912,59 @@ app.post('/api/logout', requireAuth, (req, res) => {
 });
 
 app.get('/api/me', requireAuth, (req, res) => {
-  res.json((req as any).user);
+  const u = (req as any).user;
+  const { totp_enabled, ...rest } = u;
+  res.json({ ...rest, twoFactorEnabled: !!totp_enabled });
+});
+
+// ── Active sessions (see and sign out your own devices) ──────────────────────
+app.get('/api/me/sessions', requireAuth, (req, res) => {
+  const current = hashToken(req.headers.authorization!.split(' ')[1]);
+  const rows = db.prepare('SELECT rowid AS id, token, created_at, expires_at, user_agent, ip FROM sessions WHERE user_id = ? ORDER BY COALESCE(created_at, expires_at) DESC').all((req as any).user.id) as any[];
+  res.json(rows.map(r => ({ id: r.id, created_at: r.created_at, expires_at: r.expires_at, user_agent: r.user_agent, ip: r.ip, current: r.token === current })));
+});
+app.delete('/api/me/sessions/:id', requireAuth, (req, res) => {
+  const info = db.prepare('DELETE FROM sessions WHERE rowid = ? AND user_id = ?').run(Number(req.params.id), (req as any).user.id);
+  res.json({ success: info.changes > 0 });
+});
+app.post('/api/me/sessions/revoke-others', requireAuth, (req, res) => {
+  const current = hashToken(req.headers.authorization!.split(' ')[1]);
+  const info = db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run((req as any).user.id, current);
+  res.json({ success: true, revoked: info.changes });
+});
+
+// ── Two-factor authentication (TOTP) ─────────────────────────────────────────
+// setup -> user scans the QR / types the key into an authenticator app -> enable with a valid code.
+app.post('/api/me/2fa/setup', requireAuth, async (req, res) => {
+  const u = (req as any).user;
+  if (u.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already on. Turn it off first to set it up again.' });
+  const secret = generateSecret();
+  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?').run(secret, u.id);
+  const url = otpauthUrl(secret, u.username);
+  res.json({ secret, otpauthUrl: url, qrDataUrl: await QRCode.toDataURL(url, { margin: 1, width: 220 }) });
+});
+app.post('/api/me/2fa/enable', requireAuth, (req, res) => {
+  const u = (req as any).user;
+  const row = db.prepare('SELECT totp_secret FROM users WHERE id = ?').get(u.id) as { totp_secret: string | null };
+  if (!row?.totp_secret) return res.status(400).json({ error: 'Start the setup first.' });
+  if (!verifyTotp(row.totp_secret, String(req.body?.code || ''))) return res.status(400).json({ error: 'That code is not valid. Check the time on your phone and try again.' });
+  db.prepare('UPDATE users SET totp_enabled = 1 WHERE id = ?').run(u.id);
+  res.json({ success: true });
+});
+app.post('/api/me/2fa/disable', requireAuth, async (req, res) => {
+  const u = (req as any).user;
+  const row = db.prepare('SELECT password, totp_secret, totp_enabled FROM users WHERE id = ?').get(u.id) as any;
+  if (!row?.totp_enabled) return res.json({ success: true });
+  const pwOk = await bcrypt.compare(String(req.body?.password || ''), row.password);
+  if (!pwOk || !verifyTotp(row.totp_secret, String(req.body?.code || ''))) return res.status(400).json({ error: 'Password or code is incorrect.' });
+  db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?').run(u.id);
+  res.json({ success: true });
+});
+// An admin can switch off a locked-out user's 2FA (they must then set it up again).
+app.post('/api/users/:id/2fa-reset', requireAuth, requirePermission('canManageUsers'), (req, res) => {
+  db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
+  res.json({ success: true });
 });
 
 // Update current user's profile (name)
@@ -2298,6 +2425,35 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
     res.status(500).json({ error: error.message });
   }
 });
+
+// ── Audit log viewer ─────────────────────────────────────────────────────────
+const requireAuditAccess = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const u = (req as any).user;
+  return (u.role === 'admin' || u.permissions?.canViewAuditLog) ? next() : res.status(403).json({ error: 'Access denied: audit log permission required.' });
+};
+app.get('/api/audit-log', requireAuth, requireAuditAccess, (req, res) => {
+  const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit), 10) || 50));
+  const conds: string[] = [];
+  const params: any[] = [];
+  const q = String(req.query.q || '').trim();
+  if (q) { conds.push("(actor LIKE ? ESCAPE '\\' OR action LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' OR ip LIKE ? ESCAPE '\\')"); const like = `%${q.replace(/[\\%_]/g, m => '\\' + m)}%`; params.push(like, like, like, like); }
+  const actor = String(req.query.actor || '').trim();
+  if (actor) { conds.push('actor = ?'); params.push(actor); }
+  const from = String(req.query.from || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(from)) { conds.push('ts >= ?'); params.push(from); }
+  const to = String(req.query.to || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(to)) { conds.push('ts < ?'); params.push(new Date(new Date(to).getTime() + 86400000).toISOString().slice(0, 10)); }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const total = (db.prepare(`SELECT COUNT(*) AS c FROM audit_log ${where}`).get(...params) as any).c;
+  const items = db.prepare(`SELECT * FROM audit_log ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, (page - 1) * limit);
+  const actors = (db.prepare('SELECT DISTINCT actor FROM audit_log WHERE actor IS NOT NULL ORDER BY actor').all() as any[]).map(r => r.actor);
+  res.json({ items, total, page, limit, actors });
+});
+// Keep one year of audit history.
+const pruneAuditLog = () => { try { db.prepare('DELETE FROM audit_log WHERE ts < ?').run(new Date(Date.now() - 365 * 86400000).toISOString()); } catch { } };
+pruneAuditLog();
+setInterval(pruneAuditLog, 24 * 60 * 60 * 1000);
 
 // ── Recycle Bin ──────────────────────────────────────────────────────────────
 const canUseRecycleBin = (user: any) => user.role === 'admin' || !!user.permissions?.canManageRecycleBin;
