@@ -1,3 +1,4 @@
+import { getStoredUser } from '../lib/storage';
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -21,7 +22,7 @@ export default function CustomerDB() {
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [stats, setStats] = useState<Record<number, { total_won: number, quote_count: number }>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   const navigate = useNavigate();
 
   useEffect(() => {

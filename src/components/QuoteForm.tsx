@@ -17,6 +17,7 @@
 //   • LOGO SIZE CONTROL                       → search for logoSize state and h-{logoSize}
 // =============================================================================
 
+import { getStoredUser } from '../lib/storage';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
@@ -106,7 +107,7 @@ export default function QuoteForm() {
   const printRef = useRef<HTMLDivElement>(null);
   const formTopRef = useRef<HTMLDivElement>(null);
   const [formTopHeight, setFormTopHeight] = useState<number>(0);
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   // logoSize is loaded from the Admin Settings page (Settings → Logo Size).
   // The number maps to a Tailwind spacing unit: 24 = h-24 = 6rem ≈ 96px tall.
   // You can change the default here, but it will be overridden by whatever is
@@ -803,22 +804,35 @@ export default function QuoteForm() {
   }, []);
 
   // ── KEYBOARD SHORTCUTS ──
+  // The handlers are kept in a ref that is refreshed after every render, so the shortcut always runs
+  // with the CURRENT form state (the old dependency list missed date, markup, notes, terms, status...,
+  // so Ctrl+S could save stale values). Ctrl+S now goes through recordQuote, i.e. the same
+  // validation as the Save button.
+  const shortcutHandlersRef = useRef<{ save: () => void; print: () => void } | null>(null);
+  useEffect(() => {
+    shortcutHandlersRef.current = {
+      save: () => { recordQuote(); },
+      print: () => handlePrint(),
+    };
+  });
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // This component stays mounted (hidden) on every page, so only react while the quote page is showing.
+      if (window.location.pathname !== '/quote') return;
       // Ctrl+S to Save
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        performSave();
+        shortcutHandlersRef.current?.save();
       }
       // Ctrl+P to Print
-      if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
-        handlePrint();
+        shortcutHandlersRef.current?.print();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [items, quoteId, subject, selectedCustomerId, discount, vatRate]);
+  }, []);
 
   const fetchLogo = async () => {
     try {
@@ -2846,7 +2860,7 @@ export default function QuoteForm() {
       }),
       ['', '', '', '', '', 'SUBTOTAL', subtotal, '', '', '', '', '', 'B.TOTAL', baseTotal],
       ['', '', '', '', '', (discountMode === 'percentage' || discountMode === 'both') && discountRate > 0 ? `DISCOUNT (${discountRate}%)` : 'DISCOUNT', discount],
-      ['', '', '', '', '', 'VAT (15%)', tax],
+      ['', '', '', '', '', `VAT (${vatRate}%)`, tax],
       ['', '', '', '', '', 'TOTAL PACKAGE', grandTotal, '', '', '', '', '', 'TTL PROFIT', markupProfit],
       [''],
       ['TERMS & CONDITIONS'],
@@ -3702,7 +3716,7 @@ export default function QuoteForm() {
                     <Plus size={16} /> Add Row
                   </button>
                   {(() => {
-                    const u = JSON.parse(localStorage.getItem('user') || '{}');
+                    const u = getStoredUser();
                     const canRFQ = u.role === 'admin' || !!u.permissions?.canUseRFQ;
                     return canRFQ ? (
                       <button
@@ -4382,7 +4396,7 @@ export default function QuoteForm() {
 
         {/* ── ANALYSIS SIDEBAR (Floating outside the form) ────────────────── */}
         {(() => {
-          const u = JSON.parse(localStorage.getItem('user') || '{}');
+          const u = getStoredUser();
           const canOverride = u.role === 'admin' || !!u.permissions?.canOverridePrice;
           if (!canOverride) return null;
 

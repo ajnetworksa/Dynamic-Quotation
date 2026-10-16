@@ -1,3 +1,4 @@
+import { getStoredUser } from '../lib/storage';
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search, ChevronDown, ChevronUp, Package, Copy, ArrowRight, CheckSquare, Square } from 'lucide-react';
 
@@ -21,7 +22,7 @@ export default function SupplierDB() {
   const [bulkModal, setBulkModal] = useState<{ supplierId: number; mode: 'copy' | 'move' } | null>(null);
   const [bulkTargetSupplier, setBulkTargetSupplier] = useState('');
   const [isBulkLoading, setIsBulkLoading] = useState(false);
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
 
   const toggleExpand = (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
