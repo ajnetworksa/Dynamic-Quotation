@@ -1,4 +1,7 @@
 import { getStoredUser } from '../lib/storage';
+import { ymdOf, parseQuoteDate } from '../lib/dates';
+import { STATUS_BADGE as SHARED_BADGES, STATUSES, normalizeStatus } from '../lib/status';
+const STATUS_BADGE: Record<string, string> = SHARED_BADGES;
 import React, { useState, useEffect, useRef } from 'react';
 import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers, StickyNote, FileSpreadsheet } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -24,20 +27,15 @@ interface Quote {
   quote_note?: string;
 }
 
-const STATUS_BADGE: Record<string, string> = {
-  Accepted: 'bg-green-100 text-green-800',
-  Rejected: 'bg-red-100 text-red-800',
-  Sent: 'bg-yellow-100 text-yellow-800',
-  Draft: 'bg-gray-100 text-gray-800',
-  Invoiced: 'bg-purple-100 text-purple-800',
-  Cancelled: 'bg-gray-200 text-gray-600',
-};
+// STATUS_BADGE / STATUSES come from src/lib/status.ts (shared with Kanban and Dashboard).
 
 type SortKey = 'quote_id' | 'type' | 'status' | 'date' | 'customer_name' | 'grand_total' | 'updated_at' | 'author_username';
 type SortDir = 'asc' | 'desc' | null;
 
 export default function Tracking() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -133,14 +131,28 @@ export default function Tracking() {
 
   const fetchQuotes = async () => {
     try {
+      setLoadError('');
       const res = await fetch('/api/quotes');
-      if (!res.ok) return;
+      if (!res.ok) {
+        setLoadError(res.status === 403 ? 'You do not have access to these records.' : 'Could not load records. Please try again.');
+        return;
+      }
       const data = await res.json();
       if (Array.isArray(data)) setQuotes(data);
     } catch (e) {
       console.error('Failed to fetch quotes', e);
+      setLoadError('Network error: could not load records.');
+    } finally {
+      setLoading(false);
     }
   };
+
+  // Changing any filter resets to page 1 and drops the selection, so a bulk action can never touch rows
+  // the user can no longer see.
+  useEffect(() => {
+    setCurrentPage(1);
+    setSelectedIds(new Set());
+  }, [search, statusFilter, typeFilter, creatorFilter, dateFrom, dateTo]);
 
   const handleRecall = (quote_id: string) => navigate(`/quote?recall=${quote_id}`);
 
@@ -220,6 +232,10 @@ export default function Tracking() {
         settingsList.forEach((s: any) => settingsMap[s.key] = s.value);
         if (settingsMap.muFilters) {
           muFilters = JSON.parse(settingsMap.muFilters);
+          // Keywords are compared against lower-cased text, so lower-case them here too.
+          for (const k of Object.keys(muFilters) as Array<keyof typeof muFilters>) {
+            muFilters[k] = (muFilters[k] || []).map((x: string) => String(x).toLowerCase());
+          }
         }
       }
     } catch (e) { }
@@ -679,6 +695,10 @@ export default function Tracking() {
         settingsList.forEach((s: any) => settingsMap[s.key] = s.value);
         if (settingsMap.muFilters) {
           muFilters = JSON.parse(settingsMap.muFilters);
+          // Keywords are compared against lower-cased text, so lower-case them here too.
+          for (const k of Object.keys(muFilters) as Array<keyof typeof muFilters>) {
+            muFilters[k] = (muFilters[k] || []).map((x: string) => String(x).toLowerCase());
+          }
         }
       }
     } catch (e) { }
@@ -1080,8 +1100,10 @@ export default function Tracking() {
 
     const matchStatus = !statusFilter || (quote.status || 'Draft') === statusFilter;
     const matchType = !typeFilter || (quote.type || 'Quotation') === typeFilter;
-    const matchDateFrom = !dateFrom || quote.date >= dateFrom;
-    const matchDateTo = !dateTo || quote.date <= dateTo;
+    // ymdOf understands ISO strings, timestamps and Excel serial dates (plain string compare broke on the last two).
+    const qDay = ymdOf(quote.date);
+    const matchDateFrom = !dateFrom || (!!qDay && qDay >= dateFrom);
+    const matchDateTo = !dateTo || (!!qDay && qDay <= dateTo);
     const matchCreator = !creatorFilter || (quote.author_name || quote.author_username) === creatorFilter;
     return matchSearch && matchStatus && matchType && matchDateFrom && matchDateTo && matchCreator;
   });
@@ -1096,8 +1118,8 @@ export default function Tracking() {
         const bVal = Number(b.grand_total) || 0;
         cmp = aVal - bVal;
       } else if (sortKey === 'date' || sortKey === 'updated_at') {
-        const aVal = a[sortKey] ? new Date(a[sortKey]).getTime() : 0;
-        const bVal = b[sortKey] ? new Date(b[sortKey]).getTime() : 0;
+        const aVal = parseQuoteDate(a[sortKey])?.getTime() ?? 0;
+        const bVal = parseQuoteDate(b[sortKey])?.getTime() ?? 0;
         cmp = aVal - bVal;
       } else {
         const aVal = String(a[sortKey] ?? '').toLowerCase();
@@ -1122,9 +1144,11 @@ export default function Tracking() {
   const clearFilters = () => { setSearch(''); setStatusFilter(''); setTypeFilter(''); setDateFrom(''); setDateTo(''); setCreatorFilter(''); setCurrentPage(1); };
   const hasFilters = search || statusFilter || typeFilter || dateFrom || dateTo || creatorFilter;
 
-  const totalPages = Math.ceil(filtered.length / rowsPerPage) || 1;
+  // Guard against an empty / huge "rows per page" box (an empty value used to produce Infinity pages).
+  const perPage = Math.min(500, Math.max(1, Number(rowsPerPage) || 20));
+  const totalPages = Math.ceil(filtered.length / perPage) || 1;
   const safePage = Math.min(currentPage, totalPages);
-  const currentItems = filtered.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
+  const currentItems = filtered.slice((safePage - 1) * perPage, safePage * perPage);
 
   const thClass = "p-4 border-b cursor-pointer select-none hover:bg-gray-200 transition-colors whitespace-nowrap";
 
@@ -1277,7 +1301,7 @@ export default function Tracking() {
                 }
                 return String(d);
               };
-              const overdue = quote.followup_date && quote.followup_date < new Date().toISOString().split('T')[0] && !['Accepted', 'Rejected'].includes(quote.status || '');
+              const overdue = quote.followup_date && quote.followup_date < ymdOf(new Date()) && !['Accepted', 'Rejected', 'Invoiced', 'Cancelled'].includes(quote.status || '');
               return (
                 <tr 
                   key={quote.id} 
@@ -1426,7 +1450,7 @@ export default function Tracking() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={showCreatedBy ? 10 : 9} className="p-8 text-center text-gray-400">
-                  {hasFilters ? 'No records match your search/filters.' : 'No records yet.'}
+                  {loading ? 'Loading records…' : loadError ? loadError : hasFilters ? 'No records match your search/filters.' : 'No records yet.'}
                 </td>
               </tr>
             )}

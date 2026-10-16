@@ -144,7 +144,9 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
         // Update local user object
         const updatedUser = { ...user, name: data.name };
         localStorage.setItem('user', JSON.stringify(updatedUser));
-        window.location.reload();
+        // No page reload (it threw away an unsaved quote in progress): the App root re-reads the user on this event.
+        window.dispatchEvent(new Event('auth-change'));
+        onClose();
       } else {
         setError('Failed to update profile.');
       }

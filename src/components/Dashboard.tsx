@@ -1,4 +1,6 @@
 import { getStoredUser } from '../lib/storage';
+import { wonQuotes, isWon } from '../lib/status';
+import { monthKeyOf } from '../lib/dates';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award, Repeat2 } from 'lucide-react';
@@ -47,22 +49,25 @@ export default function Dashboard() {
     // Local-time "YYYY-MM" key (toISOString is UTC and shifts the month near midnight).
     const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     const currentMonth = monthKey(new Date());
-    const thisMonthQuotes = quotes.filter(q => q.date && q.date.startsWith(currentMonth));
+    const thisMonthQuotes = quotes.filter(q => monthKeyOf(q.date) === currentMonth);
+    // Won business (Accepted + Invoiced) counted once: a quote and the invoice/revision made from it are not both added.
+    const won: any[] = wonQuotes(quotes as any[]);
+    const sumTotal = (list: any[]) => list.reduce((s, q) => s + (Number(q.grand_total) || 0), 0);
 
     const stats = {
         totalDocs: quotes.length,
-        totalRevenue: quotes.filter(q => q.status === 'Accepted').reduce((s, q) => s + (q.grand_total || 0), 0),
-        monthRevenue: thisMonthQuotes.filter(q => q.status === 'Accepted').reduce((s, q) => s + (q.grand_total || 0), 0),
+        totalRevenue: sumTotal(won),
+        monthRevenue: sumTotal(won.filter(q => monthKeyOf(q.date) === currentMonth)),
         monthCount: thisMonthQuotes.length,
         pendingCount: quotes.filter(q => q.status === 'Draft' || q.status === 'Sent' || !q.status).length,
-        acceptedCount: quotes.filter(q => q.status === 'Accepted').length,
+        acceptedCount: won.length,
         rejectedCount: quotes.filter(q => q.status === 'Rejected').length,
         sentCount: quotes.filter(q => q.status === 'Sent').length,
         // Win rate = won / decided (accepted + rejected). Drafts and open quotes do not count against it.
         winRate: (() => {
-            const won = quotes.filter(q => q.status === 'Accepted' || q.status === 'Invoiced').length;
+            const wonCount = quotes.filter(q => isWon(q.status)).length;
             const lost = quotes.filter(q => q.status === 'Rejected').length;
-            return won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
+            return wonCount + lost > 0 ? Math.round((wonCount / (wonCount + lost)) * 100) : 0;
         })(),
     };
 
@@ -73,18 +78,16 @@ export default function Dashboard() {
         const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
         const key = monthKey(d);
         const label = d.toLocaleString('default', { month: 'short' });
-        const total = quotes
-            .filter(q => q.date?.startsWith(key) && q.status === 'Accepted')
-            .reduce((s, q) => s + (q.grand_total || 0), 0);
+        const total = sumTotal(won.filter(q => monthKeyOf(q.date) === key));
         return { label, total, key };
     });
     const maxBar = Math.max(...last6Months.map(m => m.total), 1);
 
     // Top 5 customers by total accepted revenue
     const customerTotals: Record<string, number> = {};
-    quotes.filter(q => q.status === 'Accepted').forEach(q => {
+    won.forEach(q => {
         const name = q.customer_name || 'Unknown';
-        customerTotals[name] = (customerTotals[name] || 0) + (q.grand_total || 0);
+        customerTotals[name] = (customerTotals[name] || 0) + (Number(q.grand_total) || 0);
     });
     const topCustomers = Object.entries(customerTotals)
         .sort((a, b) => b[1] - a[1])
@@ -105,7 +108,7 @@ export default function Dashboard() {
         const name = q.customer_name || 'Unknown';
         if (!customerQuoteMap[name]) customerQuoteMap[name] = { count: 0, accepted: 0, lastDate: '', lastStatus: '', lastId: '' };
         customerQuoteMap[name].count++;
-        if (q.status === 'Accepted') customerQuoteMap[name].accepted++;
+        if (isWon(q.status)) customerQuoteMap[name].accepted++;
         if (!customerQuoteMap[name].lastDate || (q.date || '') > customerQuoteMap[name].lastDate) {
             customerQuoteMap[name].lastDate = q.date || '';
             customerQuoteMap[name].lastStatus = q.status || 'Draft';
