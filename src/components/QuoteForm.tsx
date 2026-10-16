@@ -3530,7 +3530,7 @@ export default function QuoteForm() {
                         exit={{ opacity: 0, height: 0 }}
                         transition={{ duration: 0.2 }}
                         data-row-index={index}
-                        className="flex items-stretch print:block relative"
+                        className="flex items-stretch print:block relative max-xl:pr-9 print:pr-0"
                         onPointerDown={rowReorderMode === 'drag' ? (e) => onRowBodyPointerDown(e, index) : undefined}
                         onPointerMove={rowReorderMode === 'drag' ? onRowBodyPointerMove : undefined}
                         onPointerUp={rowReorderMode === 'drag' ? onRowBodyPointerUp : undefined}
@@ -3730,7 +3730,7 @@ export default function QuoteForm() {
                         </div>
 
                         {/* Controls — always visible, note + trash, outside grid */}
-                        <div className="absolute -right-9 top-0 bottom-0 w-8 print:hidden flex flex-col items-center justify-start pt-1 gap-1 xl:hidden" data-html2canvas-ignore="true">
+                        <div className="absolute right-0 top-0 bottom-0 w-8 print:hidden flex flex-col items-center justify-start pt-1 gap-1 xl:hidden" data-html2canvas-ignore="true">
                           {workflowVisibility.internalNotes !== false && (
                             <div className="relative flex flex-col items-center">
                               <button
