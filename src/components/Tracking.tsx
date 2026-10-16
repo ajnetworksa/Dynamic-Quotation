@@ -1,3 +1,4 @@
+import { getStoredUser } from '../lib/storage';
 import React, { useState, useEffect, useRef } from 'react';
 import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers, StickyNote, FileSpreadsheet } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -28,6 +29,8 @@ const STATUS_BADGE: Record<string, string> = {
   Rejected: 'bg-red-100 text-red-800',
   Sent: 'bg-yellow-100 text-yellow-800',
   Draft: 'bg-gray-100 text-gray-800',
+  Invoiced: 'bg-purple-100 text-purple-800',
+  Cancelled: 'bg-gray-200 text-gray-600',
 };
 
 type SortKey = 'quote_id' | 'type' | 'status' | 'date' | 'customer_name' | 'grand_total' | 'updated_at' | 'author_username';
@@ -116,7 +119,7 @@ export default function Tracking() {
     }
   };
   // ─────────────────────────────────────────────────────────────────────
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
   const canSeeAll = user.role === 'admin' || !!user.permissions?.canViewAllQuotes;
   const showCreatedBy = user.role === 'admin' || !!user.permissions?.canViewCreatedBy;
 
@@ -158,11 +161,16 @@ export default function Tracking() {
   const handleBulkStatusApply = async () => {
     if (!bulkStatus || selectedIds.size === 0) return;
     try {
-      await fetch('/api/quotes/bulk-status', {
+      const res = await fetch('/api/quotes/bulk-status', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: Array.from(selectedIds), status: bulkStatus })
       });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.error || 'Failed to update status.');
+        return;
+      }
       setSelectedIds(new Set());
       setBulkStatus('');
       fetchQuotes();
@@ -332,7 +340,7 @@ export default function Tracking() {
           }),
           ['', '', '', '', '', 'SUBTOTAL', quote.subtotal, '', '', '', '', '', 'B.TOTAL', baseTotal],
           ['', '', '', '', '', 'DISCOUNT', quote.discount],
-          ['', '', '', '', '', 'VAT (15%)', quote.tax],
+          ['', '', '', '', '', `VAT (${quote.vat_rate ?? 15}%)`, quote.tax],
           ['', '', '', '', '', 'TOTAL PACKAGE', quote.grand_total, '', '', '', '', '', 'TTL PROFIT', (quote.grand_total || 0) - baseTotal],
           [''],
           ['TERMS & CONDITIONS'],
@@ -900,7 +908,7 @@ export default function Tracking() {
 
         // VAT
         const rVat = ws.getRow(currentRow);
-        rVat.getCell(5).value = 'VAT (15%)';
+        rVat.getCell(5).value = `VAT (${quote.vat_rate ?? 15}%)`;
         rVat.getCell(5).font = { name: 'Arial', size: 10, bold: true };
         rVat.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };
         rVat.getCell(6).value = quote.tax || 0;
@@ -948,11 +956,16 @@ export default function Tracking() {
 
   const updateSingleStatus = async (quoteId: string, newStatus: string) => {
     try {
-      await fetch('/api/quotes/bulk-status', {
+      const res = await fetch('/api/quotes/bulk-status', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [quoteId], status: newStatus })
       });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.error || 'Failed to update status.');
+        return;
+      }
       setQuotes(prev => prev.map(q => q.quote_id === quoteId ? { ...q, status: newStatus } : q));
     } catch (e) {
       alert('Failed to update status.');
@@ -983,24 +996,26 @@ export default function Tracking() {
   const saveFollowup = async () => {
     if (!followupQuoteId) return;
     try {
-      await fetch(`/api/quotes/${followupQuoteId}/followup`, {
+      const res = await fetch(`/api/quotes/${followupQuoteId}/followup`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ followup_date: followupDate, followup_note: followupNote })
       });
+      if (!res.ok) { alert('Failed to save follow-up.'); return; }
       setFollowupQuoteId(null);
       fetchQuotes();
-    } catch (e) { }
+    } catch (e) { alert('Failed to save follow-up.'); }
   };
 
   const saveNote = async () => {
     if (!noteQuoteId) return;
     try {
-      await fetch(`/api/quotes/${noteQuoteId}/note`, {
+      const res = await fetch(`/api/quotes/${noteQuoteId}/note`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quote_note: noteText })
       });
+      if (!res.ok) { alert('Failed to save note.'); return; }
       setQuotes(prev => prev.map(q => q.quote_id === noteQuoteId ? { ...q, quote_note: noteText } : q));
       setNoteQuoteId(null);
     } catch (e) { alert('Failed to save note.'); }
@@ -1011,13 +1026,20 @@ export default function Tracking() {
     const header = showCreatedBy
       ? ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified', 'Created By']
       : ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified'];
+    // Quote every cell, escape quotes, and neutralise spreadsheet formulas (cells starting with = + - @).
+    const cell = (v: any) => {
+      let s = v === null || v === undefined ? '' : String(v);
+      if (/^[=+\-@\t\r]/.test(s) && isNaN(Number(s))) s = `'${s}`;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
     const rows = filtered.map(q => [
-      q.quote_id, q.type || 'Quotation', q.status || 'Draft', q.date, `"${(q.customer_name || '').replace(/"/g, '""')}"`,
-      `"${(q.subject || '').replace(/"/g, '""')}"`, q.grand_total, q.updated_at ? new Date(q.updated_at).toLocaleString() : '',
+      q.quote_id, q.type || 'Quotation', q.status || 'Draft', q.date, q.customer_name || '',
+      q.subject || '', q.grand_total, q.updated_at ? new Date(q.updated_at).toLocaleString() : '',
       ...(showCreatedBy ? [q.author_name || q.author_username || '—'] : [])
     ]);
-    const csvContent = [header, ...rows].map(e => e.join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const csvContent = [header, ...rows].map(r => r.map(cell).join(",")).join("\r\n");
+    // UTF-8 BOM so Excel shows Arabic text correctly.
+    const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
@@ -1294,6 +1316,8 @@ export default function Tracking() {
                       <option value="Sent">Sent</option>
                       <option value="Accepted">Accepted</option>
                       <option value="Rejected">Rejected</option>
+                      <option value="Invoiced">Invoiced</option>
+                      <option value="Cancelled">Cancelled</option>
                     </select>
                   </td>
                   <td className="p-4 text-gray-600">
@@ -1466,6 +1490,8 @@ export default function Tracking() {
                 <option value="Sent">Sent</option>
                 <option value="Accepted">Accepted</option>
                 <option value="Rejected">Rejected</option>
+                <option value="Invoiced">Invoiced</option>
+                <option value="Cancelled">Cancelled</option>
               </select>
               <button
                 onClick={handleDownloadSelectedPdfs}
