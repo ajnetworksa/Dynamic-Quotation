@@ -19,6 +19,7 @@ import { checkAiSql, runAiQuery } from './src/lib/aiQuery.ts';
 import { STATUSES, isStatus } from './src/lib/status.ts';
 import { generateSecret, verifyTotp, otpauthUrl } from './src/lib/totp.ts';
 import { customerKeys, productKey } from './src/lib/importDedupe.ts';
+import { encryptBackup, decryptBackup } from './src/lib/backupCrypto.ts';
 import QRCode from 'qrcode';
 import express from 'express';
 import http from 'http';
@@ -454,6 +455,24 @@ db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
   status INTEGER
 )`);
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)'); } catch { }
+
+// ── One-time migration: "Edit customers / products / suppliers" became a permission. Existing users keep the access they
+// have today (set to true once); users created afterwards start without it until an admin ticks it. ──
+try {
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'catalogPermMigrated'").get()) {
+    const users = db.prepare('SELECT id, role, permissions FROM users').all() as any[];
+    const upd = db.prepare('UPDATE users SET permissions = ? WHERE id = ?');
+    db.transaction(() => {
+      for (const u of users) {
+        if (u.role === 'admin') continue;
+        let perms: any = {};
+        try { perms = JSON.parse(u.permissions || '{}'); } catch { }
+        if (perms.canEditCatalog === undefined) { perms.canEditCatalog = true; upd.run(JSON.stringify(perms), u.id); }
+      }
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('catalogPermMigrated', '1')").run();
+    })();
+  }
+} catch (e) { console.error('Catalog permission migration failed:', e); }
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -1192,7 +1211,7 @@ app.get('/api/customers', requireAuth, (req, res) => {
   return listWithPaging('customers', ['name', 'contact', 'mobile', 'email', 'address'], req, res);
 });
 
-app.post('/api/customers', requireAuth, validate(CustomerSchema), (req, res) => {
+app.post('/api/customers', requireAuth, requirePermission('canEditCatalog'), validate(CustomerSchema), (req, res) => {
   try {
     const { name, address, contact, mobile, email } = req.body;
     const stmt = db.prepare('INSERT INTO customers (name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?)');
@@ -1204,7 +1223,7 @@ app.post('/api/customers', requireAuth, validate(CustomerSchema), (req, res) => 
   }
 });
 
-app.put('/api/customers/:id', requireAuth, validate(CustomerSchema), (req, res) => {
+app.put('/api/customers/:id', requireAuth, requirePermission('canEditCatalog'), validate(CustomerSchema), (req, res) => {
   const { name, address, contact, mobile, email } = req.body;
   const stmt = db.prepare('UPDATE customers SET name = ?, address = ?, contact = ?, mobile = ?, email = ? WHERE id = ?');
   stmt.run(name, address ?? null, contact ?? null, mobile ?? null, email ?? null, req.params.id);
@@ -1223,7 +1242,7 @@ app.get('/api/suppliers', requireAuth, (req, res) => {
   res.json(suppliers);
 });
 
-app.post('/api/suppliers', requireAuth, validate(SupplierSchema), (req, res) => {
+app.post('/api/suppliers', requireAuth, requirePermission('canEditCatalog'), validate(SupplierSchema), (req, res) => {
   try {
     const { name } = req.body;
     const stmt = db.prepare('INSERT INTO suppliers (name) VALUES (?)');
@@ -1238,7 +1257,7 @@ app.post('/api/suppliers', requireAuth, validate(SupplierSchema), (req, res) => 
   }
 });
 
-app.put('/api/suppliers/:id', requireAuth, validate(SupplierSchema), (req, res) => {
+app.put('/api/suppliers/:id', requireAuth, requirePermission('canEditCatalog'), validate(SupplierSchema), (req, res) => {
   try {
     const { name } = req.body;
     const stmt = db.prepare('UPDATE suppliers SET name = ? WHERE id = ?');
@@ -1261,14 +1280,14 @@ app.get('/api/products', requireAuth, (req, res) => {
   return listWithPaging('products', ['description', 'description_ar', 'item_code', 'supplier_name'], req, res);
 });
 
-app.post('/api/products', requireAuth, validate(ProductSchema), (req, res) => {
+app.post('/api/products', requireAuth, requirePermission('canEditCatalog'), validate(ProductSchema), (req, res) => {
   const { description, description_ar, unit, unit_price, item_code, supplier_name } = req.body;
   const stmt = db.prepare('INSERT INTO products (description, description_ar, unit, unit_price, item_code, supplier_name) VALUES (?, ?, ?, ?, ?, ?)');
   const info = stmt.run(description, description_ar ?? null, unit ?? null, unit_price, item_code ?? null, supplier_name ?? null);
   res.json({ id: info.lastInsertRowid });
 });
 
-app.put('/api/products/:id', requireAuth, validate(ProductSchema), (req, res) => {
+app.put('/api/products/:id', requireAuth, requirePermission('canEditCatalog'), validate(ProductSchema), (req, res) => {
   try {
     const { description, description_ar, unit, unit_price, item_code, supplier_name } = req.body;
     const stmt = db.prepare('UPDATE products SET description = ?, description_ar = ?, unit = ?, unit_price = ?, item_code = ?, supplier_name = ? WHERE id = ?');
@@ -1304,7 +1323,7 @@ const CustomerImportSchema = z.object({
   })).min(1).max(5000),
   skipDuplicates: z.boolean().optional().default(true),
 });
-app.post('/api/customers/import', requireAuth, validate(CustomerImportSchema), (req, res) => {
+app.post('/api/customers/import', requireAuth, requirePermission('canEditCatalog'), validate(CustomerImportSchema), (req, res) => {
   const { rows, skipDuplicates } = req.body as z.infer<typeof CustomerImportSchema>;
   const existing = new Set<string>();
   for (const c of db.prepare('SELECT name, mobile, email FROM customers').all() as any[]) customerKeys(c).forEach(k => existing.add(k));
@@ -1333,7 +1352,7 @@ const ProductImportSchema = z.object({
   })).min(1).max(5000),
   onDuplicate: z.enum(['skip', 'update']).optional().default('skip'),
 });
-app.post('/api/products/import', requireAuth, validate(ProductImportSchema), (req, res) => {
+app.post('/api/products/import', requireAuth, requirePermission('canEditCatalog'), validate(ProductImportSchema), (req, res) => {
   const { rows, onDuplicate } = req.body as z.infer<typeof ProductImportSchema>;
   const byKey = new Map<string, number>();
   for (const p of db.prepare('SELECT id, description, item_code FROM products').all() as any[]) byKey.set(productKey(p), p.id);
@@ -1452,6 +1471,27 @@ function isQuoteVisibleToUser(quote: { author_id: number; shared_with?: string |
     } catch { }
   }
 
+  return false;
+}
+
+// Edit rights (stricter than visibility): a "view only" share can look at a quote but not change it.
+// Mirrors the rules used when SAVING a quote: owner, "view all" users/admins, people the quote was shared with
+// edit rights, or users with "Edit Shared Quotes" for an author they are allowed to see.
+function canEditQuote(quote: { author_id: number; shared_with?: string | null }, user: any): boolean {
+  if (user.role === 'admin' || !!user.permissions?.canViewAllQuotes) return true;
+  if (quote.author_id === user.id) return true;
+  const allowedAuthors: number[] = Array.isArray(user.permissions?.canViewQuotesFrom)
+    ? user.permissions.canViewQuotesFrom.filter((id: any) => typeof id === 'number') : [];
+  if (allowedAuthors.includes(quote.author_id) && user.permissions?.canEditSharedQuote) return true;
+  try {
+    const sw = JSON.parse(quote.shared_with || '{}');
+    if (Array.isArray(sw.canEditUsers) && sw.canEditUsers.includes(user.id)) return true;
+    if (user.permissions?.canEditSharedQuote && Array.isArray(sw.users) && sw.users.includes(user.id)) return true;
+    if (Array.isArray(sw.canEditGroups) && sw.canEditGroups.length > 0) {
+      const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.canEditGroups.map(() => '?').join(',') + ')').all(...sw.canEditGroups) as any[];
+      for (const g of groups) { try { if (JSON.parse(g.members || '[]').includes(user.id)) return true; } catch { } }
+    }
+  } catch { }
   return false;
 }
 
@@ -2675,10 +2715,11 @@ const PaymentSchema = z.object({
   method: z.string().max(40).optional().default(''),
   note: z.string().max(300).optional().default(''),
 });
-const paymentQuote = (req: express.Request, res: express.Response) => {
+const paymentQuote = (req: express.Request, res: express.Response, needEdit = false) => {
   const row = db.prepare('SELECT quote_id, author_id, shared_with, grand_total FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
   if (!row) { res.status(404).json({ error: 'Quote not found' }); return null; }
-  if (!isQuoteVisibleToUser(row, (req as any).user)) { res.status(403).json({ error: 'Access denied.' }); return null; }
+  const user = (req as any).user;
+  if (!(needEdit ? canEditQuote(row, user) : isQuoteVisibleToUser(row, user))) { res.status(403).json({ error: 'Access denied.' }); return null; }
   return row;
 };
 const paymentSummary = (quoteId: string, total: number) => {
@@ -2691,7 +2732,7 @@ app.get('/api/quotes/:quote_id/payments', requireAuth, (req, res) => {
   res.json(paymentSummary(q.quote_id, q.grand_total));
 });
 app.post('/api/quotes/:quote_id/payments', requireAuth, validate(PaymentSchema), (req, res) => {
-  const q = paymentQuote(req, res); if (!q) return;
+  const q = paymentQuote(req, res, true); if (!q) return;
   const { amount, paid_on, method, note } = req.body;
   const already = paymentSummary(q.quote_id, q.grand_total);
   if (round2(already.paid + amount) > round2(q.grand_total) + 0.004) {
@@ -2703,7 +2744,7 @@ app.post('/api/quotes/:quote_id/payments', requireAuth, validate(PaymentSchema),
   res.json(paymentSummary(q.quote_id, q.grand_total));
 });
 app.delete('/api/quotes/:quote_id/payments/:id', requireAuth, (req, res) => {
-  const q = paymentQuote(req, res); if (!q) return;
+  const q = paymentQuote(req, res, true); if (!q) return;
   db.prepare('DELETE FROM quote_payments WHERE id = ? AND quote_id = ?').run(Number(req.params.id), q.quote_id);
   db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(q.quote_id, 'Payment removed', (req as any).user.username, new Date().toISOString());
   res.json(paymentSummary(q.quote_id, q.grand_total));
@@ -2936,8 +2977,8 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
     const lookup = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?');
     for (const id of ids) {
       const row = lookup.get(id) as any;
-      if (row && !isQuoteVisibleToUser(row, currentUser)) {
-        return res.status(403).json({ error: `Access denied for quote ${id}.` });
+      if (row && !canEditQuote(row, currentUser)) {
+        return res.status(403).json({ error: `You do not have permission to change quote ${id}.` });
       }
     }
     db.transaction(() => {
@@ -2971,9 +3012,9 @@ const handleSingleQuoteStatus = (req: express.Request, res: express.Response) =>
       : db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ?').get(quoteIdentifier) as any;
 
     if (!existing) return res.status(404).json({ error: 'Quote not found' });
-    // SECURITY: caller must be able to see this quote.
-    if (!isQuoteVisibleToUser(existing, (req as any).user)) {
-      return res.status(403).json({ error: 'Access denied.' });
+    // SECURITY: changing the status needs EDIT rights (a view-only share is not enough).
+    if (!canEditQuote(existing, (req as any).user)) {
+      return res.status(403).json({ error: 'You do not have permission to change this quote.' });
     }
     const targetQuoteId = existing.quote_id;
 
@@ -2996,8 +3037,8 @@ app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema
   try {
     const row = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
     if (!row) return res.status(404).json({ error: 'Quote not found' });
-    if (!isQuoteVisibleToUser(row, (req as any).user)) {
-      return res.status(403).json({ error: 'Access denied.' });
+    if (!canEditQuote(row, (req as any).user)) {
+      return res.status(403).json({ error: 'You do not have permission to change this quote.' });
     }
     db.prepare('UPDATE quotes SET followup_date = ?, followup_note = ? WHERE quote_id = ?').run(followup_date || null, followup_note || null, req.params.quote_id);
     res.json({ success: true });
@@ -3313,6 +3354,83 @@ app.post('/api/admin/db/optimize', requireAuth, requirePermission('canDatabaseMa
 });
 
 // ── ZIP RESTORE SYSTEM (DISASTER RECOVERY) ───────────────────────────────────
+// Replaces the live database with the file at `extractedDbPath` safely: validate it first, snapshot the current
+// database, swap the files (dropping stale WAL/SHM), reopen. On failure the previous database is restored.
+async function swapInDatabase(extractedDbPath: string): Promise<void> {
+  try {
+    // 3b. Validate the uploaded database BEFORE touching the live one.
+      {
+        const probe = new Database(extractedDbPath, { readonly: true });
+        try {
+          const integrity = probe.pragma('integrity_check', { simple: true });
+          const hasQuotes = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='quotes'").get();
+          if (integrity !== 'ok' || !hasQuotes) {
+            throw new Error('Invalid backup archive: database failed integrity check or is not a quotation database.');
+          }
+        } finally {
+          probe.close();
+        }
+      }
+
+      // 3c. Keep a consistent snapshot of the CURRENT database so a bad restore can be undone.
+      try {
+        const snapDir = path.resolve(process.cwd(), 'backups');
+        fs.mkdirSync(snapDir, { recursive: true });
+        await db.backup(path.join(snapDir, `pre_restore_${new Date().toISOString().replace(/[:.]/g, '-')}.db`));
+      } catch (snapErr) {
+        console.error('Pre-restore snapshot failed:', snapErr);
+        throw new Error('Could not create a safety snapshot of the current database. Restore aborted.');
+      }
+
+      // 4. Safely close database connection before replacing the file
+      db.close();
+
+      // 5. Replace DB file with safe automated fallback recovery
+      const mainDbPath = DB_FILE;
+      const fallbackDbPath = DB_FILE + '.bak';
+
+      if (fs.existsSync(mainDbPath)) {
+        fs.copyFileSync(mainDbPath, fallbackDbPath);
+      }
+
+      try {
+        // Remove stale WAL/SHM files so they cannot be replayed onto the restored database.
+        for (const ext of ['-wal', '-shm']) {
+          const sidecar = mainDbPath + ext;
+          if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+        }
+        fs.copyFileSync(extractedDbPath, mainDbPath);
+        if (fs.existsSync(fallbackDbPath)) {
+          fs.unlinkSync(fallbackDbPath);
+        }
+      } catch (copyErr) {
+        if (fs.existsSync(fallbackDbPath)) {
+          fs.copyFileSync(fallbackDbPath, mainDbPath);
+          fs.unlinkSync(fallbackDbPath);
+        }
+        throw copyErr;
+      }
+
+      // 6. Re-open connection
+      db = new Database(DB_FILE);
+      db.pragma('journal_mode = WAL');
+
+
+  } catch (error) {
+    // Safety fallback: make sure a connection is open again even when the swap failed half-way
+    // (validation errors happen before the old connection is closed, so only reopen when needed).
+    if (!db.open) {
+      try {
+        db = new Database(DB_FILE);
+        db.pragma('journal_mode = WAL');
+      } catch (reopenErr) {
+        console.error('Critical: Failed to emergency re-open database connection:', reopenErr);
+      }
+    }
+    throw error;
+  }
+}
+
 app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMaintenance'), upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
@@ -3341,62 +3459,8 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
       throw new Error('Invalid backup archive: master quotes.db file is missing.');
     }
 
-    // 3b. Validate the uploaded database BEFORE touching the live one.
-    {
-      const probe = new Database(extractedDbPath, { readonly: true });
-      try {
-        const integrity = probe.pragma('integrity_check', { simple: true });
-        const hasQuotes = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='quotes'").get();
-        if (integrity !== 'ok' || !hasQuotes) {
-          throw new Error('Invalid backup archive: database failed integrity check or is not a quotation database.');
-        }
-      } finally {
-        probe.close();
-      }
-    }
-
-    // 3c. Keep a consistent snapshot of the CURRENT database so a bad restore can be undone.
-    try {
-      const snapDir = path.resolve(process.cwd(), 'backups');
-      fs.mkdirSync(snapDir, { recursive: true });
-      await db.backup(path.join(snapDir, `pre_restore_${new Date().toISOString().replace(/[:.]/g, '-')}.db`));
-    } catch (snapErr) {
-      console.error('Pre-restore snapshot failed:', snapErr);
-      throw new Error('Could not create a safety snapshot of the current database. Restore aborted.');
-    }
-
-    // 4. Safely close database connection before replacing the file
-    db.close();
-
-    // 5. Replace DB file with safe automated fallback recovery
-    const mainDbPath = DB_FILE;
-    const fallbackDbPath = DB_FILE + '.bak';
-
-    if (fs.existsSync(mainDbPath)) {
-      fs.copyFileSync(mainDbPath, fallbackDbPath);
-    }
-
-    try {
-      // Remove stale WAL/SHM files so they cannot be replayed onto the restored database.
-      for (const ext of ['-wal', '-shm']) {
-        const sidecar = mainDbPath + ext;
-        if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
-      }
-      fs.copyFileSync(extractedDbPath, mainDbPath);
-      if (fs.existsSync(fallbackDbPath)) {
-        fs.unlinkSync(fallbackDbPath);
-      }
-    } catch (copyErr) {
-      if (fs.existsSync(fallbackDbPath)) {
-        fs.copyFileSync(fallbackDbPath, mainDbPath);
-        fs.unlinkSync(fallbackDbPath);
-      }
-      throw copyErr;
-    }
-
-    // 6. Re-open connection
-    db = new Database(DB_FILE);
-    db.pragma('journal_mode = WAL');
+    // 3b-6. Validate, snapshot, swap in and reopen (shared with the encrypted restore).
+    await swapInDatabase(extractedDbPath);
 
     res.json({ success: true });
   } catch (error: any) {
@@ -3416,6 +3480,43 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     } catch (cleanupErr) {
       console.error('Failed to cleanup temp restore files:', cleanupErr);
     }
+  }
+});
+
+// ── Encrypted backups (passphrase protected, safe to store off-site) ────────────────────────────────
+const EncBackupSchema = z.object({ passphrase: z.string().min(12, 'Passphrase must be at least 12 characters').max(200) });
+app.post('/api/admin/backup-encrypted', requireAuth, requirePermission('canDatabaseMaintenance'), validate(EncBackupSchema), async (req, res) => {
+  const tmp = path.resolve(process.cwd(), `temp_enc_${Date.now()}.db`);
+  try {
+    await db.backup(tmp); // consistent snapshot even while the app is in use
+    const encrypted = encryptBackup(fs.readFileSync(tmp), req.body.passphrase);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="quotes-backup-${new Date().toISOString().slice(0, 10)}.db.enc"`);
+    res.send(encrypted);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || 'Backup failed' });
+  } finally {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { }
+  }
+});
+
+app.post('/api/admin/restore-encrypted', requireAuth, requirePermission('canDatabaseMaintenance'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const passphrase = String(req.body?.passphrase || '');
+  const tmpDir = path.resolve(process.cwd(), `temp_encrestore_${Date.now()}`);
+  try {
+    let plain: Buffer;
+    try { plain = decryptBackup(req.file.buffer, passphrase); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const dbFile = path.join(tmpDir, 'quotes.db');
+    fs.writeFileSync(dbFile, plain);
+    await swapInDatabase(dbFile);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { }
   }
 });
 

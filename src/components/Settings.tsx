@@ -1,5 +1,7 @@
 import { getStoredUser } from '../lib/storage';
 import { toast, confirmAsync } from '../lib/notify';
+import CompanyProfileSettings from './CompanyProfileSettings';
+import EncryptedBackupPanel from './EncryptedBackupPanel';
 import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages, Sparkles, Type } from 'lucide-react';
 import ExcelJS from 'exceljs';
@@ -1322,6 +1324,8 @@ export default function Settings() {
               )}
             </div>
           </div>
+
+          <EncryptedBackupPanel />
 
           <hr className="border-gray-200" />
 
@@ -2907,6 +2911,8 @@ export default function Settings() {
           {muFilterStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save MU filters</span>}
         </div>
       </div>
+
+      <CompanyProfileSettings />
 
       {/* Quote ID Prefix */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
