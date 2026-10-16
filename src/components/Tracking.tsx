@@ -344,7 +344,7 @@ export default function Tracking() {
               if (rule === 'MAN') displayBase = item.manual_price || 0;
               else if (rule === 'DB') displayBase = item.original_price || 0;
               else displayBase = item.original_price || 0;
-              displayTotal = displayBase * item.qty;
+              displayTotal = displayBase * (item.qty || 1);
             }
             baseTotal += displayTotal;
 

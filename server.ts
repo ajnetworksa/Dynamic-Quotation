@@ -166,7 +166,7 @@ const loginLimiter = rateLimit({
 // automated scraping/DoS without affecting real users.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5000, // Further increased to avoid 429 during active multi-tab usage
+  max: Number(process.env.API_RATE_LIMIT_MAX) || 5000, // requests per IP per 15 min (generous for multi-tab use; lower it with API_RATE_LIMIT_MAX)
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.path === '/api/login', // login has its own limiter
@@ -869,6 +869,17 @@ const paidAmounts = (quoteId: string, total: number) => {
   return { amountPaid: paid, amountDue: round2(Math.max(0, (Number(total) || 0) - paid)) };
 };
 
+// Error text that is safe to show to a client: database errors (which expose table/column names) are logged in full
+// and replaced by a generic message; everything else keeps its (short) message.
+const publicError = (e: any): string => {
+  const msg = String(e?.message ?? '');
+  if (String(e?.code ?? '').startsWith('SQLITE') || /SQLITE_|no such (table|column)|constraint failed|syntax error near/i.test(msg)) {
+    console.error('Database error (hidden from client):', msg);
+    return 'A database error occurred. Please try again, or contact your administrator if it keeps happening.';
+  }
+  return msg.slice(0, 300);
+};
+
 // ── Audit helper ─────────────────────────────────────────────────────────────
 const auditLog = (entry: { actor?: string | null; actorId?: number | null; ip?: string | null; action: string; target?: string | null; details?: string | null; status?: number | null }) => {
   try {
@@ -1239,7 +1250,7 @@ app.post('/api/customers', requireAuth, requirePermission('canEditCatalog'), val
     res.json({ id: info.lastInsertRowid });
   } catch (error: any) {
     console.error('Add customer error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -1273,7 +1284,7 @@ app.post('/api/suppliers', requireAuth, requirePermission('canEditCatalog'), val
     if (error.message.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'Supplier already exists' });
     }
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -1285,7 +1296,7 @@ app.put('/api/suppliers/:id', requireAuth, requirePermission('canEditCatalog'), 
     res.json({ success: true });
   } catch (error: any) {
     console.error('Update supplier error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -1315,7 +1326,7 @@ app.put('/api/products/:id', requireAuth, requirePermission('canEditCatalog'), v
     res.json({ success: true });
   } catch (error: any) {
     console.error('Update product error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -1461,7 +1472,7 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
     })();
     res.json({ nextId: result });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -1595,7 +1606,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
     res.json(quotes);
   } catch (error: any) {
     console.error('Fetch quotes error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -1842,7 +1853,7 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
     res.send(buffer);
   } catch (error: any) {
     console.error('PDF Generation Error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate PDF' });
+    res.status(500).json({ error: publicError(error) || 'Failed to generate PDF' });
   }
 };
 app.get('/api/quotes/:quote_id/pdf', requireAuth, quotePdfHandler);
@@ -1990,7 +2001,7 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
     res.send(buffer);
   } catch (error: any) {
     console.error('PDF Render Error:', error);
-    res.status(500).json({ error: error.message || 'Failed to render PDF' });
+    res.status(500).json({ error: publicError(error) || 'Failed to render PDF' });
   }
 });
 
@@ -2076,7 +2087,7 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     console.error('Email send error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: publicError(err) });
   }
 });
 
@@ -2571,7 +2582,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       return res.status(409).json({ error: 'ID_TAKEN' });
     }
     console.error('Save quote error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -2593,7 +2604,7 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
     })();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -2968,7 +2979,7 @@ app.patch('/api/quotes/:quote_id/note', requireAuth, validate(QuoteNoteSchema), 
     db.prepare('UPDATE quotes SET quote_note = ? WHERE quote_id = ?').run(quote_note ?? null, quoteId);
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3008,7 +3019,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
     const { shared_with: _sw, ...publicQuote } = quote; // do not expose the share list to the client
     res.json({ quote: publicQuote, logs });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3073,7 +3084,7 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
     res.json({ success: true });
   } catch (error: any) {
     console.error('Undo error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3103,7 +3114,7 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
     })();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3138,7 +3149,7 @@ const handleSingleQuoteStatus = (req: express.Request, res: express.Response) =>
 
     res.json({ success: true, quote_id: targetQuoteId, status });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 };
 app.post('/api/quotes/:quote_id/status', requireAuth, handleSingleQuoteStatus);
@@ -3156,7 +3167,7 @@ app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema
     db.prepare('UPDATE quotes SET followup_date = ?, followup_note = ? WHERE quote_id = ?').run(followup_date || null, followup_note || null, req.params.quote_id);
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3212,7 +3223,7 @@ app.get('/api/db/export', requireAuth, requirePermission('canDatabaseMaintenance
     }
     res.json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3310,7 +3321,7 @@ app.get('/api/admin/backup', requireAuth, requirePermission('canDatabaseMaintena
     });
   } catch (error: any) {
     console.error('Failed to run online hot backup:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3439,7 +3450,7 @@ app.get('/api/admin/backup-zip', requireAuth, requirePermission('canDatabaseMain
       if (fs.existsSync(tempDbBackup)) fs.unlinkSync(tempDbBackup);
       if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
     } catch {}
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3462,7 +3473,7 @@ app.post('/api/admin/db/optimize', requireAuth, requirePermission('canDatabaseMa
       savedBytes: oldStats.size - newStats.size
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3585,7 +3596,7 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     } catch (reopenErr) {
       console.error('Critical: Failed to emergency re-open database connection:', reopenErr);
     }
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   } finally {
     try {
       if (fs.existsSync(tempZipPath)) fs.unlinkSync(tempZipPath);
@@ -3607,7 +3618,7 @@ app.post('/api/admin/backup-encrypted', requireAuth, requirePermission('canDatab
     res.setHeader('Content-Disposition', `attachment; filename="quotes-backup-${new Date().toISOString().slice(0, 10)}.db.enc"`);
     res.send(encrypted);
   } catch (e: any) {
-    res.status(500).json({ error: e.message || 'Backup failed' });
+    res.status(500).json({ error: publicError(e) || 'Backup failed' });
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { }
   }
@@ -3627,7 +3638,7 @@ app.post('/api/admin/restore-encrypted', requireAuth, requirePermission('canData
     await swapInDatabase(dbFile);
     res.json({ success: true });
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: publicError(e) });
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { }
   }
@@ -3705,7 +3716,7 @@ app.get('/api/admin/backups/list', requireAuth, requirePermission('canDatabaseMa
 
     res.json(backups);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3714,7 +3725,7 @@ app.post('/api/admin/backups/trigger-auto', requireAuth, requirePermission('canD
     await runAutomatedBackup();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3730,7 +3741,7 @@ app.get('/api/admin/backups/download/:filename', requireAuth, requirePermission(
     }
     res.download(file, filename);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3741,7 +3752,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
     const settings = db.prepare('SELECT key, value FROM settings WHERE key NOT IN (\'smtpConfig\', \'logExpirationDays\')').all();
     res.json(settings);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3766,7 +3777,7 @@ app.get('/api/settings/:key', requireAuth, (req, res) => {
     }
     res.json({ value: setting ? setting.value : null });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3790,7 +3801,7 @@ app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), v
     res.json({ success: true });
   } catch (error: any) {
     console.error(`[Settings Upload Error] Failed to save key "${key}":`, error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -3913,7 +3924,7 @@ app.post('/api/admin/bulk-update-quote-terms', requireAuth, requireAdmin, (req, 
     res.json({ success: true, count: updatedCount });
   } catch (error: any) {
     console.error('[Bulk Update Terms Error]:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -4208,7 +4219,7 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
   } catch (err: any) {
     console.error('Price Sync Error:', err);
     logSystemError('PriceSync', 'ExtractionError', err.message, err.stack);
-    res.status(500).json({ error: err.message || 'AI extraction failed. Ensure the file is readable.' });
+    res.status(500).json({ error: publicError(err) || 'AI extraction failed. Ensure the file is readable.' });
   }
 });
 
@@ -4355,7 +4366,7 @@ app.get('/api/admin/logs', requireAuth, requirePermission('canManageSettings'), 
     const logs = db.prepare('SELECT * FROM system_logs ORDER BY id DESC LIMIT 500').all();
     res.json(logs);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
@@ -4364,7 +4375,7 @@ app.delete('/api/admin/logs', requireAuth, requirePermission('canManageSettings'
     db.prepare('DELETE FROM system_logs').run();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: publicError(error) });
   }
 });
 
