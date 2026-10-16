@@ -133,12 +133,12 @@ export default function Dashboard() {
     return (
         <div className="space-y-6 max-w-7xl mx-auto">
             {/* Header */}
-            <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-800">Hello, Welcome back!</h1>
                     <p className="text-gray-500 mt-1">Here is the overview of your quotation and sales activities.</p>
                 </div>
-                <div className="flex gap-3 flex-shrink-0">
+                <div className="flex flex-wrap gap-3 sm:flex-shrink-0">
                     <button
                         onClick={() => navigate('/customers')}
                         className="flex items-center gap-2 px-4 py-2.5 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors font-medium"

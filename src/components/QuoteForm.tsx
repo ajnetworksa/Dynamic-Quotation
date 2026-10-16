@@ -1677,6 +1677,8 @@ export default function QuoteForm() {
         }
       } else if (field === 'unit_price') {
         newItems[index].manual_price = value === '' || isNaN(value) ? undefined : Math.round(value * 100) / 100;
+        // Store the price exactly as it is shown (2 decimals) so qty x price always equals the displayed net price.
+        if (value !== '' && !isNaN(value)) newItems[index].unit_price = round2(value);
       }
 
       if (field === 'qty' || field === 'unit_price' || field === 'manual_price') {
@@ -1950,7 +1952,8 @@ export default function QuoteForm() {
       const checkRes = await fetch(`/api/quotes/${activeId}`);
       if (checkRes.ok) {
         // Quote exists. If we are not explicitly editing this specific quote, warn them.
-        if (recallQuoteId !== activeId) {
+        // A quote this form just recorded (isRecorded) is being updated, not colliding with someone else's ID.
+        if (recallQuoteId !== activeId && !(isRecorded && quoteId === activeId)) {
           setShowOverwriteModal(true);
           return false;
         }
