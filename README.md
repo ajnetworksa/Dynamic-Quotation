@@ -16,7 +16,6 @@ A professional, dual-language (English/Arabic) quotation and invoice management 
 - **Smart Search**: Multi-word fuzzy search for products (handles out-of-order keywords).
 - **Pricing Analysis Sidebar**: Real-time margin tracking and cost analysis while building quotes.
 - **AI Price Sync**: Bulk-update product databases by uploading supplier price lists (PDF/Excel) with AI-driven extraction and matching.
-- **Source Inspection Protection**: Admin-controlled protection that blocks right-click context menus and developer tools (F12, Ctrl+Shift+I) to prevent source code inspection.
 - **Granular Quote Sharing**: Share quotations with specific users or entire groups with per-target "View Only" or "Can Edit" permissions.
 - **Configurable ID Prefixes**: Administrators can customize the Quote ID prefix (e.g., `AJ-`, `QT-`, `INV-`) directly from settings.
 - **Group-Based RBAC**: Assign users to permission groups for bulk access management.
@@ -29,6 +28,14 @@ A professional, dual-language (English/Arabic) quotation and invoice management 
 - **Interactive Product Assignment**: Modern Indigo-themed pop-up modal to modify product Item Codes or re-link them to active suppliers instantly.
 - **Supplier DB Copy/Move Suite**: Checkbox-driven product multi-selection with support for copying (duplicating) or moving (reassigning) items to other suppliers.
 - **Bulk Table Operations**: Selected row checkboxes in Product and Customer databases with a sleek glassmorphic Red bulk deletion action bar.
+- **Client Approval Links**: send a private link; the client reviews the document, downloads the PDF and accepts or declines online with a typed signature. Views and the answer are tracked.
+- **Payments & Recurring Invoices**: record payments against an invoice (balance due on the PDF) and repeat a document weekly/monthly/quarterly/yearly as new Drafts.
+- **Kanban with drag and drop**, rejection reasons, a dashboard with period selector, follow-ups due, expiring offers, open-quote aging and top rejection reasons.
+- **Per-quote currency** (SAR, AED, USD ...), shared rounding rules so the form, PDF, Excel and database always agree.
+- **Recycle Bin**: deleted quotes can be restored; pinned or purged after a configurable number of days.
+- **CSV import** for customers and products with duplicate detection and a preview.
+- **Security**: hashed sessions, per-account lockout, optional two-factor login (authenticator app), signed-in devices list, audit log, enforced Content-Security-Policy, encrypted backups, read-only AI database access.
+- **English / Arabic interface toggle** (right-to-left layout), dark mode, keyboard and screen-reader friendly dialogs.
 
 ---
 
@@ -48,10 +55,10 @@ npm install
 ### Step 2: Environment Setup
 Create a `.env` file in the root directory:
 ```env
-GEMINI_API_KEY="your-gemini-key"
-OPENROUTER_API_KEY="your-openrouter-key"
-APP_URL="http://localhost:3000"
+OPENROUTER_API_KEY="your-openrouter-key"      # AI assistant / price sync (optional)
+APP_URL="https://quotes.example.com"           # used to build client approval links (optional)
 PORT=3000
+ADMIN_INITIAL_PASSWORD=""                      # first-run admin password (10+ chars). Empty = random, printed once in the log
 ```
 
 ### Step 3: Run
@@ -137,11 +144,40 @@ Containerization ensures identical behavior across all environments.
 
 ---
 
+## 🔧 Configuration reference
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` | 3000 | HTTP port |
+| `APP_URL` | request host | Base URL for client approval links |
+| `ADMIN_INITIAL_PASSWORD` | random | Password of the first `admin` account on a new database |
+| `DB_PATH` | `./quotes.db` | Database file location (Docker: mount a folder and set this) |
+| `OPENROUTER_API_KEY` | none | AI assistant and price sync |
+| `ALLOW_SELF_UPDATE` | off | Enables Settings > System Update (git pull + build on the server). Prefer your normal deployment pipeline |
+| `CSP_REPORT_ONLY` | off | Set `true` to log Content-Security-Policy violations instead of blocking (useful when adding scripts) |
+| `LOGIN_RATE_LIMIT_MAX` / `API_RATE_LIMIT_MAX` | 10 / 5000 per 15 min | Rate limits (the login one is per IP; accounts also lock after 8 failures) |
+| `LOG_REQUESTS` | off | `true` logs every API request as JSON (errors and slow requests are always logged) |
+
+## 🔐 Security notes
+- Change the first admin password, and turn on two-factor login for admins (profile menu > Security).
+- Give people only the permissions they need (Users page). New users start without catalog editing, Recycle Bin and audit-log access.
+- Back up with **Settings > Encrypted Backup** and keep the passphrase somewhere safe: without it the file cannot be opened.
+- If an old `quotes_old.db` from this repository's history is still in use anywhere, change those passwords: see `docs/ai/HANDOFF.md` (H-01).
+- `/api/health` is public (used by Docker); everything else needs a login except the client approval pages (`/approve/<token>`).
+
+## ✅ Tests
+```bash
+npm ci
+npx tsc --noEmit        # type check
+npx vitest run          # unit tests (money, SQL guard, 2FA, CSV, recurrence, ...)
+npm run build
+./e2e/api-smoke.sh /tmp/api-smoke   # API checks against a throw-away database
+# Browser test (Playwright + Chromium) is described in docs/ai/CHANGELOG-AI.md
+```
+Audit notes, what was fixed and what is still open: `docs/ai/`.
+
 ## 🔮 Roadmap
 - AI-Driven Auto-Quotation from Emails/Notes
 - Dashboard Profitability Analytics
-- Client Approval Portal (E-Signatures)
-- Dark Mode Themes
-- Multicurrency & Real-time Exchange Rates
+- Live exchange rates (per-quote currency already works)
 - Inventory Tracking Integration
-- Automated Subscription/Recurring Invoices
