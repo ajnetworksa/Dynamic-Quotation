@@ -1,3 +1,4 @@
+import { getStoredUser } from '../lib/storage';
 import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages, Sparkles, Type } from 'lucide-react';
 import ExcelJS from 'exceljs';
@@ -154,7 +155,7 @@ export default function Settings() {
   const [remoteUrlStatus, setRemoteUrlStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [updateError, setUpdateError] = useState<string | null>(null);
 
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
 
   useEffect(() => {
     fetch('/api/settings/logo')
