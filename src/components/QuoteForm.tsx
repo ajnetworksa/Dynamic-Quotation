@@ -20,6 +20,11 @@
 import { getStoredUser } from '../lib/storage';
 import { toast, confirmAsync } from '../lib/notify';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import AddProductModal from './quote/AddProductModal';
+import AddCustomerModal from './quote/AddCustomerModal';
+import ExportRecordModal from './quote/ExportRecordModal';
+import TotalsPanel from './quote/TotalsPanel';
+import { OverwriteModal, ConflictModal, SaveTemplateModal } from './quote/QuoteDialogs';
 import { round2, lineTotal, computeTotals, discountFromRate, rateFromDiscount, clampPercent, marginPercent } from '../lib/money';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
@@ -4055,155 +4060,13 @@ export default function QuoteForm() {
                   → Simply change the text directly in the JSX below.
             ────────────────────────────────────────────────────────────────── */}
             <div className="w-full md:w-72 shrink-0 flex flex-col relative">
-              <div className="border-2 border-gray-800 w-full h-fit">
-                <div className="grid grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base text-up">
-                  <div className="font-bold">SUBTOTAL</div>
-                  <div className="flex justify-between items-center font-mono font-bold">
-                    <span>{currency}</span>
-                    <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                </div>
-                <div className={`border-b border-gray-300 p-2 pt-1.5 pb-2 text-base hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
-                  {/* Screen View: 2 lines to give inputs full width and prevent overlapping */}
-                  <div className="print:hidden">
-                    {/* Line 1: Title and Mode Toggle Badge */}
-                    <div className="flex items-center justify-between">
-                      <div className="font-bold flex items-center gap-1.5">
-                        <span>DISCOUNT</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextMode: 'amount' | 'percentage' | 'both' =
-                              discountMode === 'amount' ? 'percentage' :
-                              discountMode === 'percentage' ? 'both' : 'amount';
-                            setDiscountMode(nextMode);
-                            if (nextMode === 'percentage' || nextMode === 'both') {
-                              lastDiscountEditedRef.current = 'rate';
-                              const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
-                              setDiscountRate(rate);
-                            } else {
-                              lastDiscountEditedRef.current = 'amount';
-                              setDiscountRate(0);
-                            }
-                          }}
-                          className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-gray-200 hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
-                          title={
-                            discountMode === 'amount' ? "Switch to Percentage (%)" :
-                            discountMode === 'percentage' ? `Switch to Both (% & ${currency})` :
-                            `Switch to Direct Amount (${currency})`
-                          } aria-label={
-                            discountMode === 'amount' ? "Switch to Percentage (%)" :
-                            discountMode === 'percentage' ? `Switch to Both (% & ${currency})` :
-                            `Switch to Direct Amount (${currency})`
-                          }
-                        >
-                          {discountMode === 'amount' ? currency : discountMode === 'percentage' ? '%' : 'BOTH'}
-                        </button>
-                      </div>
-                      <span className="text-[11px] text-gray-400 font-normal">
-                        {discountMode === 'both' ? `(% & ${currency})` : discountMode === 'percentage' ? '(Percentage %)' : `(Direct ${currency})`}
-                      </span>
-                    </div>
-
-                    {/* Line 2: Percentage on the left, SAR on the right */}
-                    <div className="flex items-center justify-between font-mono mt-1.5">
-                      <div>
-                        {discountMode === 'percentage' || discountMode === 'both' ? (
-                          <div className="flex items-center text-sm">
-                            <input
-                              type="number"
-                              className="w-12 text-center outline-none bg-white border border-gray-300 rounded px-1 py-0.5 font-bold text-sm focus:border-indigo-500 shadow-sm"
-                              value={discountRate || ''}
-                              onChange={e => {
-                                lastDiscountEditedRef.current = 'rate';
-                                const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
-                                setDiscountRate(val);
-                                setDiscount(Number(((subtotal * val) / 100).toFixed(2)));
-                              }}
-                              min="0"
-                              max="100"
-                              step="0.1"
-                              placeholder="0"
-                            />
-                            <span className="ml-1 font-bold text-gray-600">%</span>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-gray-400 italic">{currency} only</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span>{currency}</span>
-                        {discountMode === 'percentage' ? (
-                          <span className="font-bold">{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                        ) : (
-                          <input
-                            type="number"
-                            className="w-24 text-right outline-none bg-white border border-gray-300 rounded px-1.5 py-0.5 font-bold text-sm focus:border-indigo-500 shadow-sm"
-                            value={rawDiscount || ''}
-                            onChange={e => {
-                              lastDiscountEditedRef.current = 'amount';
-                              // Never accept more than the subtotal: the PDF would otherwise print a discount larger than the items.
-                              const val = Math.min(Math.max(0, parseFloat(e.target.value) || 0), subtotal > 0 ? subtotal : Infinity);
-                              setDiscount(val);
-                              setDiscountRate(rateFromDiscount(subtotal, val));
-                            }}
-                            max={subtotal > 0 ? subtotal : undefined}
-                            min="0"
-                            step="0.01"
-                            placeholder="0.00"
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Print View: Clean single row matching Subtotal / VAT table layout */}
-                  <div className="hidden print:grid print:grid-cols-2 text-base items-center">
-                    <div className="font-bold">
-                      DISCOUNT {(discountMode === 'percentage' || discountMode === 'both') && discountRate > 0 ? `(${discountRate}%)` : ''}
-                    </div>
-                    <div className="flex justify-between items-center font-mono font-bold">
-                      <span>{currency}</span>
-                      <span>{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="print:hidden flex items-center justify-between border-b border-gray-300 p-2 text-sm">
-                  <label htmlFor="quote-currency" className="font-bold">CURRENCY</label>
-                  <select
-                    id="quote-currency"
-                    value={currency}
-                    onChange={e => setCurrency(e.target.value)}
-                    className="border border-gray-300 rounded px-1.5 py-0.5 bg-white font-mono"
-                  >
-                    {['SAR', 'AED', 'QAR', 'KWD', 'BHD', 'OMR', 'EGP', 'JOD', 'USD', 'EUR', 'GBP'].map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
-                  <div className="font-bold flex items-center whitespace-nowrap">
-                    VAT
-                    <input
-                      type="number"
-                      className="w-9 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
-                      value={vatRate}
-                      onChange={e => setVatRate(clampPercent(parseFloat(e.target.value) || 0))}
-                      min="0"
-                      max="100"
-                    />%
-                  </div>
-                  <div className="flex justify-between items-center font-mono">
-                    <span>{currency}</span>
-                    <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 border-gray-300 p-2 pt-0 pb-3 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
-                  <div className="font-bold">TOTAL PACKAGE</div>
-                  <div className="flex justify-between items-center font-mono font-bold text-md rounded-md bg-green-400 text-black pt-0 pb-3">
-                    <span className="mr-2">{currency}</span>
-                    <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                </div>
-              </div>
+              <TotalsPanel
+                currency={currency} setCurrency={setCurrency}
+                subtotal={subtotal} discount={discount} rawDiscount={rawDiscount} setDiscount={setDiscount}
+                discountMode={discountMode} setDiscountMode={setDiscountMode} discountRate={discountRate} setDiscountRate={setDiscountRate}
+                lastDiscountEditedRef={lastDiscountEditedRef}
+                vatRate={vatRate} setVatRate={setVatRate} tax={tax} grandTotal={grandTotal} themeColors={themeColors}
+              />
 
               {/* ── STAMP — adjustable via settings (placed below totals box) ─────────────────────────── */}
               {stampUrl && (
@@ -4611,108 +4474,29 @@ export default function QuoteForm() {
           );
         })()}
 
-        {/* Overwrite Confirmation Modal */}
         {showOverwriteModal && (
-          <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
-            <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-              <h3 className="text-xl font-bold text-gray-900 mb-2">Quote ID Exists</h3>
-              <p className="text-gray-600 mb-6">A quote with ID <span className="font-bold">{quoteId}</span> already exists. How would you like to proceed?</p>
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={() => performSave(true)}
-                  className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
-                >
-                  Overwrite Existing Quote ({quoteId})
-                </button>
-                <button
-                  onClick={handleCreateNewId}
-                  className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors"
-                >
-                  Generate New ID & Save
-                </button>
-                <button
-                  onClick={() => setShowOverwriteModal(false)}
-                  className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
+          <OverwriteModal
+            quoteId={quoteId}
+            onOverwrite={() => performSave(true)}
+            onNewId={handleCreateNewId}
+            onCancel={() => setShowOverwriteModal(false)}
+          />
         )}
 
-        {/* Version Conflict Modal */}
         {showConflictModal && (
-          <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
-            <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-              <h3 className="text-xl font-bold text-gray-900 mb-2">Version Conflict</h3>
-              <p className="text-gray-600 mb-6">The server has a newer version of this quote. Another user may have modified it since you opened it.</p>
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={() => setShowConflictModal(false)}
-                  className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium rounded-lg transition-colors border border-gray-300"
-                >
-                  Cancel (Review my changes)
-                </button>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="w-full py-2 px-4 bg-blue-100 hover:bg-blue-200 text-blue-800 font-medium rounded-lg transition-colors"
-                >
-                  Reload from Server (Discard mine)
-                </button>
-                <button
-                  onClick={() => {
-                    setShowConflictModal(false);
-                    handleCreateRevision();
-                  }}
-                  className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors"
-                >
-                  Save as New Revision
-                </button>
-                <button
-                  onClick={() => performSave(true)}
-                  className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
-                >
-                  Force Overwrite Server Version
-                </button>
-              </div>
-            </div>
-          </div>
+          <ConflictModal
+            onCancel={() => setShowConflictModal(false)}
+            onReload={() => window.location.reload()}
+            onSaveAsRevision={() => { setShowConflictModal(false); handleCreateRevision(); }}
+            onForce={() => performSave(true)}
+          />
         )}
       </div>
 
 
       {/* Save Template Modal */}
       {showTemplateModal && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
-          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold text-gray-900 mb-2">Save Terms as Template</h3>
-            <p className="text-gray-600 mb-4 text-sm">Save the current Note, Payment, Warranty, Duration, Mobilization, Manpower, Bank Details, and Footer as a reusable template.</p>
-            <input
-              type="text"
-              autoFocus
-              placeholder="E.g., Standard CCTV Terms"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 mb-6 text-gray-900 bg-white"
-              value={templateName}
-              onChange={e => setTemplateName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && saveTemplate()}
-            />
-            <div className="flex justify-end gap-3 font-medium">
-              <button
-                className="px-4 py-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-700"
-                onClick={() => setShowTemplateModal(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                onClick={saveTemplate}
-              >
-                Save Template
-              </button>
-            </div>
-          </div>
-        </div>
+        <SaveTemplateModal name={templateName} setName={setTemplateName} onSave={saveTemplate} onCancel={() => setShowTemplateModal(false)} />
       )}
 
       {/* Global Datalist for Unit Suggestions */}
@@ -4720,323 +4504,55 @@ export default function QuoteForm() {
         {UNIT_SUGGESTIONS.map(u => <option key={u} value={u} />)}
       </datalist>
 
-      {/* ── Add Product Modal ────────────────────────────────────────────── */}
+      {/* ── Add Product / Add Customer / Record-before-export dialogs (extracted to ./quote/) ── */}
       {addProductModal && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-            {/* Header */}
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600">
-              <div className="flex items-center gap-2">
-                <Plus size={18} className="text-white" />
-                <h2 className="text-white font-bold text-base">Add to Product DB</h2>
-              </div>
-              <button onClick={() => setAddProductModal(null)} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
-            </div>
-            {/* Body */}
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name</label>
-                <textarea
-                  autoFocus
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white resize-y"
-                  value={addProductModal.description}
-                  onChange={e => setAddProductModal(m => m ? { ...m, description: e.target.value } : m)}
-                  rows={Math.max(2, Math.min(6, Math.ceil((addProductModal.description || '').length / 45)))}
-                />
-              </div>
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Item Code</label>
-                  <input
-                    type="text"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
-                    value={addProductModal.item_code}
-                    onChange={e => setAddProductModal(m => m ? { ...m, item_code: e.target.value } : m)}
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Supplier Name</label>
-                  <select
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-gray-900"
-                    value={addProductModal.supplier_name}
-                    onChange={e => setAddProductModal(m => m ? { ...m, supplier_name: e.target.value } : m)}
-                  >
-                    <option value="">-- Select Supplier --</option>
-                    {suppliers.map(s => (
-                      <option key={s.id} value={s.name}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit</label>
-                  <input
-                    type="text"
-                    list="unit-suggestions"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
-                    value={addProductModal.unit}
-                    onChange={e => setAddProductModal(m => m ? { ...m, unit: e.target.value } : m)}
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit Price</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
-                    value={addProductModal.price}
-                    onChange={e => setAddProductModal(m => m ? { ...m, price: e.target.value } : m)}
-                  />
-                </div>
-              </div>
-            </div>
-            {/* Footer */}
-            <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end bg-gray-50">
-              <button
-                className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg text-sm hover:bg-gray-100 transition-colors"
-                onClick={() => setAddProductModal(null)}
-              >Cancel</button>
-              <button
-                disabled={addProductModal.isSaving}
-                className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-70 flex items-center gap-2"
-                onClick={async () => {
-                  const { rowIndex, description, unit, price } = addProductModal;
-                  const unit_price = parseFloat(price) || 0;
-                  if (!description.trim()) return;
-
-                  setAddProductModal(m => m ? { ...m, isSaving: true } : m);
-
-                  try {
-                    // Pre-translate before saving to DB
-                    let description_ar = '';
-                    const trans = await translateSingle(description.trim());
-                    if (trans) description_ar = trans;
-
-                    const res = await fetch('/api/products', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        description: description.trim(),
-                        description_ar,
-                        unit: unit || 'Pc',
-                        unit_price,
-                        item_code: addProductModal.item_code,
-                        supplier_name: addProductModal.supplier_name
-                      }),
-                    });
-                    if (res.ok) {
-                      const { id } = await res.json();
-                      const refreshed = await fetch(`/api/products?_t=${Date.now()}`);
-                      if (refreshed.ok) {
-                        const data = await refreshed.json();
-                        if (Array.isArray(data)) {
-                          setProducts(data);
-                          const newProd = data.find((p: any) => p.id === id);
-                          if (newProd) {
-                            setItems(prev => {
-                              const next = [...prev];
-                              const calcPrice = newProd.unit_price * (1 + markup / 100);
-                              next[rowIndex] = {
-                                ...next[rowIndex],
-                                product_id: newProd.id,
-                                original_price: newProd.unit_price,
-                                description: newProd.description,
-                                description_ar: newProd.description_ar || '',
-                                unit: newProd.unit,
-                                unit_price: calcPrice,
-                                net_price: next[rowIndex].qty * calcPrice,
-                              };
-                              return next;
-                            });
-                          }
-                        }
-                      }
-                      setAddProductModal(null);
-                    } else {
-                      setAddProductModal(m => m ? { ...m, isSaving: false } : m);
-                    }
-                  } catch (e) {
-                    console.error('Failed to add product:', e);
-                    setAddProductModal(m => m ? { ...m, isSaving: false } : m);
-                  }
-                }}
-              >
-                {addProductModal.isSaving ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    Saving...
-                  </>
-                ) : 'Save & Add to Quote'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <AddProductModal
+          modal={addProductModal}
+          setModal={setAddProductModal}
+          suppliers={suppliers}
+          translate={translateSingle}
+          onCreated={(newProd, rowIndex, allProducts) => {
+            setProducts(allProducts);
+            setItems(prev => {
+              const next = [...prev];
+              if (!next[rowIndex]) return prev;
+              // Same rounding as every other pricing path (src/lib/money.ts).
+              const calcPrice = round2(newProd.unit_price * (1 + markup / 100));
+              next[rowIndex] = {
+                ...next[rowIndex],
+                product_id: newProd.id,
+                original_price: newProd.unit_price,
+                description: newProd.description,
+                description_ar: newProd.description_ar || '',
+                unit: newProd.unit,
+                unit_price: calcPrice,
+                net_price: lineTotal(next[rowIndex].qty, calcPrice),
+              };
+              return next;
+            });
+          }}
+        />
       )}
 
-      {/* ── Add Customer Modal ────────────────────────────────────────────── */}
       {addCustomerModal && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-teal-600">
-              <div className="flex items-center gap-2">
-                <Users size={18} className="text-white" />
-                <h2 className="text-white font-bold text-base">Add to Customer DB</h2>
-              </div>
-              <button onClick={() => setAddCustomerModal(null)} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Customer Name</label>
-                <input
-                  type="text"
-                  autoFocus
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
-                  value={addCustomerModal.name}
-                  onChange={e => setAddCustomerModal({ ...addCustomerModal, name: e.target.value })}
-                  placeholder="Company or Individual Name"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Mobile</label>
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
-                    value={addCustomerModal.mobile}
-                    onChange={e => setAddCustomerModal({ ...addCustomerModal, mobile: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Contact Person</label>
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
-                    value={addCustomerModal.contact}
-                    onChange={e => setAddCustomerModal({ ...addCustomerModal, contact: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Email</label>
-                <input
-                  type="text"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
-                  value={addCustomerModal.email}
-                  onChange={e => setAddCustomerModal({ ...addCustomerModal, email: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Address</label>
-                <textarea
-                  rows={2}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
-                  value={addCustomerModal.address}
-                  onChange={e => setAddCustomerModal({ ...addCustomerModal, address: e.target.value })}
-                />
-              </div>
-            </div>
-            <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
-              <button
-                onClick={() => setAddCustomerModal(null)}
-                className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-bold flex items-center gap-2"
-                disabled={addCustomerModal.isSaving}
-                onClick={async () => {
-                  if (!addCustomerModal.name.trim()) return toast('Name is required');
-                  setAddCustomerModal(m => m ? { ...m, isSaving: true } : m);
-                  try {
-                    const res = await fetch('/api/customers', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        name: addCustomerModal.name.trim(),
-                        mobile: addCustomerModal.mobile,
-                        address: addCustomerModal.address,
-                        contact: addCustomerModal.contact,
-                        email: addCustomerModal.email
-                      }),
-                    });
-                    if (res.ok) {
-                      const { id } = await res.json();
-                      const refreshed = await fetch(`/api/customers?_t=${Date.now()}`);
-                      if (refreshed.ok) {
-                        const data = await refreshed.json();
-                        if (Array.isArray(data)) {
-                          setCustomers(data);
-                          const newCust = data.find((c: any) => c.id === id);
-                          if (newCust) {
-                            setSelectedCustomerId(newCust.id);
-                            setSelectedCustomer(newCust);
-                            setCustomerSearch(newCust.name);
-                          }
-                        }
-                      }
-                      setAddCustomerModal(null);
-                    } else {
-                      setAddCustomerModal(m => m ? { ...m, isSaving: false } : m);
-                    }
-                  } catch (e) {
-                    setAddCustomerModal(m => m ? { ...m, isSaving: false } : m);
-                  }
-                }}
-              >
-                {addCustomerModal.isSaving ? 'Saving...' : 'Save & Select'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <AddCustomerModal
+          modal={addCustomerModal}
+          setModal={setAddCustomerModal}
+          onCreated={(newCust, allCustomers) => {
+            setCustomers(allCustomers);
+            setSelectedCustomerId(newCust.id);
+            setSelectedCustomer(newCust);
+            setCustomerSearch(newCust.name);
+          }}
+        />
       )}
 
-      {/* ── Confirm Record Before Export Modal ── */}
       {showExportRecordModal && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center p-4 print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="p-3 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded-xl shrink-0">
-                <Save size={24} />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Record Quotation?</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  This quotation has not been recorded to the system yet. Would you like to assign a Quote ID and record it before exporting?
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2.5 mt-6">
-              <button
-                type="button"
-                onClick={handleRecordAndExport}
-                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
-              >
-                <Save size={16} />
-                Record & Export
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportWithoutRecording}
-                className="w-full py-2.5 px-4 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-medium rounded-xl text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
-              >
-                Export Without Recording
-              </button>
-
-              <button
-                type="button"
-                onClick={handleCancelExportPrompt}
-                className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-xl text-sm transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+        <ExportRecordModal
+          onRecordAndExport={handleRecordAndExport}
+          onExportWithoutRecording={handleExportWithoutRecording}
+          onCancel={handleCancelExportPrompt}
+        />
       )}
 
     </div>

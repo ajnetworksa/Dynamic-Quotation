@@ -199,6 +199,24 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
   await page.waitForSelector('[role=status]:has-text("Import complete")');
   check('CSV import adds the new rows', (await page.locator('text=CSV One').count()) > 0);
 
+  // ── Add-to-Product-DB dialog (extracted component) from a quote line ──
+  await page.goto(BASE + '/quote');
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(500);
+  const row1 = '[data-row-index="1"]';
+  await page.locator(`${row1} textarea`).first().click();
+  await page.locator(`${row1} textarea`).first().fill('Brand new gadget XYZ');
+  await page.click('text=to Product DB');
+  await page.waitForSelector('[role=dialog][aria-label="Add to Product DB"]');
+  await page.fill('#ap-price', '99.5');
+  await page.fill('#ap-code', 'GAD-XYZ');
+  await page.click('button:has-text("Save & Add to Quote")');
+  await page.waitForSelector('[role=dialog][aria-label="Add to Product DB"]', { state: 'detached' });
+  const prods = await page.evaluate(async () => (await (await fetch('/api/products')).json()).filter(p => p.item_code === 'GAD-XYZ').map(p => p.unit_price));
+  check('Add-to-Product-DB creates the product', prods.length === 1 && prods[0] === 99.5, JSON.stringify(prods));
+  const unit = await page.locator(`${row1} input.font-mono`).first().inputValue();
+  check('the quote line is filled with the product price plus markup (99.50 x 1.08)', unit === '107.46', unit);
+
   // ── security modal + audit log page ──
   await page.goto(BASE + '/');
   await page.click('button[aria-label=Profile]');
