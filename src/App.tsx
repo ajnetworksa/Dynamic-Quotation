@@ -63,7 +63,8 @@ function NavItem({ to, icon: Icon, label }: { to: string; icon: any; label: stri
   return (
     <Link
       to={to}
-      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+      aria-current={isActive ? 'page' : undefined}
+      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
         isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
       }`}
     >
@@ -514,6 +515,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:bg-white focus:text-indigo-700 focus:px-3 focus:py-2 focus:rounded-lg focus:shadow-lg">Skip to content</a>
       <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
@@ -524,7 +526,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               <h1 className="text-xl font-bold text-gray-900">AJ Network Solutions</h1>
             </div>
             <div className="flex items-center gap-4 w-full md:w-auto">
-              <nav className="flex gap-2 overflow-x-auto flex-1 md:flex-none pb-2 md:pb-0 scrollbar-hide items-center">
+              <nav aria-label="Main" className="flex gap-2 overflow-x-auto flex-1 md:flex-none pb-2 md:pb-0 scrollbar-hide items-center">
                 <NavItem to="/" icon={LayoutDashboard} label="Dashboard" />
                 <NavItem to="/quote" icon={FileText} label="Docs" />
                 <NavItem to="/products" icon={Database} label="Product DB" />
@@ -561,7 +563,7 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+      <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full outline-none">
         <div style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
           <QuoteForm />
         </div>
@@ -607,7 +609,14 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
   const [user, setUser] = useState<any>(readJson<any>('user', null));
-  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('theme') === 'dark');
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    // Saved choice wins; otherwise follow the operating system.
+    try {
+      const saved = localStorage.getItem('theme');
+      if (saved) return saved === 'dark';
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch { return false; }
+  });
 
   useEffect(() => {
     if (isDarkMode) {

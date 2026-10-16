@@ -1504,12 +1504,13 @@ export default function Tracking() {
         </div>
       </div>
 
+      {selectedIds.size > 0 && <div className="h-32 sm:h-20" aria-hidden="true" />}
       {/* Bulk Status Sticky Bar */}
       {
         selectedIds.size > 0 && (
-          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] p-4 flex justify-between items-center z-50 animate-slide-up">
+          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] p-3 sm:p-4 flex flex-wrap justify-between items-center gap-3 z-50 animate-slide-up max-h-[40vh] overflow-y-auto">
             <div className="text-gray-700 font-medium">Selected {selectedIds.size} records</div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <select
                 value={bulkStatus}
                 onChange={e => setBulkStatus(e.target.value)}

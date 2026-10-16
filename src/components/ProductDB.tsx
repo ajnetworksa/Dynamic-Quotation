@@ -29,6 +29,8 @@ export default function ProductDB() {
   const [syncData, setSyncData] = useState<{ id?: number; description: string; current_price: number; new_price: number; match_type: 'exact' | 'fuzzy' | 'none' }[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const user = getStoredUser();
 
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
@@ -85,12 +87,16 @@ export default function ProductDB() {
 
   const fetchProducts = async () => {
     try {
+      setLoadError('');
       const res = await fetch('/api/products');
-      if (!res.ok) return;
+      if (!res.ok) { setLoadError('Could not load products. Please try again.'); return; }
       const data = await res.json();
       if (Array.isArray(data)) setProducts(data);
     } catch (e) {
       console.error('Failed to fetch products', e);
+      setLoadError('Network error: could not load products.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -362,7 +368,7 @@ export default function ProductDB() {
             {filtered.length === 0 && !isAdding && (
               <tr>
                 <td colSpan={9} className="p-8 text-center text-gray-400">
-                  {search ? `No products match "${search}"` : 'No products found. Add one to get started.'}
+                  {loading ? 'Loading products…' : loadError ? loadError : search ? `No products match "${search}"` : 'No products found. Add one to get started.'}
                 </td>
               </tr>
             )}

@@ -23,6 +23,8 @@ export default function SupplierDB() {
   const [bulkModal, setBulkModal] = useState<{ supplierId: number; mode: 'copy' | 'move' } | null>(null);
   const [bulkTargetSupplier, setBulkTargetSupplier] = useState('');
   const [isBulkLoading, setIsBulkLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const user = getStoredUser();
 
   const toggleExpand = (id: number, e: React.MouseEvent) => {
@@ -37,7 +39,13 @@ export default function SupplierDB() {
   useEffect(() => { fetchSuppliers(); fetchProducts(); }, []);
 
   const fetchSuppliers = async () => {
-    try { const res = await fetch('/api/suppliers'); if (res.ok) { const d = await res.json(); if (Array.isArray(d)) setSuppliers(d); } } catch (e) {}
+    try {
+      setLoadError('');
+      const res = await fetch('/api/suppliers');
+      if (res.ok) { const d = await res.json(); if (Array.isArray(d)) setSuppliers(d); }
+      else setLoadError('Could not load suppliers. Please try again.');
+    } catch (e) { setLoadError('Network error: could not load suppliers.'); }
+    finally { setLoading(false); }
   };
   const fetchProducts = async () => {
     try { const res = await fetch('/api/products'); if (res.ok) { const d = await res.json(); if (Array.isArray(d)) setProducts(d); } } catch (e) {}
@@ -295,7 +303,7 @@ export default function SupplierDB() {
 
             {filtered.length === 0 && !isAdding && (
               <tr><td colSpan={4} className="p-8 text-center text-gray-400">
-                {search ? `No suppliers match "${search}"` : 'No suppliers found. Add one to get started.'}
+                {loading ? 'Loading suppliers…' : loadError ? loadError : search ? `No suppliers match "${search}"` : 'No suppliers found. Add one to get started.'}
               </td></tr>
             )}
           </tbody>

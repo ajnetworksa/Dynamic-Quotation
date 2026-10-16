@@ -23,6 +23,8 @@ export default function CustomerDB() {
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [stats, setStats] = useState<Record<number, { total_won: number, quote_count: number }>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const user = getStoredUser();
   const navigate = useNavigate();
 
@@ -33,12 +35,16 @@ export default function CustomerDB() {
 
   const fetchCustomers = async () => {
     try {
+      setLoadError('');
       const res = await fetch('/api/customers');
-      if (!res.ok) return;
+      if (!res.ok) { setLoadError('Could not load customers. Please try again.'); return; }
       const data = await res.json();
       if (Array.isArray(data)) setCustomers(data);
     } catch (e) {
       console.error('Failed to fetch customers', e);
+      setLoadError('Network error: could not load customers.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -276,7 +282,7 @@ export default function CustomerDB() {
             {filtered.length === 0 && !isAdding && (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-gray-400">
-                  {search ? `No customers match "${search}"` : 'No customers found. Add one to get started.'}
+                  {loading ? 'Loading customers…' : loadError ? loadError : search ? `No customers match "${search}"` : 'No customers found. Add one to get started.'}
                 </td>
               </tr>
             )}
