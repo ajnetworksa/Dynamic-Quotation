@@ -37,7 +37,7 @@ Task format: **Goal / Files / Steps / Done when / Risks.**
 ### H-27 Split the big components
 - `QuoteForm.tsx` is ~4,500 lines and `Settings.tsx` ~3,180. Extracted so far: dialogs and the totals panel (`src/components/quote/`), `ChoiceSettingCard`, `CompanyProfileSettings`, `EncryptedBackupPanel`.
 - Next for QuoteForm: the terms editors (the `X`/`XAr` pairs repeated in state, draft, restore, save, PDF params, templates and translation should become one `terms` object), the items table with `React.memo` rows, `useQuoteDraft`, `useQuoteTotals`, an `api` client. Three export paths exist (two html2canvas, one server React-PDF): decide on one.
-- Next for Settings: logo/footer/stamp image cards (same pattern x3), font sizes, SMTP, system logs, MU filters, users of `useSetting(key)`.
+- Settings is now split into sections (`settings/SettingsNav.tsx`); the cards still live in `Settings.tsx`. Next for Settings: move each section into its own file, then the logo/footer/stamp image cards (same pattern x3), font sizes, SMTP, system logs, MU filters, users of `useSetting(key)`.
 - Do each extraction as its own commit and run the browser test.
 
 ### H-29 Server-side lists in the UI
@@ -53,6 +53,10 @@ Task format: **Goal / Files / Steps / Done when / Risks.**
 
 ### H-33 Automatic off-site backups
 - Encrypted backups can be downloaded and restored (`/api/admin/backup-encrypted`, `/restore-encrypted`). Add a scheduled upload of the encrypted file to S3-compatible storage (credentials via `.env`, retention setting, "last successful off-site backup" status on the Settings page).
+
+### H-34 Port the `feat/bulk-export` branch (needs a decision)
+- `origin/feat/bulk-export` has features not on this branch: bulk download of separate Excel files and PDFs from Tracking, a merged Excel export, drag-and-drop styling in QuoteForm. It branched from an older codebase, so merging it would revert many fixes (security, money module, etc.).
+- Steps: port the features by hand onto `ai-audit-fixes` (Tracking bulk actions, ExcelJS merged sheet using `src/lib/money.ts` and the quote currency/VAT), not by merge. Its Recycle Bin settings were already restored here.
 
 ### Smaller open items
 - Per-route magic-byte checks for uploaded PDF/Excel/ZIP files (size limits exist).

@@ -217,8 +217,54 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
   const unit = await page.locator(`${row1} input.font-mono`).first().inputValue();
   check('the quote line is filled with the product price plus markup (99.50 x 1.08)', unit === '107.46', unit);
 
-  // ── settings: generic choice cards save and persist ──
+  // ── settings: every section renders; Recycle Bin auto-clear persists ──
+  for (const section of ['company', 'documents', 'quotes', 'email', 'data', 'system', 'all']) {
+    const before = errors.length;
+    await page.goto(BASE + '/settings#' + section);
+    await page.waitForLoadState('networkidle');
+    const cards = await page.locator('main h2, [id=main] h2, h2').count();
+    check(`settings section #${section} renders`, cards >= 2 && errors.length === before, errors.slice(before).join(' | ').slice(0, 300));
+  }
   await page.goto(BASE + '/settings');
+  await page.click('nav[aria-label="Settings sections"] button:has-text("Data & Backups")');
+  check('section nav updates the URL hash', page.url().endsWith('#data'), page.url());
+  await page.selectOption('#recycle-bin-days', '0');
+  await page.waitForSelector('text=Saved ✓');
+  await page.reload();
+  await page.waitForLoadState('networkidle');
+  check('Recycle Bin auto-clear "Never" persists', (await page.inputValue('#recycle-bin-days')) === '0');
+  await page.screenshot({ path: `${SHOTS}/settings-data.png`, fullPage: true });
+  await page.goto(BASE + '/recycle-bin');
+  await page.waitForSelector('[data-testid=recycle-retention]');
+  check('Recycle Bin page shows the retention', /off/i.test(await page.locator('[data-testid=recycle-retention]').innerText()));
+  await page.goto(BASE + '/settings#data');
+  await page.selectOption('#recycle-bin-days', '30');
+  await page.waitForSelector('text=Saved ✓');
+
+  // ── users: grouped permission editor saves the same permission JSON ──
+  await page.goto(BASE + '/users');
+  await page.click('button:has-text("Add User")');
+  const dlg = page.locator('[role=dialog][aria-label="New User"]');
+  await dlg.locator('input[placeholder="e.g. ahmed"]').fill('e2e-grouped');
+  await dlg.locator('input[type=password]').fill('e2e-grouped-pass-1');
+  await dlg.locator('button[aria-label="Allow all in Data & Records"]').click();
+  await dlg.locator('label:has-text("Email Quote") input[type=checkbox]').check();
+  await page.screenshot({ path: `${SHOTS}/user-editor.png` });
+  await dlg.locator('button:has-text("Save")').click();
+  await page.waitForSelector('[role=dialog][aria-label="New User"]', { state: 'detached' });
+  const newUser = await page.evaluate(async () => (await (await fetch('/api/users')).json()).find(u => u.username === 'e2e-grouped'));
+  const p = (newUser && newUser.permissions) || {};
+  check('new user saved with grouped permissions', !!(p.canDeleteData && p.canManageRecycleBin && p.canDatabaseMaintenance && p.canEmailQuote && !p.canManageUsers), JSON.stringify(p));
+  await page.click('button[aria-label="Edit e2e-grouped"]');
+  const edlg = page.locator('[role=dialog][aria-label="Editing: e2e-grouped"]');
+  check('edit dialog shows saved ticks', await edlg.locator('label:has-text("Email Quote") input[type=checkbox]').isChecked());
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('[role=dialog]', { state: 'detached' });
+  check('Escape closes the user editor', true);
+  await page.screenshot({ path: `${SHOTS}/users.png`, fullPage: true });
+
+  // ── settings: generic choice cards save and persist ──
+  await page.goto(BASE + '/settings#quotes');
   await page.waitForLoadState('networkidle');
   await page.locator('[role=radiogroup][aria-label="Discount Calculation Mode"] [role=radio]:has-text("Percentage (%)"):not(:has-text("Both"))').click();
   await page.waitForSelector('text=Saved');
@@ -245,7 +291,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
 
   // ── phone width: no page-level horizontal scroll ──
   await page.setViewportSize({ width: 390, height: 800 });
-  for (const route of ['/', '/kanban', '/tracking', '/quote']) {
+  for (const route of ['/', '/kanban', '/tracking', '/quote', '/users', '/settings']) {
     await page.goto(BASE + route);
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);

@@ -62,6 +62,8 @@ Status legend: **Done** = fixed on branch `ai-audit-fixes` (see `CHANGELOG-AI.md
 | L29 | Diff viewer | **Done** (matched items, more fields, dialog semantics, tests) |
 | L30 | Profile modal reload | **Done** |
 | L31 | Production deep links returned "Cannot GET /tracking" | **Done** (SPA fallback; found by the browser test) |
+| L32 | Regression: the "Recycle Bin Auto-Clear" option (7/14/30/60/90 days / Never, setting `recycleBinDays`) existed on the `feat/bulk-export` branch / earlier build but was missing from Settings | **Done**: restored as a Recycle Bin card in Settings → Data & Backups; the Recycle Bin page shows the current retention |
+| L33 | The daily prune turned "Never" (`0`) into 30 days, so quotes meant to be kept were deleted | **Done**: `src/lib/recycleBin.ts` (tested), 0 = never |
 
 ## 3. UI / UX / accessibility
 
@@ -75,13 +77,14 @@ Status legend: **Done** = fixed on branch `ai-audit-fixes` (see `CHANGELOG-AI.md
 | U6 | Dark mode | **Done**: `dark:` utilities follow the toggle, no flash, OS default. The old CSS overrides were kept (and extended), not rewritten |
 | U7 | Loading / error / empty states | **Done** |
 | U8 | Sortable headers | **Done** |
+| U10 | Users & permissions screen cluttered (27 flat checkboxes, inline forms); Settings one long page of ~20 cards | **Done**: Users list with role filter, search, access meter; editor dialog with permissions grouped by category (All/None, search); Settings split into 6 sections with a sidebar (`/settings#section`) and a "Show everything" view. Same API calls and payloads |
 | U9 | Arabic / RTL | **Partial**: English/Arabic toggle with RTL page direction for navigation, Kanban and Dashboard. Most other screens are still English only [H-26] |
 
 ## 4. Maintainability and ops
 
 | # | Finding | Status |
 |---|---------|--------|
-| M1 | Giant components | **Partial**: `QuoteForm` 5,044 → ~4,500 lines (dialogs and totals panel extracted), `Settings` 3,386 → ~3,180 (generic choice card, company details, encrypted backup). Further splits [H-27] |
+| M1 | Giant components | **Partial**: `QuoteForm` 5,044 → ~4,500 lines (dialogs and totals panel extracted), `Settings` 3,386 → ~3,220 and split into sections (generic choice card, company details, encrypted backup, Recycle Bin card, section nav). Further splits [H-27] |
 | M2 | Dockerfile missing `src/pdf` | **Done** (+ `src/lib`, `assets`) |
 | M3 | Docker root user, no healthcheck, mounts | **Done**: entrypoint drops to the `node` user after fixing volume ownership, HEALTHCHECK on `/api/health`, backups mounted, clear error when the DB mount is a directory. Docker image itself could not be built in the sandbox (no daemon) |
 | M4 | Missing DB indexes | **Done** |

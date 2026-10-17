@@ -51,6 +51,13 @@ Docker entrypoint (fixes volume ownership, drops to the `node` user, explains th
 ### Refactors (behaviour-preserving, covered by the browser test)
 `QuoteForm.tsx`: Add-Product, Add-Customer, record-before-export, overwrite, version-conflict and save-template dialogs and the totals panel moved to `src/components/quote/`. `Settings.tsx`: three duplicated choice cards replaced by `settings/ChoiceSettingCard`. Restore logic shared in `swapInDatabase`.
 
+## Round 3: Users & permissions, Settings layout, Recycle Bin regression
+- **Recycle Bin auto-clear restored.** The Settings dropdown (7 / 14 / 30 / 60 / 90 days / Never) that the `feat/bulk-export` branch and the earlier build had was missing here. It is back as `settings/RecycleBinSettings.tsx` under Settings → Data & Backups, saving the same `recycleBinDays` key. The Recycle Bin page shows the current retention.
+- **Prune bug fixed.** `pruneRecycleBin` read `0` ("Never") as 30 days. It now uses `src/lib/recycleBin.ts` (`parseRecycleBinDays`, `recycleBinCutoff`, 3 unit tests); 0 = never.
+- **Settings** regrouped into sections with a sidebar (tab strip on phones): Company & Branding, Documents & PDF, Quote Behaviour, Email, Data & Backups, System, plus "Show everything". The section is in the URL (`/settings#email`). Cards were moved as whole blocks; no handler, state, settings key or API call changed (`settings/SettingsNav.tsx`).
+- **Users & permissions** (`UsersDB.tsx`): user list with avatar, role badge, group membership, quote-visibility badge and an access meter (n/26); search and role filter. Add/Edit opens a dialog with numbered steps (account with password-length hint, role cards, group preset, quotation visibility, features). The 26 permissions are grouped into 6 categories with All/None per category, a search box and counters. Permission Groups use the same editor. Handlers and request payloads are unchanged.
+- Verified: tsc, 68 unit tests, build, API smoke, browser test 68/68 (new: every Settings section renders, section hash, Recycle Bin "Never" persists and shows on the Recycle Bin page, user created through the grouped editor saves the expected permission JSON, edit dialog shows saved ticks, Escape closes it, no horizontal scroll on /users and /settings at 390 px).
+
 ## Behaviour changes you should know about
 - **Dashboard** win rate is now won / (won + rejected); revenue counts Accepted **and** Invoiced, a quote and the invoice made from it once.
 - **Ctrl+S / Ctrl+P / Ctrl+Z** only act on the quote page.
