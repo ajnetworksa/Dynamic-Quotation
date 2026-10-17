@@ -21,6 +21,7 @@ import { generateSecret, verifyTotp, otpauthUrl } from './src/lib/totp.ts';
 import { customerKeys, productKey } from './src/lib/importDedupe.ts';
 import { encryptBackup, decryptBackup } from './src/lib/backupCrypto.ts';
 import { nextRunDate, dueRunDates, FREQUENCIES, Frequency } from './src/lib/recurrence.ts';
+import { parseRecycleBinDays, recycleBinCutoff } from './src/lib/recycleBin.ts';
 import QRCode from 'qrcode';
 import express from 'express';
 import http from 'http';
@@ -2949,11 +2950,12 @@ app.delete('/api/recycle-bin/:quote_id', requireAuth, requireRecycleBin, (req, r
   res.json({ success: true });
 });
 
-// Daily prune: permanently remove binned quotes older than `recycleBinDays` (default 30) unless pinned.
+// Daily prune: permanently remove binned quotes older than `recycleBinDays` (default 30, 0 = never) unless pinned.
 const pruneRecycleBin = () => {
   try {
-    const days = parseInt((db.prepare("SELECT value FROM settings WHERE key = 'recycleBinDays'").get() as any)?.value || '30', 10) || 30;
-    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const days = parseRecycleBinDays((db.prepare("SELECT value FROM settings WHERE key = 'recycleBinDays'").get() as any)?.value);
+    const cutoff = recycleBinCutoff(days);
+    if (!cutoff) return;
     const old = db.prepare('SELECT quote_id FROM quotes WHERE deleted_at IS NOT NULL AND deleted_at < ? AND COALESCE(retain_forever, 0) = 0').all(cutoff) as { quote_id: string }[];
     for (const r of old) purgeQuote(r.quote_id);
     if (old.length) console.log(`🗑️  Recycle Bin: permanently removed ${old.length} quote(s) older than ${days} days`);
