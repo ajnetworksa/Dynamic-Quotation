@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { toast, confirmAsync } from '../lib/notify';
+import { parseRecycleBinDays, describeRecycleBinDays } from '../lib/recycleBin';
 import { Trash2, RotateCcw, AlertCircle, Shield, FileText, Calendar, Clock, Loader2, Search, Pin, PinOff } from 'lucide-react';
 
 interface RecycleBinItem {
@@ -17,9 +18,14 @@ export function RecycleBin() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
 
   useEffect(() => {
     fetchItems();
+    fetch('/api/settings/recycleBinDays')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setRetentionDays(parseRecycleBinDays(d?.value)))
+      .catch(() => {});
   }, []);
 
   const fetchItems = async () => {
@@ -115,7 +121,12 @@ export function RecycleBin() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-800">Recycle Bin</h1>
-            <p className="text-gray-500 text-sm mt-1">Manage deleted quotations. Items are automatically permanently deleted after the retention period.</p>
+            <p className="text-gray-500 text-sm mt-1">Manage deleted quotations. Items are automatically permanently deleted after the retention period unless pinned.</p>
+            {retentionDays !== null && (
+              <p className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium" data-testid="recycle-retention">
+                <Clock size={12} /> {describeRecycleBinDays(retentionDays)} <span className="text-gray-400">· change in Settings → Data &amp; Backups</span>
+              </p>
+            )}
           </div>
         </div>
         <div className="relative w-full md:w-64">
