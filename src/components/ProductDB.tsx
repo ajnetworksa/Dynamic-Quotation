@@ -1,3 +1,4 @@
+import { getStoredUser } from '../lib/storage';
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2, CheckSquare, Square, Languages } from 'lucide-react';
 
@@ -27,7 +28,7 @@ export default function ProductDB() {
   const [syncData, setSyncData] = useState<{ id?: number; description: string; current_price: number; new_price: number; match_type: 'exact' | 'fuzzy' | 'none' }[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = getStoredUser();
 
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
   const [showAddSupplier, setShowAddSupplier] = useState(false);

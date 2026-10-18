@@ -1,3 +1,4 @@
+import { getStoredUser } from '../lib/storage';
 import React, { useState, useRef, useEffect } from 'react';
 import { Bot, X, Send, Database, Loader2, Maximize2, Minimize2 } from 'lucide-react';
 
@@ -25,7 +26,7 @@ export default function AIAssistant() {
   }, [messages, isLoading]);
 
   // Permission check — only admins or users with canUseAI can see the chatbot
-  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const currentUser = getStoredUser();
   const canUseAI = currentUser.role === 'admin' || !!currentUser.permissions?.canUseAI;
   if (!canUseAI) return null;
 

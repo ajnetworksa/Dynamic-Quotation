@@ -29,52 +29,12 @@ import multer from 'multer';
 import OpenAI from 'openai';
 import fs from 'fs';
 import { z, ZodSchema } from 'zod';
-import { exec, spawn } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import ExcelJS from 'exceljs';
 import AdmZip from 'adm-zip';
 const execAsync = promisify(exec);
-
-/** Run git with argument array (no shell) to prevent command injection. */
-function runGit(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('git', args, { cwd: process.cwd(), shell: false });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (chunk) => { stdout += chunk; });
-    proc.stderr.on('data', (chunk) => { stderr += chunk; });
-    proc.on('error', reject);
-    proc.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(stderr.trim() || stdout.trim() || `git exited with code ${code}`));
-    });
-  });
-}
-
-function assertSafeHttpsGitRemoteUrl(url: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error('Invalid repository URL');
-  }
-  if (parsed.protocol !== 'https:') {
-    throw new Error('Invalid repository URL');
-  }
-  return parsed.href;
-}
-
-function getQuoteIdPrefix(): string {
-  const prefixRow = db.prepare("SELECT value FROM settings WHERE key = 'quotePrefix'").get() as { value?: string } | undefined;
-  return (prefixRow?.value || 'AJ').trim().replace(/[^A-Z0-9]/gi, '') || 'AJ';
-}
-
-/** Base quote id from a revision id, e.g. QT-10001-R2 → QT-10001 */
-function getQuoteBaseId(quoteId: string): string | null {
-  const prefix = getQuoteIdPrefix();
-  const match = quoteId.match(new RegExp(`^(${prefix}-\\d+)`));
-  return match ? match[1] : null;
-}
+const execFileAsync = promisify(execFile);
 // import { GoogleGenerativeAI } from "@google/generative-ai"; // Switched to OpenRouter for better stability
 
 // ── FILE LOGGING FOR BACKEND DEBUGGING ────────────────────────────────────────
@@ -117,7 +77,8 @@ const openai = new OpenAI({
 });
 
 // Setup multer for memory storage
-const upload = multer({ storage: multer.memoryStorage() });
+// SECURITY: cap upload size so a single request cannot exhaust memory.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 5 } });
 
 // ── SECURITY: HTTP headers ────────────────────────────────────────────────────
 // helmet() automatically sets a suite of security headers, including:
@@ -352,6 +313,8 @@ addColumnIfNotExists('quotes', 'manpower_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'mobilization_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'duration_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'bank_details_ar', 'TEXT');
+// `footer` was never created for fresh databases, so saving any quote failed with "no column named footer".
+addColumnIfNotExists('quotes', 'footer', 'TEXT');
 addColumnIfNotExists('quotes', 'footer_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'custom_field_header', 'TEXT');
 addColumnIfNotExists('quotes', 'custom_field', 'TEXT');
@@ -1018,7 +981,9 @@ app.delete('/api/products/:id', requireAuth, requirePermission('canDeleteData'),
 // ── Quotes ────────────────────────────────────────────────────────────────────
 app.get('/api/quotes/next-id', requireAuth, (req, res) => {
   try {
-    const prefix = getQuoteIdPrefix();
+    // Read configurable prefix from settings (defaults to 'AJ' if not set)
+    const prefixRow = db.prepare("SELECT value FROM settings WHERE key = 'quotePrefix'").get() as any;
+    const prefix = (prefixRow?.value || 'AJ').trim().replace(/[^A-Z0-9]/gi, '');
     const regex = new RegExp(`^${prefix}-(\\d+)`);
 
     const rows = db.prepare('SELECT quote_id FROM quotes').all() as { quote_id: string }[];
@@ -1169,11 +1134,10 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 app.get('/api/quotes/:quote_id/lock', requireAuth, (req, res) => {
   try {
     const currentUser = (req as any).user;
-    const row = db.prepare('SELECT version, author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number; author_id: number; shared_with?: string | null } | undefined;
+    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
+    const row = db.prepare('SELECT version, author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number; author_id: number } | undefined;
     if (!row) return res.status(404).json({ error: 'Quote not found' });
-    if (!isQuoteVisibleToUser(row, currentUser)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    if (!canSeeAll && row.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
     res.json({ version: row.version ?? 1 });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch lock' });
@@ -1559,14 +1523,16 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
   const currentUser = (req as any).user;
   const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
 
-  const baseId = getQuoteBaseId(quoteId);
-  if (!baseId) return res.status(400).json({ error: 'Invalid Quote ID format' });
+  // Get base ID: 'AJ-12345-R2' -> 'AJ-12345'
+  const baseIdMatch = quoteId.match(/^(AJ-\d+)/);
+  if (!baseIdMatch) return res.status(400).json({ error: 'Invalid Quote ID format' });
+  const baseId = baseIdMatch[1];
 
-  // Visibility check — verify access using the base (original) quote
-  const base = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?').get(baseId) as { author_id: number; shared_with?: string | null } | undefined;
-  if (!base) return res.status(404).json({ error: 'Quote not found' });
-  if (!canSeeAll && !isQuoteVisibleToUser(base, currentUser)) {
-    return res.status(403).json({ error: 'Access denied' });
+  // Ownership check — verify access using the base (original) quote
+  if (!canSeeAll) {
+    const base = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(baseId) as { author_id: number } | undefined;
+    if (!base) return res.status(404).json({ error: 'Quote not found' });
+    if (base.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
   }
 
   // Fetch all quotes starting with this base ID
@@ -1621,7 +1587,7 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
       html: `<p>${body.replace(/\\n/g, '<br/>')}</p>`
     });
 
-    db.prepare('UPDATE quotes SET status = "Sent" WHERE quote_id = ?').run(quote_id);
+    db.prepare('UPDATE quotes SET status = \'Sent\' WHERE quote_id = ?').run(quote_id);
     res.json({ success: true });
   } catch (err: any) {
     console.error('Email send error:', err);
@@ -2251,6 +2217,15 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
   const actor = (req as any).user?.username || 'system';
   const ts = new Date().toISOString();
   try {
+    // SECURITY: only touch quotes the caller is allowed to see (owner, shared, canViewAllQuotes, admin).
+    const currentUser = (req as any).user;
+    const lookup = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?');
+    for (const id of ids) {
+      const row = lookup.get(id) as any;
+      if (row && !isQuoteVisibleToUser(row, currentUser)) {
+        return res.status(403).json({ error: `Access denied for quote ${id}.` });
+      }
+    }
     db.transaction(() => {
       for (const id of ids) {
         db.prepare('UPDATE quotes SET status = ?, updated_at = ? WHERE quote_id = ?').run(status, ts, id);
@@ -2268,15 +2243,22 @@ const handleSingleQuoteStatus = (req: express.Request, res: express.Response) =>
   const { status } = req.body;
   const quoteIdentifier = req.params.quote_id;
   if (!status || !quoteIdentifier) return res.status(400).json({ error: 'status and quote_id required' });
+  if (!['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
   const actor = (req as any).user?.username || 'system';
   const ts = new Date().toISOString();
   try {
     const isNumeric = /^\d+$/.test(quoteIdentifier);
     const existing = isNumeric
-      ? db.prepare('SELECT quote_id FROM quotes WHERE id = ? OR quote_id = ?').get(Number(quoteIdentifier), quoteIdentifier) as any
-      : db.prepare('SELECT quote_id FROM quotes WHERE quote_id = ?').get(quoteIdentifier) as any;
+      ? db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE id = ? OR quote_id = ?').get(Number(quoteIdentifier), quoteIdentifier) as any
+      : db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ?').get(quoteIdentifier) as any;
 
     if (!existing) return res.status(404).json({ error: 'Quote not found' });
+    // SECURITY: caller must be able to see this quote.
+    if (!isQuoteVisibleToUser(existing, (req as any).user)) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
     const targetQuoteId = existing.quote_id;
 
     db.transaction(() => {
@@ -2296,6 +2278,11 @@ app.patch('/api/quotes/:quote_id/status', requireAuth, handleSingleQuoteStatus);
 app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema), (req, res) => {
   const { followup_date, followup_note } = req.body;
   try {
+    const row = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+    if (!row) return res.status(404).json({ error: 'Quote not found' });
+    if (!isQuoteVisibleToUser(row, (req as any).user)) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
     db.prepare('UPDATE quotes SET followup_date = ?, followup_note = ? WHERE quote_id = ?').run(followup_date || null, followup_note || null, req.params.quote_id);
     res.json({ success: true });
   } catch (error: any) {
@@ -2625,12 +2612,31 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     // 2. Extract ZIP archive
     const zip = new AdmZip(tempZipPath);
     fs.mkdirSync(tempExtractDir, { recursive: true });
-    zip.extractAllTo(tempExtractDir, true);
+    // SECURITY: extract only the quotes.db entry by name (avoids zip-slip from crafted entry paths).
+    const dbEntry = zip.getEntries().find(e => !e.isDirectory && e.entryName === 'quotes.db');
+    if (!dbEntry) {
+      throw new Error('Invalid backup archive: master quotes.db file is missing.');
+    }
+    fs.writeFileSync(path.join(tempExtractDir, 'quotes.db'), dbEntry.getData());
 
     // 3. Verify standard file structure
     const extractedDbPath = path.join(tempExtractDir, 'quotes.db');
     if (!fs.existsSync(extractedDbPath)) {
       throw new Error('Invalid backup archive: master quotes.db file is missing.');
+    }
+
+    // 3b. Validate the uploaded database BEFORE touching the live one.
+    {
+      const probe = new Database(extractedDbPath, { readonly: true });
+      try {
+        const integrity = probe.pragma('integrity_check', { simple: true });
+        const hasQuotes = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='quotes'").get();
+        if (integrity !== 'ok' || !hasQuotes) {
+          throw new Error('Invalid backup archive: database failed integrity check or is not a quotation database.');
+        }
+      } finally {
+        probe.close();
+      }
     }
 
     // 4. Safely close database connection before replacing the file
@@ -2645,6 +2651,11 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     }
 
     try {
+      // Remove stale WAL/SHM files so they cannot be replayed onto the restored database.
+      for (const ext of ['-wal', '-shm']) {
+        const sidecar = mainDbPath + ext;
+        if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+      }
       fs.copyFileSync(extractedDbPath, mainDbPath);
       if (fs.existsSync(fallbackDbPath)) {
         fs.unlinkSync(fallbackDbPath);
@@ -2783,22 +2794,34 @@ app.get('/api/admin/backups/download/:filename', requireAuth, requirePermission(
   }
 });
 
+// SECURITY: the full settings list (bank details, terms, images) requires a login.
+// Individual non-sensitive keys stay public via /api/settings/:key (login page branding).
 app.get('/api/settings', requireAuth, (req, res) => {
   try {
-    const settings = db.prepare('SELECT key, value FROM settings WHERE key NOT IN ("smtpConfig", "logExpirationDays")').all();
+    const settings = db.prepare('SELECT key, value FROM settings WHERE key NOT IN (\'smtpConfig\', \'logExpirationDays\')').all();
     res.json(settings);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/api/settings/:key', requireAuth, (req, res) => {
+app.get('/api/settings/:key', (req, res) => {
   const sensitiveKeys = ['smtpConfig', 'logExpirationDays'];
   const key = req.params.key;
-  const user = (req as any).user;
 
-  if (sensitiveKeys.includes(key) && !hasPermission(user, 'canManageSettings')) {
-    return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
+  if (sensitiveKeys.includes(key)) {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const session = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token = ?').get(token) as { user_id: number; expires_at: string } | undefined;
+    if (!session || new Date(session.expires_at) < new Date()) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const user = db.prepare('SELECT id, username, role, permissions FROM users WHERE id = ?').get(session.user_id) as any;
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    user.permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
+    if (!hasPermission(user, 'canManageSettings')) {
+      return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
+    }
   }
 
   try {
@@ -2948,11 +2971,9 @@ app.post('/api/admin/bulk-update-quote-terms', requireAuth, requireAdmin, (req, 
 app.post('/api/translate', requireAuth, async (req, res) => {
   const { text, sl = 'en', tl = 'ar' } = req.body;
   if (!text) return res.json({ translation: '' });
-  if (typeof text !== 'string' || text.length > 15000) {
-    return res.status(400).json({ error: 'Invalid or oversized text payload' });
-  }
-  if (typeof sl !== 'string' || typeof tl !== 'string' || !/^[a-z]{2,8}(-[a-z]{2,8})?$/i.test(sl) || !/^[a-z]{2,8}(-[a-z]{2,8})?$/i.test(tl)) {
-    return res.status(400).json({ error: 'Invalid language code' });
+  // SECURITY: cap input size (this endpoint can fall back to a paid API key).
+  if (typeof text !== 'string' || text.length > 20000) {
+    return res.status(413).json({ error: 'Text too long (max 20000 characters).' });
   }
 
   const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -3331,14 +3352,21 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
     // --- Critical Security Guardrails for SQL Queries ---
     const forbiddenPatterns = [
       /users/i, /settings/i, /activity_log/i,
+      /sessions/i, /system_logs/i, /permission_groups/i, /token/i, /password/i,
+      /attach\s/i, /load_extension/i,
       /sqlite_master/i, /sqlite_schema/i, /sqlite_temp/i,
       /pragma/i, /insert\s/i, /update\s/i, /delete\s/i, /drop\s/i, /alter\s/i,
       /;\s*select/i // prevent stacked queries
     ];
 
+    // For non-admins the author filter must be a real predicate, not hidden in a comment or bypassed with OR/UNION.
+    const authorFilterOk = canSeeAll || (
+      new RegExp(`\\bauthor_id\\s*=\\s*${Number(currentUser.id)}\\b`).test(cleanedQuery) &&
+      !/--|\/\*|\bor\b|\bunion\b/i.test(cleanedQuery)
+    );
     if (
       forbiddenPatterns.some(p => p.test(cleanedQuery)) ||
-      (!canSeeAll && !cleanedQuery.includes(`author_id = ${currentUser.id}`))
+      !authorFilterOk
     ) {
       logSystemError('AI Assistant', 'SecurityBlock', `Blocked unsafe or unauthorized query`, `Query: ${cleanedQuery}`);
       return res.json({ answer: "I'm sorry, I cannot run that query due to data security and privacy policies." });
@@ -3351,7 +3379,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
       rows = db.prepare(cleanedQuery).all();
     } catch (sqlErr: any) {
       logSystemError('AI Assistant', 'SQLException', `Database execution error: ${sqlErr.message}`, `Query: ${cleanedQuery}\n\nStack: ${sqlErr.stack || sqlErr}`);
-      return res.json({ answer: `Database execution error: ${sqlErr.message}` });
+      return res.json({ answer: 'I could not run that query. Please rephrase your question.' });
     }
 
     // Phase 2: Natural Language Summary of Results
@@ -3414,12 +3442,14 @@ app.get('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) =>
 
 app.post('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) => {
   const { url } = req.body;
-  if (typeof url !== 'string' || !url.trim()) {
+  // SECURITY: validate strictly and avoid the shell (was interpolated into exec -> command injection).
+  let parsedUrl: URL | null = null;
+  try { parsedUrl = new URL(String(url)); } catch { parsedUrl = null; }
+  if (!parsedUrl || !['https:', 'http:'].includes(parsedUrl.protocol) || /[\s;&|`$<>"'\\]/.test(String(url)) || String(url).length > 300) {
     return res.status(400).json({ error: 'Invalid repository URL' });
   }
   try {
-    const safeUrl = assertSafeHttpsGitRemoteUrl(url.trim());
-    await runGit(['remote', 'set-url', 'origin', safeUrl]);
+    await execFileAsync('git', ['remote', 'set-url', 'origin', parsedUrl.toString()]);
     res.json({ success: true, message: 'Remote URL updated successfully' });
   } catch (error: any) {
     res.status(500).json({ error: `Failed to update remote URL: ${error.message}` });
@@ -3451,6 +3481,11 @@ app.get('/api/system/update-status', requireAuth, requireAdmin, async (req, res)
 });
 
 app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
+  // SECURITY: self-update runs `git reset --hard`, `npm install` and a build from the live server.
+  // It is disabled unless the operator explicitly opts in with ALLOW_SELF_UPDATE=true.
+  if (process.env.ALLOW_SELF_UPDATE !== 'true') {
+    return res.status(403).json({ error: 'Self-update is disabled. Set ALLOW_SELF_UPDATE=true in .env to enable it, or deploy via your normal pipeline.' });
+  }
   try {
     console.log('🚀 Starting system update...');
 
