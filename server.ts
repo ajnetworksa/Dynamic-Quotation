@@ -3939,6 +3939,10 @@ app.post('/api/translate', requireAuth, async (req, res) => {
   if (typeof text !== 'string' || text.length > 20000) {
     return res.status(413).json({ error: 'Text too long (max 20000 characters).' });
   }
+  const LANG = /^[a-z]{2,8}(-[a-z]{2,8})?$/i;
+  if (typeof sl !== 'string' || typeof tl !== 'string' || !LANG.test(sl) || !LANG.test(tl)) {
+    return res.status(400).json({ error: 'Invalid language code' });
+  }
 
   const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 

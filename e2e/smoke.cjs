@@ -22,6 +22,10 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
   // ── login ──
   await page.goto(BASE + '/');
   check('login form shown', await page.locator('#login-username').isVisible());
+  await page.click('button[aria-label="Switch to dark mode"]');
+  check('login page theme toggle switches to dark', await page.evaluate(() => document.documentElement.classList.contains('dark')));
+  await page.click('button[aria-label="Switch to light mode"]');
+  check('login page theme toggle switches back', await page.evaluate(() => !document.documentElement.classList.contains('dark')));
   await page.fill('#login-username', 'admin');
   await page.fill('#login-password', 'wrong-password-1');
   await page.click('button[type=submit]');

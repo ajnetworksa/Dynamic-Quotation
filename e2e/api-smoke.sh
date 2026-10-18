@@ -18,6 +18,7 @@ print("stored session token != raw:", c.execute("select token from sessions limi
 PY
 echo "short pw create user: $(curl -s -X POST -H "$H" -H "$J" -d '{"username":"bob","password":"short","role":"user"}' $B/api/users | head -c 120)"
 echo "create bob: $(curl -s -X POST -H "$H" -H "$J" -d '{"username":"bob","password":"bobpassword12","name":"Bob","role":"user"}' $B/api/users)"
+echo "translate bad lang: $(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$H" -H "$J" -d '{"text":"hi","sl":"en&x=1","tl":"ar"}' $B/api/translate)"
 BT=$(curl -s -X POST -H "$J" -d '{"username":"bob","password":"bobpassword12"}' $B/api/login | sed 's/.*"token":"\([^"]*\)".*/\1/'); BH="Authorization: Bearer $BT"
 echo "next-id x2 (admin, bob): $(curl -s -H "$H" $B/api/quotes/next-id) $(curl -s -H "$BH" $B/api/quotes/next-id) admin again: $(curl -s -H "$H" $B/api/quotes/next-id)"
 Q='{"quote_id":"AJ-10001","date":"2026-10-16","subject":"t","items":[{"description":"cable","qty":2,"unit":"m","unit_price":10.005,"net_price":20.01}],"status":"Draft","type":"Quotation","subtotal":999,"tax":999,"grand_total":999,"discount":5,"vat_rate":15,"is_new":true}'
