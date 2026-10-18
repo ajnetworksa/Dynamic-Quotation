@@ -4,6 +4,8 @@ import {
   Loader2, ChevronRight, DollarSign, Clock, X, AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { t, useLang } from '../lib/i18n';
+import { promptAsync } from '../lib/notify';
 
 // Pipeline stages in order. Rejected / Cancelled are closed states reachable via the reject button
 // (or set elsewhere, e.g. Tracking) and are shown so those quotes never disappear from the board.
@@ -28,6 +30,7 @@ interface Quote {
   grand_total: number | null;
   status: string | null;
   date: string;
+  lost_reason?: string | null;
 }
 
 const money = (n: number | null | undefined) =>
@@ -39,9 +42,12 @@ const shortDate = (d: string) => {
 };
 
 export default function KanbanBoard() {
+  useLang();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<Status | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -66,13 +72,20 @@ export default function KanbanBoard() {
   const updateStatus = async (id: number, newStatus: string) => {
     try {
       setError('');
+      // Rejecting asks for a reason (optional) so lost deals can be analysed later; Cancel aborts the move.
+      let reason: string | undefined;
+      if (newStatus === 'Rejected') {
+        const answer = await promptAsync('Why was this quote rejected? (optional)', { placeholder: 'e.g. price too high, chose a competitor' });
+        if (answer === null) return;
+        reason = answer || undefined;
+      }
       // Optimistic update
-      setQuotes(prev => prev.map(q => q.id === id ? { ...q, status: newStatus } : q));
+      setQuotes(prev => prev.map(q => q.id === id ? { ...q, status: newStatus, lost_reason: reason ?? null } : q));
 
       const res = await fetch(`/api/quotes/${id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status: newStatus, reason })
       });
 
       if (!res.ok) throw new Error('Failed to update');
@@ -97,14 +110,14 @@ export default function KanbanBoard() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Quotation Kanban</h1>
-          <p className="text-gray-500 dark:text-gray-400">Track and manage your quotation pipeline</p>
+          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">{t('Quotation Kanban')}</h1>
+          <p className="text-gray-500 dark:text-gray-400">{t('Track and manage your quotation pipeline')}</p>
         </div>
         <button
           onClick={() => navigate('/quote')}
           className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100 dark:shadow-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
         >
-          + New Quote
+          {t('+ New Quote')}
         </button>
       </div>
 
@@ -123,11 +136,23 @@ export default function KanbanBoard() {
           const columnQuotes = quotes.filter(q => statusOf(q) === status);
           const columnTotal = columnQuotes.reduce((sum, q) => sum + (Number(q.grand_total) || 0), 0);
           return (
-          <div key={status} className="flex flex-col gap-4 bg-gray-100/50 dark:bg-gray-800/40 p-4 rounded-2xl border border-gray-200/50 dark:border-gray-700/50 min-h-[200px] md:min-h-[400px]">
+          <div
+            key={status}
+            data-column={status}
+            onDragOver={e => { if (dragId !== null) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (dragOver !== status) setDragOver(status); } }}
+            onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(prev => (prev === status ? null : prev)); }}
+            onDrop={e => {
+              e.preventDefault();
+              const id = dragId;
+              setDragId(null); setDragOver(null);
+              const moved = quotes.find(q => q.id === id);
+              if (moved && statusOf(moved) !== status) updateStatus(moved.id, status);
+            }}
+            className={`flex flex-col gap-4 p-4 rounded-2xl border min-h-[200px] md:min-h-[400px] transition-colors ${dragOver === status ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-400 border-dashed' : 'bg-gray-100/50 dark:bg-gray-800/40 border-gray-200/50 dark:border-gray-700/50'}`}>
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full ${DOT_COLORS[status]}`} />
-                <h2 className="font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider text-xs">{status}</h2>
+                <h2 className="font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider text-xs">{t(status)}</h2>
                 <span className="bg-white dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-[10px] font-bold px-1.5 py-0.5 rounded-md border border-gray-200 dark:border-gray-600">
                   {columnQuotes.length}
                 </span>
@@ -137,7 +162,7 @@ export default function KanbanBoard() {
 
             <div className="flex flex-col gap-3">
               {columnQuotes.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-6">No quotes</p>
+                <p className="text-xs text-gray-400 text-center py-6">{t('No quotes')}</p>
               )}
               <AnimatePresence mode="popLayout">
                 {columnQuotes.map(quote => {
@@ -152,6 +177,10 @@ export default function KanbanBoard() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95 }}
                     role="button"
+                    draggable
+                    onDragStartCapture={(e: React.DragEvent) => { setDragId(quote.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', quote.quote_id); }}
+                    onDragEndCapture={() => { setDragId(null); setDragOver(null); }}
+                    title={quote.lost_reason ? `Reason: ${quote.lost_reason}` : 'Drag to another column to change the status'}
                     tabIndex={0}
                     aria-label={`Open quote ${quote.quote_id}`}
                     className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 group hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-500 transition-all cursor-pointer relative focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"

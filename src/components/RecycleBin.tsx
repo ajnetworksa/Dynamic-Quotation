@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { toast, confirmAsync } from '../lib/notify';
+import { parseRecycleBinDays, describeRecycleBinDays } from '../lib/recycleBin';
 import { Trash2, RotateCcw, AlertCircle, Shield, FileText, Calendar, Clock, Loader2, Search, Pin, PinOff } from 'lucide-react';
 
 interface RecycleBinItem {
@@ -16,9 +18,14 @@ export function RecycleBin() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
 
   useEffect(() => {
     fetchItems();
+    fetch('/api/settings/recycleBinDays')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setRetentionDays(parseRecycleBinDays(d?.value)))
+      .catch(() => {});
   }, []);
 
   const fetchItems = async () => {
@@ -42,7 +49,7 @@ export function RecycleBin() {
   };
 
   const handleRestore = async (quote_id: string) => {
-    if (!confirm(`Are you sure you want to restore ${quote_id}?`)) return;
+    if (!await confirmAsync(`Are you sure you want to restore ${quote_id}?`)) return;
     try {
       const res = await fetch(`/api/recycle-bin/${quote_id}/restore`, {
         method: 'POST',
@@ -52,15 +59,15 @@ export function RecycleBin() {
         fetchItems();
       } else {
         const data = await res.json();
-        alert(data.error || 'Failed to restore');
+        toast(data.error || 'Failed to restore');
       }
     } catch {
-      alert('Network error');
+      toast('Network error');
     }
   };
 
   const handleDelete = async (quote_id: string) => {
-    if (!confirm(`WARNING: This will PERMANENTLY delete ${quote_id}. This action cannot be undone. Are you sure?`)) return;
+    if (!await confirmAsync(`WARNING: This will PERMANENTLY delete ${quote_id}. This action cannot be undone. Are you sure?`)) return;
     try {
       const res = await fetch(`/api/recycle-bin/${quote_id}`, {
         method: 'DELETE',
@@ -70,10 +77,10 @@ export function RecycleBin() {
         fetchItems();
       } else {
         const data = await res.json();
-        alert(data.error || 'Failed to delete');
+        toast(data.error || 'Failed to delete');
       }
     } catch {
-      alert('Network error');
+      toast('Network error');
     }
   };
 
@@ -91,10 +98,10 @@ export function RecycleBin() {
         fetchItems();
       } else {
         const data = await res.json();
-        alert(data.error || 'Failed to update retention status');
+        toast(data.error || 'Failed to update retention status');
       }
     } catch {
-      alert('Network error');
+      toast('Network error');
     }
   };
 
@@ -114,7 +121,12 @@ export function RecycleBin() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-800">Recycle Bin</h1>
-            <p className="text-gray-500 text-sm mt-1">Manage deleted quotations. Items are automatically permanently deleted after the retention period.</p>
+            <p className="text-gray-500 text-sm mt-1">Manage deleted quotations. Items are automatically permanently deleted after the retention period unless pinned.</p>
+            {retentionDays !== null && (
+              <p className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium" data-testid="recycle-retention">
+                <Clock size={12} /> {describeRecycleBinDays(retentionDays)} <span className="text-gray-400">· change in Settings → Data &amp; Backups</span>
+              </p>
+            )}
           </div>
         </div>
         <div className="relative w-full md:w-64">
@@ -196,7 +208,7 @@ export function RecycleBin() {
                     <td className="px-4 py-3 text-center">
                       <button
                         onClick={() => handleToggleRetain(item.quote_id, item.retain_forever)}
-                        title={item.retain_forever ? "Will not be auto-deleted" : "Will be auto-deleted eventually"}
+                        title={item.retain_forever ? "Will not be auto-deleted" : "Will be auto-deleted eventually"} aria-label={item.retain_forever ? "Will not be auto-deleted" : "Will be auto-deleted eventually"}
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase transition-colors ${
                           item.retain_forever 
                             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' 
@@ -212,14 +224,14 @@ export function RecycleBin() {
                         <button
                           onClick={() => handleRestore(item.quote_id)}
                           className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors tooltip-wrapper"
-                          title="Restore"
+                          title="Restore" aria-label="Restore"
                         >
                           <RotateCcw size={16} />
                         </button>
                         <button
                           onClick={() => handleDelete(item.quote_id)}
                           className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors tooltip-wrapper"
-                          title="Delete Permanently"
+                          title="Delete Permanently" aria-label="Delete Permanently"
                         >
                           <Trash2 size={16} />
                         </button>

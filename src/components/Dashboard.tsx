@@ -1,4 +1,8 @@
 import { getStoredUser } from '../lib/storage';
+import { t, useLang } from '../lib/i18n';
+import { wonQuotes, isWon } from '../lib/status';
+import { monthKeyOf } from '../lib/dates';
+import { RangeKey, RANGE_LABELS, inRange, followUpsDue, expiringSoon, lossReasons, openQuoteAging } from '../lib/dashboardStats';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award, Repeat2 } from 'lucide-react';
@@ -14,6 +18,10 @@ interface Quote {
     status?: string;
     type?: string;
     updated_at?: string;
+    currency?: string;
+    followup_date?: string | null;
+    expiry_date?: string | null;
+    lost_reason?: string | null;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -24,7 +32,12 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function Dashboard() {
-    const [quotes, setQuotes] = useState<Quote[]>([]);
+    useLang();
+    const [allQuotes, setQuotes] = useState<Quote[]>([]);
+    const [range, setRange] = useState<RangeKey>('all');
+    // Everything below (stats, charts, top customers) works on the quotes inside the chosen date range.
+    const quotes = inRange(allQuotes, range);
+    const [chosenCurrency, setChosenCurrency] = useState('');
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -47,22 +60,35 @@ export default function Dashboard() {
     // Local-time "YYYY-MM" key (toISOString is UTC and shifts the month near midnight).
     const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     const currentMonth = monthKey(new Date());
-    const thisMonthQuotes = quotes.filter(q => q.date && q.date.startsWith(currentMonth));
+    const thisMonthQuotes = quotes.filter(q => monthKeyOf(q.date) === currentMonth);
+    // Won business (Accepted + Invoiced) counted once: a quote and the invoice/revision made from it are not both added.
+    // Money is never added across currencies: the figures below use one currency at a time.
+    const curOf = (q: any) => q.currency || 'SAR';
+    const currencies = Array.from(new Set((quotes as any[]).map(curOf)));
+    const activeCurrency = currencies.includes(chosenCurrency) ? chosenCurrency : (currencies.includes('SAR') ? 'SAR' : currencies[0] || 'SAR');
+    const won: any[] = wonQuotes(quotes as any[]).filter(q => curOf(q) === activeCurrency);
+    const sumTotal = (list: any[]) => list.reduce((s, q) => s + (Number(q.grand_total) || 0), 0);
+
+    // Attention widgets use ALL quotes (they are about now, not about the selected period).
+    const followUps = followUpsDue(allQuotes);
+    const expiring = expiringSoon(allQuotes, 7);
+    const aging = openQuoteAging(allQuotes);
+    const reasons = lossReasons(quotes);
 
     const stats = {
         totalDocs: quotes.length,
-        totalRevenue: quotes.filter(q => q.status === 'Accepted').reduce((s, q) => s + (q.grand_total || 0), 0),
-        monthRevenue: thisMonthQuotes.filter(q => q.status === 'Accepted').reduce((s, q) => s + (q.grand_total || 0), 0),
+        totalRevenue: sumTotal(won),
+        monthRevenue: sumTotal(won.filter(q => monthKeyOf(q.date) === currentMonth)),
         monthCount: thisMonthQuotes.length,
         pendingCount: quotes.filter(q => q.status === 'Draft' || q.status === 'Sent' || !q.status).length,
-        acceptedCount: quotes.filter(q => q.status === 'Accepted').length,
+        acceptedCount: won.length,
         rejectedCount: quotes.filter(q => q.status === 'Rejected').length,
         sentCount: quotes.filter(q => q.status === 'Sent').length,
         // Win rate = won / decided (accepted + rejected). Drafts and open quotes do not count against it.
         winRate: (() => {
-            const won = quotes.filter(q => q.status === 'Accepted' || q.status === 'Invoiced').length;
+            const wonCount = quotes.filter(q => isWon(q.status)).length;
             const lost = quotes.filter(q => q.status === 'Rejected').length;
-            return won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
+            return wonCount + lost > 0 ? Math.round((wonCount / (wonCount + lost)) * 100) : 0;
         })(),
     };
 
@@ -73,18 +99,16 @@ export default function Dashboard() {
         const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
         const key = monthKey(d);
         const label = d.toLocaleString('default', { month: 'short' });
-        const total = quotes
-            .filter(q => q.date?.startsWith(key) && q.status === 'Accepted')
-            .reduce((s, q) => s + (q.grand_total || 0), 0);
+        const total = sumTotal(won.filter(q => monthKeyOf(q.date) === key));
         return { label, total, key };
     });
     const maxBar = Math.max(...last6Months.map(m => m.total), 1);
 
     // Top 5 customers by total accepted revenue
     const customerTotals: Record<string, number> = {};
-    quotes.filter(q => q.status === 'Accepted').forEach(q => {
+    won.forEach(q => {
         const name = q.customer_name || 'Unknown';
-        customerTotals[name] = (customerTotals[name] || 0) + (q.grand_total || 0);
+        customerTotals[name] = (customerTotals[name] || 0) + (Number(q.grand_total) || 0);
     });
     const topCustomers = Object.entries(customerTotals)
         .sort((a, b) => b[1] - a[1])
@@ -105,7 +129,7 @@ export default function Dashboard() {
         const name = q.customer_name || 'Unknown';
         if (!customerQuoteMap[name]) customerQuoteMap[name] = { count: 0, accepted: 0, lastDate: '', lastStatus: '', lastId: '' };
         customerQuoteMap[name].count++;
-        if (q.status === 'Accepted') customerQuoteMap[name].accepted++;
+        if (isWon(q.status)) customerQuoteMap[name].accepted++;
         if (!customerQuoteMap[name].lastDate || (q.date || '') > customerQuoteMap[name].lastDate) {
             customerQuoteMap[name].lastDate = q.date || '';
             customerQuoteMap[name].lastStatus = q.status || 'Draft';
@@ -123,12 +147,12 @@ export default function Dashboard() {
     return (
         <div className="space-y-6 max-w-7xl mx-auto">
             {/* Header */}
-            <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-800">Hello, Welcome back!</h1>
                     <p className="text-gray-500 mt-1">Here is the overview of your quotation and sales activities.</p>
                 </div>
-                <div className="flex gap-3 flex-shrink-0">
+                <div className="flex flex-wrap gap-3 sm:flex-shrink-0">
                     <button
                         onClick={() => navigate('/customers')}
                         className="flex items-center gap-2 px-4 py-2.5 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors font-medium"
@@ -150,12 +174,31 @@ export default function Dashboard() {
                 </div>
             </div>
 
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+                <label htmlFor="dash-range" className="font-semibold text-gray-600">Period</label>
+                <select id="dash-range" value={range} onChange={e => setRange(e.target.value as RangeKey)} className="border border-gray-300 rounded px-2 py-1 bg-white">
+                    {(Object.keys(RANGE_LABELS) as RangeKey[]).map(k => <option key={k} value={k}>{RANGE_LABELS[k]}</option>)}
+                </select>
+                <span className="text-gray-400">Applies to the statistics, chart and top customers below.</span>
+            </div>
+
+            {currencies.length > 1 && canViewRevenue && (
+                <div className="flex items-center gap-2 text-sm">
+                    <label htmlFor="dash-currency" className="font-semibold text-gray-600">Currency</label>
+                    <select id="dash-currency" value={activeCurrency} onChange={e => setChosenCurrency(e.target.value)}
+                        className="border border-gray-300 rounded px-2 py-1 bg-white">
+                        {currencies.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <span className="text-gray-400">Revenue figures are shown for one currency at a time.</span>
+                </div>
+            )}
+
             {/* Stats Grid */}
             <div className={`grid grid-cols-2 ${canViewRevenue ? 'md:grid-cols-3 lg:grid-cols-6' : 'md:grid-cols-4'} gap-4`}>
                 {[
                     { label: 'Total Documents', value: stats.totalDocs, icon: <FileText size={22} />, color: 'bg-indigo-100 text-indigo-600', hide: false },
-                    { label: 'Won Revenue', value: `SAR ${stats.totalRevenue.toLocaleString()}`, icon: <CheckCircle size={22} />, color: 'bg-emerald-100 text-emerald-600', hide: !canViewRevenue },
-                    { label: 'This Month (Won)', value: `SAR ${stats.monthRevenue.toLocaleString()}`, icon: <TrendingUp size={22} />, color: 'bg-blue-100 text-blue-600', hide: !canViewRevenue },
+                    { label: 'Won Revenue', value: `${activeCurrency} ${stats.totalRevenue.toLocaleString()}`, icon: <CheckCircle size={22} />, color: 'bg-emerald-100 text-emerald-600', hide: !canViewRevenue },
+                    { label: 'This Month (Won)', value: `${activeCurrency} ${stats.monthRevenue.toLocaleString()}`, icon: <TrendingUp size={22} />, color: 'bg-blue-100 text-blue-600', hide: !canViewRevenue },
                     { label: 'This Month (Docs)', value: stats.monthCount, icon: <BarChart2 size={22} />, color: 'bg-violet-100 text-violet-600', hide: false },
                     { label: 'Pending / Draft', value: stats.pendingCount, icon: <Clock size={22} />, color: 'bg-amber-100 text-amber-600', hide: false },
                     { label: 'Lost Deals', value: stats.rejectedCount, icon: <XCircle size={22} />, color: 'bg-red-100 text-red-600', hide: false },
@@ -172,7 +215,7 @@ export default function Dashboard() {
                             {card.icon}
                         </div>
                         <div>
-                            <p className="text-xs font-medium text-gray-500 leading-tight">{card.label}</p>
+                            <p className="text-xs font-medium text-gray-500 leading-tight">{t(card.label)}</p>
                             <p className="text-lg font-bold text-gray-900 mt-0.5 leading-tight">{card.value}</p>
                         </div>
                     </motion.div>
@@ -184,7 +227,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Monthly Revenue Bar Chart */}
                     <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <h3 className="text-lg font-bold text-gray-800 mb-5">Monthly Won Revenue (SAR)</h3>
+                        <h3 className="text-lg font-bold text-gray-800 mb-5">Monthly Won Revenue ({activeCurrency})</h3>
                         <div className="flex items-end gap-4 h-40">
                             {last6Months.map((m) => {
                                 const heightPct = maxBar > 0 ? (m.total / maxBar) * 100 : 0;
@@ -193,7 +236,7 @@ export default function Dashboard() {
                                     <div key={m.key} className="flex-1 flex flex-col items-center gap-1 group relative">
                                         {/* Tooltip */}
                                         <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                                            SAR {m.total.toLocaleString()}
+                                            {activeCurrency} {m.total.toLocaleString()}
                                         </div>
                                         <div className="w-full rounded-t-md transition-all duration-300"
                                             style={{
@@ -212,7 +255,7 @@ export default function Dashboard() {
 
                     {/* Conversion Metrics */}
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                        <h3 className="text-lg font-bold text-gray-800 mb-3 self-start">Conversion Metrics</h3>
+                        <h3 className="text-lg font-bold text-gray-800 mb-3 self-start">{t('Conversion Metrics')}</h3>
                         <div className="flex-1 w-full flex items-center justify-center">
                             <div
                                 className="w-40 h-40 rounded-full flex items-center justify-center relative shadow-inner"
@@ -223,7 +266,7 @@ export default function Dashboard() {
                                 <div className="absolute inset-[14px] bg-white rounded-full" />
                                 <div className="flex flex-col relative">
                                     <span className="text-3xl font-black text-emerald-600">{stats.winRate}%</span>
-                                    <span className="text-xs font-bold text-gray-500 uppercase mt-1">Win Rate</span>
+                                    <span className="text-xs font-bold text-gray-500 uppercase mt-1">{t('Win Rate')}</span>
                                 </div>
                             </div>
                         </div>
@@ -235,6 +278,62 @@ export default function Dashboard() {
                     </div>
                 </div>
             )}
+
+            {/* Action widgets: what needs attention now (not limited by the period above) */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <section aria-labelledby="w-followups" className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <h3 id="w-followups" className="text-lg font-bold text-gray-800 mb-3">Follow-ups due</h3>
+                    {followUps.length === 0 ? <p className="text-sm text-gray-400">Nothing due. Set follow-up dates in Tracking.</p> : (
+                        <ul className="divide-y divide-gray-100">
+                            {followUps.slice(0, 6).map(q => (
+                                <li key={q.quote_id}>
+                                    <button onClick={() => handleRecall(q.quote_id)} className="w-full text-left py-2 hover:bg-gray-50 rounded px-1">
+                                        <span className="font-semibold text-indigo-700">{q.quote_id}</span>
+                                        <span className="text-sm text-gray-600"> · {q.customer_name || 'No customer'}</span>
+                                        <span className="block text-xs text-amber-600">Due {String(q.followup_date).slice(0, 10)}</span>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
+
+                <section aria-labelledby="w-expiring" className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <h3 id="w-expiring" className="text-lg font-bold text-gray-800 mb-3">Expiring offers</h3>
+                    {expiring.length === 0 ? <p className="text-sm text-gray-400">No sent quotes are expiring within 7 days.</p> : (
+                        <ul className="divide-y divide-gray-100">
+                            {expiring.slice(0, 6).map(q => (
+                                <li key={q.quote_id}>
+                                    <button onClick={() => handleRecall(q.quote_id)} className="w-full text-left py-2 hover:bg-gray-50 rounded px-1">
+                                        <span className="font-semibold text-indigo-700">{q.quote_id}</span>
+                                        <span className="text-sm text-gray-600"> · {q.customer_name || 'No customer'}</span>
+                                        <span className={`block text-xs ${q.daysLeft < 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                                            {q.daysLeft < 0 ? `Expired ${-q.daysLeft} day(s) ago` : q.daysLeft === 0 ? 'Expires today' : `Expires in ${q.daysLeft} day(s)`}
+                                        </span>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
+
+                <section aria-labelledby="w-pipeline" className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <h3 id="w-pipeline" className="text-lg font-bold text-gray-800 mb-3">Open quotes by age</h3>
+                    <ul className="space-y-1 mb-4">
+                        {aging.map(b => (
+                            <li key={b.label} className="flex justify-between text-sm"><span className="text-gray-600">{b.label}</span><span className="font-mono font-bold text-gray-800">{b.count}</span></li>
+                        ))}
+                    </ul>
+                    <h4 className="text-sm font-bold text-gray-700 mb-1">Top rejection reasons</h4>
+                    {reasons.length === 0 ? <p className="text-sm text-gray-400">No reasons recorded yet (asked when a quote is rejected).</p> : (
+                        <ul className="space-y-1">
+                            {reasons.map(r => (
+                                <li key={r.reason} className="flex justify-between text-sm"><span className="text-gray-600 truncate pr-2">{r.reason}</span><span className="font-mono font-bold text-gray-800">{r.count}</span></li>
+                            ))}
+                        </ul>
+                    )}
+                </section>
+            </div>
 
             {/* Bottom Row: Recent Activity + Top Customers */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -256,12 +355,13 @@ export default function Dashboard() {
                             >
                                 <div>
                                     <div className="flex gap-2 items-center flex-wrap">
-                                        <span
-                                            className="font-bold text-indigo-900 cursor-pointer group-hover:text-indigo-600 transition-colors"
+                                        <button
+                                            type="button"
+                                            className="font-bold text-indigo-900 cursor-pointer group-hover:text-indigo-600 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 rounded"
                                             onClick={() => handleRecall(quote.quote_id)}
                                         >
                                             {quote.quote_id}
-                                        </span>
+                                        </button>
                                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${STATUS_COLORS[quote.status || 'Draft'] || STATUS_COLORS.Draft}`}>
                                             {quote.status || 'Draft'}
                                         </span>
@@ -272,12 +372,12 @@ export default function Dashboard() {
                                 </div>
                                 <div className="text-right flex flex-col items-end ml-4">
                                     {canViewRevenue && (
-                                        <div className="font-mono font-bold text-gray-900 whitespace-nowrap group-hover:text-indigo-700 transition-colors">SAR {quote.grand_total?.toLocaleString()}</div>
+                                        <div className="font-mono font-bold text-gray-900 whitespace-nowrap group-hover:text-indigo-700 transition-colors">{curOf(quote)} {quote.grand_total?.toLocaleString()}</div>
                                     )}
                                     <div className="text-xs text-gray-400 mt-1">{quote.date}</div>
                                     <button
                                         onClick={() => handleRecall(quote.quote_id)}
-                                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-2 group-hover:translate-x-0"
+                                        className="mt-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity transform translate-x-2 group-hover:translate-x-0"
                                     >
                                         Open <Send size={11} />
                                     </button>
@@ -312,7 +412,7 @@ export default function Dashboard() {
                                                 <span className="text-sm font-medium text-gray-800 truncate max-w-[140px]" title={name}>{name}</span>
                                             </div>
                                             <span className="text-xs font-mono font-bold text-gray-600 whitespace-nowrap ml-2">
-                                                SAR {total.toLocaleString()}
+                                                {activeCurrency} {total.toLocaleString()}
                                             </span>
                                         </div>
                                         <div className="h-1.5 rounded-full bg-gray-100">
@@ -365,7 +465,7 @@ export default function Dashboard() {
                                             <td className="px-5 py-3 text-center">
                                                 <button
                                                     onClick={() => navigate(`/tracking?customer=${encodeURIComponent(name)}`)}
-                                                    title={`View all quotes for ${name}`}
+                                                    title={`View all quotes for ${name}`} aria-label={`View all quotes for ${name}`}
                                                     className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 font-bold text-sm hover:bg-indigo-600 hover:text-white transition-colors cursor-pointer"
                                                 >{v.count}</button>
                                             </td>

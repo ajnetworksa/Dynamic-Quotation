@@ -27,7 +27,7 @@
 */
 @import "tailwindcss";
 
-/* Tie Tailwind `dark:*` utilities to the in-app toggle (class on <html>), not OS theme alone. */
+/* Make every `dark:` utility follow the in-app toggle (.dark on <html>) instead of only the OS setting. */
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
@@ -854,4 +854,28 @@ html:not(.dark) {
     background-color: transparent !important;
     color: #111827 !important;
   }
+}
+/* ── Dark-mode gaps found in the audit (colours that had no override) ──────── */
+.dark .bg-slate-50 { background-color: #151c2c !important; }
+.dark .bg-slate-100 { background-color: #1a2133 !important; }
+.dark .bg-teal-100 { background-color: rgba(20, 184, 166, 0.22) !important; color: #5eead4 !important; }
+.dark .bg-purple-100 { background-color: rgba(168, 85, 247, 0.22) !important; color: #d8b4fe !important; }
+.dark .text-purple-800 { color: #d8b4fe !important; }
+.dark .text-indigo-900 { color: #c7d2fe !important; }
+.dark .text-teal-800 { color: #5eead4 !important; }
+
+/* Respect the OS "reduce motion" setting (framer-motion transitions and CSS animations). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Visible keyboard focus everywhere that has no custom focus style. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-indigo-500, #6366f1);
+  outline-offset: 2px;
 }
