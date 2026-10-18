@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { readJson, clearSessionStorage } from './lib/storage';
+import { readStoredDarkMode, applyDarkMode, hasSavedTheme } from './lib/theme';
 import { t, useLang, setLang } from './lib/i18n';
 import {
   FileText, Database, Users, History,
@@ -644,23 +645,13 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
   const [user, setUser] = useState<any>(readJson<any>('user', null));
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    // Saved choice wins; otherwise follow the operating system.
-    try {
-      const saved = localStorage.getItem('theme');
-      if (saved) return saved === 'dark';
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    } catch { return false; }
-  });
+  // Saved choice wins; otherwise follow the operating system (src/lib/theme.ts).
+  const [isDarkMode, setIsDarkMode] = useState(readStoredDarkMode);
+  const initialDark = useRef(isDarkMode);
 
   useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
+    // Only save once the user has actually used the toggle, so the OS default keeps working until then.
+    applyDarkMode(isDarkMode, isDarkMode !== initialDark.current || hasSavedTheme());
   }, [isDarkMode]);
 
   useEffect(() => {

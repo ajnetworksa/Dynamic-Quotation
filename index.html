@@ -12,6 +12,7 @@
         var t = localStorage.getItem('theme');
         var dark = t ? t === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
         if (dark) document.documentElement.classList.add('dark');
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
       } catch (e) {}
     })();
   </script>

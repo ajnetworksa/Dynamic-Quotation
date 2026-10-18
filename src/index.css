@@ -308,6 +308,14 @@
    ============================================================================= */
 
 /* ── Base ─────────────────────────────────────────────────────────────────── */
+html.dark {
+  color-scheme: dark;
+}
+
+html:not(.dark) {
+  color-scheme: light;
+}
+
 .dark body {
   background-color: var(--color-slate-950);
   color: var(--color-slate-100);
@@ -369,7 +377,7 @@
 }
 
 .dark .text-gray-300 {
-  color: #3f4f6c !important;
+  color: #cbd5e1 !important;
 }
 
 /* ── Hover states ─────────────────────────────────────────────────────────── */
@@ -413,8 +421,7 @@
   background-color: #1a2133 !important;
 }
 
-.dark tbody tr:hover,
-.dark .hover\:bg-gray-50 {
+.dark tbody tr:hover {
   background-color: #1f2d47 !important;
 }
 
