@@ -64,6 +64,18 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
   check('dark mode class applied', await page.evaluate(() => document.documentElement.classList.contains('dark')));
   await page.screenshot({ path: `${SHOTS}/dashboard-dark.png` });
   await page.click('button[aria-label="Light Mode"]');
+  check('toggle saves the choice', (await page.evaluate(() => localStorage.getItem('theme'))) === 'light');
+  {
+    // First visit on a dark-OS device: dark before React paints, and nothing saved until the user toggles.
+    const dctx = await browser.newContext({ colorScheme: 'dark' });
+    const dpage = await dctx.newPage();
+    dpage.on('pageerror', e => errors.push('pageerror(dark): ' + e.message));
+    await dpage.goto(BASE + '/');
+    await dpage.waitForLoadState('networkidle');
+    const [cls, scheme, saved] = await dpage.evaluate(() => [document.documentElement.classList.contains('dark'), document.documentElement.style.colorScheme, localStorage.getItem('theme')]);
+    check('dark OS: first visit is dark, nothing saved', cls && scheme === 'dark' && saved === null, JSON.stringify([cls, scheme, saved]));
+    await dctx.close();
+  }
 
   // ── quote form: totals, discount cap, currency ──
   await page.goto(BASE + '/quote');
