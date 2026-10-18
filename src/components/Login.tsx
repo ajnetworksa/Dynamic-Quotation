@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { FileText, Lock, User, Eye, EyeOff } from 'lucide-react';
+import { FileText, Lock, User, Eye, EyeOff, Moon, Sun } from 'lucide-react';
+import { applyDarkMode, readStoredDarkMode } from '../lib/theme';
 
 export default function Login({ onLogin }: { onLogin: (token: string, user: any) => void }) {
   const [username, setUsername] = useState('');
@@ -10,6 +11,13 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
   const [totp, setTotp] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(readStoredDarkMode);
+
+  const toggleTheme = () => {
+    const next = !isDarkMode;
+    applyDarkMode(next);
+    setIsDarkMode(next);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,8 +51,17 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center items-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col justify-center items-center p-4 relative">
+      <button
+        type="button"
+        onClick={toggleTheme}
+        className="absolute top-4 right-4 p-2 rounded-xl text-gray-500 dark:text-gray-300 hover:bg-gray-200/80 dark:hover:bg-gray-800 transition-colors"
+        title={isDarkMode ? 'Light mode' : 'Dark mode'}
+        aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+      >
+        {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+      </button>
+      <div className="max-w-md w-full bg-white dark:bg-gray-900 rounded-2xl shadow-xl overflow-hidden border border-transparent dark:border-gray-800">
         <div className="bg-indigo-600 p-8 text-center">
           <div className="inline-flex bg-white/20 p-3 rounded-xl mb-4">
             <FileText className="text-white w-10 h-10" />
@@ -61,7 +78,7 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
           )}
 
           <div>
-            <label htmlFor="login-username" className="block text-sm font-medium text-gray-700 mb-2">Username</label>
+            <label htmlFor="login-username" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Username</label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <User className="h-5 w-5 text-gray-400" />
@@ -82,7 +99,7 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
           </div>
 
           <div>
-            <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-2">Password</label>
+            <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Password</label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Lock className="h-5 w-5 text-gray-400" />
@@ -112,7 +129,7 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
 
           {needsCode && (
             <div>
-              <label htmlFor="login-totp" className="block text-sm font-medium text-gray-700 mb-2">Authentication code</label>
+              <label htmlFor="login-totp" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Authentication code</label>
               <input
                 id="login-totp"
                 name="totp"
@@ -137,7 +154,7 @@ export default function Login({ onLogin }: { onLogin: (token: string, user: any)
               onChange={(e) => setRememberMe(e.target.checked)}
               className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
             />
-            <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900">
+            <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900 dark:text-gray-200">
               Remember me
             </label>
           </div>

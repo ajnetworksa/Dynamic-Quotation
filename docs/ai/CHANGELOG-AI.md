@@ -58,6 +58,11 @@ Docker entrypoint (fixes volume ownership, drops to the `node` user, explains th
 - **Users & permissions** (`UsersDB.tsx`): user list with avatar, role badge, group membership, quote-visibility badge and an access meter (n/26); search and role filter. Add/Edit opens a dialog with numbered steps (account with password-length hint, role cards, group preset, quotation visibility, features). The 26 permissions are grouped into 6 categories with All/None per category, a search box and counters. Permission Groups use the same editor. Handlers and request payloads are unchanged.
 - Verified: tsc, 68 unit tests, build, API smoke, browser test 68/68 (new: every Settings section renders, section hash, Recycle Bin "Never" persists and shows on the Recycle Bin page, user created through the grouped editor saves the expected permission JSON, edit dialog shows saved ticks, Escape closes it, no horizontal scroll on /users and /settings at 390 px).
 
+## Merging `main` (owner's commits 018d801 and 34414b1)
+- `main` had its own dark-mode and security fixes (Oct 4 commit `018d801`). Merged into this branch: one pre-paint theme script (saved choice, else the OS; also sets `colorScheme`); `src/lib/theme.ts` keeps the OS default until the user toggles.
+- Restored two things from `018d801` that were dropped when that commit was first merged: the **dark/light toggle on the Login page** (with `dark:` classes) and the **language-code check on `/api/translate`**. Its other server changes (safe git remote URL, auth on settings/translate, share-aware visibility, configurable prefix in `/versions`) were already covered here.
+- Verified: browser test 72/72 (login toggle, dark-OS first visit), API smoke (bad language code → 400).
+
 ## Behaviour changes you should know about
 - **Dashboard** win rate is now won / (won + rejected); revenue counts Accepted **and** Invoiced, a quote and the invoice made from it once.
 - **Ctrl+S / Ctrl+P / Ctrl+Z** only act on the quote page.
