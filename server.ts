@@ -23,6 +23,8 @@ import { encryptBackup, decryptBackup } from './src/lib/backupCrypto.ts';
 import { nextRunDate, dueRunDates, FREQUENCIES, Frequency } from './src/lib/recurrence.ts';
 import { parseRecycleBinDays, recycleBinCutoff } from './src/lib/recycleBin.ts';
 import QRCode from 'qrcode';
+import { latestRevisions, isWon } from './src/lib/quoteStats.ts';
+import { normalizeDate } from './src/lib/dates.ts';
 import express from 'express';
 import http from 'http';
 import { createServer as createViteServer } from 'vite';
@@ -32,7 +34,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import crypto from 'crypto';
 import 'dotenv/config';
 import multer from 'multer';
@@ -171,6 +173,14 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.path === '/api/login', // login has its own limiter
+  // Count per logged-in session instead of per IP: a whole office usually shares ONE public IP,
+  // so a per-IP bucket let one busy user exhaust the limit for everybody (all calls then failed with 429).
+  keyGenerator: (req) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    // Only a REAL session gets its own bucket (forged tokens fall back to the IP bucket)
+    const valid = token && token.length <= 128 && db.prepare('SELECT 1 FROM sessions WHERE token = ?').get(token);
+    return valid ? 'tok:' + crypto.createHash('sha256').update(token).digest('hex').slice(0, 32) : 'ip:' + ipKeyGenerator(req.ip || '');
+  },
   message: { error: 'Too many requests. Please slow down.' },
 });
 
@@ -392,6 +402,10 @@ addColumnIfNotExists('quotes', 'show_mobilization', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'show_duration', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'show_bank_details', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'show_custom_field', 'INTEGER DEFAULT 0');
+// ── Soft delete / Recycle Bin (restored 2026-11-02; columns already exist in production DB) ──
+addColumnIfNotExists('quotes', 'deleted_at', 'TEXT');
+addColumnIfNotExists('quotes', 'deleted_by', 'TEXT');
+addColumnIfNotExists('quotes', 'retain_forever', 'INTEGER DEFAULT 0');
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
@@ -562,6 +576,79 @@ if (!existingTerms) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('documentTerms', JSON.stringify(blankTerms));
 }
 
+// ── ONE-TIME DATA REPAIR (2026-11-03) ─────────────────────────────────────────
+// Runs once (flag in settings). A copy of the database is written to backups/ first.
+//  1. Dates imported from Excel as serial numbers ("45418.0") → YYYY-MM-DD (date, expiry, follow-up, draft).
+//  2. Stale SUBTOTAL / VAT left by the old autosave (it only updated the total) → recalculated from the
+//     items, but ONLY when the stored TOTAL already matches the items (otherwise left alone + logged).
+//  3. Money columns rounded to 2 decimals (VAT was stored as e.g. 1,847.625).
+// Every changed quote gets an activity_log entry "System: data repair" with the old → new values.
+(() => {
+  const FLAG = 'migration_20261103_totals_dates';
+  try {
+    if (db.prepare('SELECT 1 FROM settings WHERE key = ?').get(FLAG)) return;
+    const quotes = db.prepare('SELECT quote_id, date, expiry_date, followup_date, subtotal, discount, tax, grand_total, vat_rate, draft_data FROM quotes').all() as any[];
+    const r2 = (n: any) => Math.round((Number(n) || 0) * 100) / 100;
+    const isSerial = (v: any) => v !== null && v !== undefined && /^\d{5}(\.\d+)?$/.test(String(v).trim());
+    const changes: { id: string; set: Record<string, any>; note: string[] }[] = [];
+    const skipped: string[] = [];
+    for (const q of quotes) {
+      const set: Record<string, any> = {}; const note: string[] = [];
+      for (const col of ['date', 'expiry_date', 'followup_date']) {
+        if (isSerial(q[col])) { set[col] = normalizeDate(q[col]); note.push(`${col}: ${q[col]} → ${set[col]}`); }
+      }
+      let draft: any = null;
+      try { draft = q.draft_data ? JSON.parse(q.draft_data) : null; } catch { draft = null; }
+      if (draft) {
+        let dChanged = false;
+        for (const k of ['date', 'expiryDate']) if (isSerial(draft[k])) { draft[k] = normalizeDate(draft[k]); dChanged = true; }
+        if (dChanged) { set.draft_data = JSON.stringify(draft); note.push('draft dates converted'); }
+      }
+      const items = (draft?.items?.length ? draft.items : db.prepare('SELECT net_price FROM quote_items WHERE quote_id = ?').all(q.quote_id)) as any[];
+      if (items.length && q.grand_total !== null && q.grand_total !== undefined) {
+        const sub = r2(items.reduce((s: number, it: any) => s + (Number(it.net_price ?? it.netPrice) || 0), 0));
+        const disc = r2(draft?.discount ?? q.discount ?? 0);
+        const vat = draft?.vatRate ?? q.vat_rate ?? 15;
+        if (typeof draft?.vatRate === 'number' && draft.vatRate !== q.vat_rate) { set.vat_rate = draft.vatRate; note.push(`VAT rate: ${q.vat_rate}% → ${draft.vatRate}% (as in the editor)`); }
+        const tax = r2((sub - disc) * vat / 100);
+        const grand = r2(sub - disc + tax);
+        if (Math.abs(grand - q.grand_total) <= 0.05) {
+          if (q.subtotal === null || Math.abs(sub - q.subtotal) > 1e-9) { set.subtotal = sub; note.push(`subtotal: ${q.subtotal} → ${sub}`); }
+          if (q.tax === null || Math.abs(tax - q.tax) > 1e-9) { set.tax = tax; note.push(`VAT: ${q.tax} → ${tax}`); }
+          if (Math.abs(grand - q.grand_total) > 0.0001) { set.grand_total = grand; note.push(`total: ${q.grand_total} → ${grand}`); }
+        } else {
+          skipped.push(`${q.quote_id} (stored total ${q.grand_total}, items give ${grand})`);
+        }
+      } else {
+        for (const col of ['subtotal', 'tax', 'grand_total']) {
+          if (q[col] !== null && q[col] !== undefined && Math.abs(r2(q[col]) - q[col]) > 1e-9) { set[col] = r2(q[col]); note.push(`${col} rounded`); }
+        }
+      }
+      if (Object.keys(set).length) changes.push({ id: q.quote_id, set, note });
+    }
+    if (changes.length) {
+      // backup before touching anything
+      const dir = path.resolve(process.cwd(), 'backups');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      fs.copyFileSync(DB_FILE, path.join(dir, `pre_repair_20261103_${Date.now()}.db`));
+    }
+    const ts = new Date().toISOString();
+    db.transaction(() => {
+      for (const c of changes) {
+        const cols = Object.keys(c.set);
+        db.prepare(`UPDATE quotes SET ${cols.map(k => `${k} = ?`).join(', ')} WHERE quote_id = ?`).run(...cols.map(k => c.set[k]), c.id);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)')
+          .run(c.id, 'System: data repair', 'system', ts, JSON.stringify(c.note.map(n => ({ field: 'repair', from: '', to: n }))));
+      }
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(FLAG, JSON.stringify({ at: ts, changed: changes.length, skipped }));
+    })();
+    console.log(`🛠  Data repair: ${changes.length} quote(s) fixed, ${skipped.length} left unchanged${skipped.length ? ': ' + skipped.join('; ') : ''}`);
+  } catch (e) {
+    console.error('Data repair (20261103) failed — nothing changed:', e);
+  }
+})();
+
 // ── SYSTEM LOGGING & GLOBAL ERROR HANDLING ────────────────────────────────────
 const logSystemError = (source: string, type: string, message: string, details: string | null = null) => {
   try {
@@ -589,6 +676,36 @@ const cleanupLogs = () => {
 };
 // Run cleanup on startup
 cleanupLogs();
+
+// ── RECYCLE BIN AUTO-PURGE ────────────────────────────────────────────────────
+// Opt-in: only purges when the 'recycleBinDays' setting exists and is > 0.
+// Pinned quotes (retain_forever = 1) are never purged. activity_log rows are
+// kept on purpose so purged quote IDs are never re-issued by /api/quotes/next-id.
+const cleanupRecycleBin = () => {
+  try {
+    const settingRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('recycleBinDays') as { value: string } | undefined;
+    const days = settingRow ? parseInt(settingRow.value, 10) : 0;
+    if (!days || days <= 0) return;
+    const expirationDate = new Date();
+    expirationDate.setDate(expirationDate.getDate() - days);
+    const toDelete = db.prepare('SELECT quote_id FROM quotes WHERE deleted_at IS NOT NULL AND deleted_at < ? AND COALESCE(retain_forever, 0) = 0').all(expirationDate.toISOString()) as { quote_id: string }[];
+    if (toDelete.length > 0) {
+      const ts = new Date().toISOString();
+      db.transaction(() => {
+        for (const row of toDelete) {
+          db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(row.quote_id);
+          db.prepare('DELETE FROM quotes WHERE quote_id = ?').run(row.quote_id);
+          db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(row.quote_id, 'Permanently deleted (Recycle Bin auto-purge)', 'system', ts);
+        }
+      })();
+      console.log(`🗑️  Purged ${toDelete.length} expired quote(s) from the recycle bin.`);
+    }
+  } catch (e) {
+    console.error('Failed to cleanup recycle bin:', e);
+  }
+};
+cleanupRecycleBin();
+setInterval(cleanupRecycleBin, 24 * 60 * 60 * 1000);
 
 // ── SESSION CLEANUP: remove expired sessions every hour ──────────────────────
 // Prevents the sessions table from growing unbounded. Runs on startup and
@@ -770,13 +887,14 @@ const PermissionGroupSchema = z.object({
 const QuoteItemSchema = z.object({
   product_id: z.number().int().nullable().optional(),
   description: z.string().max(1000).optional().default(''),
-  description_ar: z.string().max(1000).optional(),
+  description_ar: z.string().max(1000).nullable().optional(), // null from older/imported rows must not block saving
   qty: z.number().nonnegative().default(1),
-  unit: z.string().max(50).optional(),
-  unit_price: z.number().nonnegative().default(0),
-  net_price: z.number().nonnegative().default(0),
-  original_price: z.number().nonnegative().nullable().optional(),
-  manual_price: z.number().nonnegative().nullable().optional(),
+  unit: z.string().max(50).nullable().optional(),
+  // negative prices allowed: deduction / credit lines (e.g. "Deduction of completed work -2,000")
+  unit_price: z.number().default(0),
+  net_price: z.number().default(0),
+  original_price: z.number().nullable().optional(),
+  manual_price: z.number().nullable().optional(),
   internal_note: z.string().max(2000).nullable().optional(),
   item_code: z.string().max(100).nullable().optional(),
   supplier_name: z.string().max(200).nullable().optional(),
@@ -795,9 +913,10 @@ const QuoteSchema = z.object({
   discount: z.number().nonnegative().optional().default(0),
   discount_rate: z.number().min(0).max(100).optional().default(0),
   discount_type: z.enum(['amount', 'percentage', 'both']).optional().default('amount'),
-  subtotal: z.number().nonnegative(),
-  tax: z.number().nonnegative(),
-  grand_total: z.number().nonnegative(),
+  // client totals are only a hint — the server recomputes them from the items (recomputeQuoteTotals)
+  subtotal: z.number(),
+  tax: z.number(),
+  grand_total: z.number(),
   vat_rate: z.number().min(0).max(100).optional().default(15),
   currency: z.string().regex(/^[A-Z]{3}$/).optional(),
   markup: z.number().min(0).max(500).optional().default(8),
@@ -1076,7 +1195,7 @@ app.post('/api/me/profile', requireAuth, async (req, res) => {
 // ── Self-service: Change own password ─────────────────────────────────────────
 // Any authenticated user can change their OWN password by proving they know
 // the current one. No admin privilege required.
-app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema), async (req, res) => {
+app.post('/api/me/change-password', requireAuth, requirePermission('canChangePassword'), validate(ChangePasswordSchema), async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const currentUser = (req as any).user;
 
@@ -1114,8 +1233,36 @@ app.get('/api/users', requireAuth, (req, res) => {
   res.json(parsed);
 });
 
+// Non-admin user managers may not create, modify or delete admin accounts, nor grant the admin role.
+// Administration permissions — only a real administrator may grant or remove these
+// (before: a user with "Manage Users" could give himself / others Settings + DB Maintenance)
+const ADMIN_LEVEL_PERMISSIONS = ['canManageUsers', 'canManageSettings', 'canDatabaseMaintenance'];
+const blockAdminPermissionChange = (req: express.Request, res: express.Response, currentPerms: any): boolean => {
+  const actor = (req as any).user;
+  if (actor.role === 'admin') return false;
+  const wanted = req.body?.permissions && typeof req.body.permissions === 'object' ? req.body.permissions : {};
+  const changed = ADMIN_LEVEL_PERMISSIONS.filter((k) => !!wanted[k] !== !!currentPerms?.[k]);
+  if (changed.length) {
+    res.status(403).json({ error: 'Only an administrator can grant or remove: Manage Users, Manage Settings, DB Maintenance.' });
+    return true;
+  }
+  return false;
+};
+
+const blockAdminEscalation = (req: express.Request, res: express.Response, targetRole?: string | null): boolean => {
+  const actor = (req as any).user;
+  if (actor.role === 'admin') return false;
+  if (req.body?.role === 'admin' || targetRole === 'admin') {
+    res.status(403).json({ error: 'Only an administrator can create, modify or delete administrator accounts.' });
+    return true;
+  }
+  return false;
+};
+
 app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validate(UserCreateSchema), async (req, res) => {
   const { username, name, password, role, permissions } = req.body;
+  if (blockAdminEscalation(req, res)) return;
+  if (blockAdminPermissionChange(req, res, {})) return;
 
   try {
     const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -1129,6 +1276,12 @@ app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validat
 
 app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), validate(UserUpdateSchema), async (req, res) => {
   const { username, name, password, role, permissions } = req.body;
+  const target = db.prepare('SELECT role, permissions FROM users WHERE id = ?').get(req.params.id) as { role: string; permissions: string | null } | undefined;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (blockAdminEscalation(req, res, target.role)) return;
+  let targetPerms: any = {};
+  try { targetPerms = JSON.parse(target.permissions || '{}') || {}; } catch { }
+  if (blockAdminPermissionChange(req, res, targetPerms)) return;
 
   const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
 
@@ -1162,6 +1315,7 @@ app.delete('/api/users/:id', requireAuth, requirePermission('canManageUsers'), (
   const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as { count: number };
   const userToDelete = db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id) as { role: string } | undefined;
   if (!userToDelete) return res.status(404).json({ error: 'User not found' });
+  if (blockAdminEscalation(req, res, userToDelete.role)) return;
 
   if (userToDelete.role === 'admin' && adminCount.count <= 1) {
     return res.status(400).json({ error: 'Cannot delete the last admin' });
@@ -1263,9 +1417,28 @@ app.put('/api/customers/:id', requireAuth, requirePermission('canEditCatalog'), 
 });
 
 app.delete('/api/customers/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
-  const stmt = db.prepare('DELETE FROM customers WHERE id = ?');
-  stmt.run(req.params.id);
-  res.json({ success: true });
+  try {
+    const customer = db.prepare('SELECT id, name FROM customers WHERE id = ?').get(req.params.id) as { id: number; name: string } | undefined;
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    // better-sqlite3 enforces FOREIGN KEYs: a customer used by any quotation (incl. Recycle Bin) cannot be removed.
+    // Previously this threw "FOREIGN KEY constraint failed" → 500, and the page silently ignored it.
+    const used = db.prepare('SELECT quote_id, deleted_at FROM quotes WHERE customer_id = ? ORDER BY id DESC').all(customer.id) as { quote_id: string; deleted_at: string | null }[];
+    if (used.length > 0) {
+      const inBin = used.filter(q => q.deleted_at).length;
+      const sample = used.slice(0, 5).map(q => q.quote_id).join(', ') + (used.length > 5 ? ', …' : '');
+      return res.status(409).json({
+        error: `"${customer.name}" cannot be deleted because ${used.length} quotation(s) use this customer (${sample})` +
+          (inBin ? `, ${inBin} of them in the Recycle Bin` : '') +
+          '. Delete those quotations permanently or change their customer first.',
+        quotes: used.map(q => q.quote_id),
+      });
+    }
+    db.prepare('DELETE FROM customers WHERE id = ?').run(customer.id);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Delete customer error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ── Suppliers ─────────────────────────────────────────────────────────────────
@@ -1506,6 +1679,18 @@ function isQuoteVisibleToUser(quote: { author_id: number; shared_with?: string |
   return false;
 }
 
+// Helper: is the user a member of any of these permission groups?
+function isUserInGroups(groupIds: any, userId: number): boolean {
+  if (!Array.isArray(groupIds) || groupIds.length === 0) return false;
+  const ids = groupIds.filter((g: any) => typeof g === 'number');
+  if (ids.length === 0) return false;
+  const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + ids.map(() => '?').join(',') + ')').all(...ids) as any[];
+  for (const g of groups) {
+    try { if (JSON.parse(g.members || '[]').includes(userId)) return true; } catch { }
+  }
+  return false;
+}
+
 // Edit rights (stricter than visibility): a "view only" share can look at a quote but not change it.
 // Mirrors the rules used when SAVING a quote: owner, "view all" users/admins, people the quote was shared with
 // edit rights, or users with "Edit Shared Quotes" for an author they are allowed to see.
@@ -1526,6 +1711,15 @@ function canEditQuote(quote: { author_id: number; shared_with?: string | null },
   } catch { }
   return false;
 }
+
+// Helper: did this user originally create the quote? (first Created / autosave entry in activity_log)
+// Used so that creators keep delete rights after "Prepared By" is reassigned to someone else.
+function isQuoteCreator(quoteId: string, currentUser: any): boolean {
+  const row = db.prepare("SELECT actor FROM activity_log WHERE quote_id = ? AND action IN ('Created', 'Draft Created (Autosave)') ORDER BY id ASC LIMIT 1").get(quoteId) as { actor: string } | undefined;
+  return !!row && row.actor === currentUser.username;
+}
+
+const QUOTE_STATUSES = ['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled'];
 
 app.get('/api/quotes', requireAuth, (req, res) => {
   try {
@@ -1615,10 +1809,9 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 app.get('/api/quotes/:quote_id/lock', requireAuth, (req, res) => {
   try {
     const currentUser = (req as any).user;
-    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    const row = db.prepare('SELECT version, author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number; author_id: number } | undefined;
+    const row = db.prepare('SELECT version, author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as { version: number; author_id: number; shared_with: string | null } | undefined;
     if (!row) return res.status(404).json({ error: 'Quote not found' });
-    if (!canSeeAll && row.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
+    if (!isQuoteVisibleToUser(row, currentUser)) return res.status(403).json({ error: 'Access denied' });
     res.json({ version: row.version ?? 1 });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch lock' });
@@ -1657,7 +1850,7 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       LEFT JOIN users u ON q.author_id = u.id
-      WHERE q.quote_id = ?
+      WHERE q.quote_id = ? AND q.deleted_at IS NULL
     `).get(req.params.quote_id) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
@@ -1806,7 +1999,7 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
       phone: settingsMap.companyPhone || null,
       email: settingsMap.companyEmail || null,
       brandColor,
-      taxLabel: `VAT ${quote.vat_rate || 15}%`,
+      taxLabel: `VAT ${quote.vat_rate ?? 15}%`,
       logoUrl: settingsMap.logo || null,
       logoSize: settingsMap.logoSize ? parseInt(settingsMap.logoSize, 10) : 24,
       termsFontSize: settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14,
@@ -1955,7 +2148,7 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
       phone: settingsMap.companyPhone || null,
       email: settingsMap.companyEmail || null,
       brandColor,
-      taxLabel: `VAT ${quote.vat_rate || 15}%`,
+      taxLabel: `VAT ${quote.vat_rate ?? 15}%`,
       logoUrl: settingsMap.logo || null,
       logoSize: settingsMap.logoSize ? parseInt(settingsMap.logoSize, 10) : 24,
       termsFontSize: settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14,
@@ -2023,7 +2216,8 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
     if (!isQuoteVisibleToUser(base, currentUser)) return res.status(403).json({ error: 'Access denied' });
   }
 
-  // Fetch all quotes starting with this base ID
+  // Fetch the base quote and its revisions (-R1, -R2 …). Escape LIKE wildcards.
+  const likeBase = baseId.replace(/[\\%_]/g, (m: string) => '\\' + m);
   const history = db.prepare(`
     SELECT q.*, c.name as customer_name 
     FROM quotes q 
@@ -2040,18 +2234,18 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
   res.json(history);
 });
 
-app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
+app.post('/api/quotes/:quote_id/send', requireAuth, requirePermission('canEmailQuote'), async (req, res) => {
   const { to, subject, body, pdfHtml } = req.body;
   const quote_id = req.params.quote_id;
 
   // Ownership check
   const currentUser = (req as any).user;
-  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-  const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+  const quote = db.prepare('SELECT author_id, shared_with, status FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quote_id) as any;
   if (!quote) return res.status(404).json({ error: 'Quote not found' });
-  if (!canSeeAll && quote.author_id !== currentUser.id) {
+  if (!canEditQuote(quote, currentUser)) {
     return res.status(403).json({ error: 'Access denied' });
   }
+  if (typeof to !== 'string' || !to.trim()) return res.status(400).json({ error: 'Recipient (to) is required' });
 
   // Validate recipients (was: any string, any number of addresses) and escape the body before putting it in HTML.
   const recipients = String(to || '').split(/[,;\s]+/).filter(Boolean);
@@ -2103,7 +2297,10 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
     const timestamp = new Date().toISOString();
 
     // Check if the quote exists
-    const existing = db.prepare('SELECT id, author_id, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    const existing = db.prepare('SELECT id, author_id, status, deleted_at FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    if (existing?.deleted_at) {
+      return res.status(409).json({ error: 'QUOTE_DELETED' });
+    }
 
     // Ownership check — block autosave to someone else's quote
     if (existing) {
@@ -2314,7 +2511,31 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
   }
 });
 
+// ── Money is calculated by the server, not trusted from the browser ───────────
+// Same formula as the editor: net = qty × unit price; subtotal = Σ net; discount (amount) ≤ subtotal;
+// VAT = (subtotal − discount) × rate; total = subtotal − discount + VAT. Everything rounded to 2 decimals
+// (VAT was stored un-rounded, e.g. 1,847.625; an old autosave left 31 quotes with stale subtotal/VAT).
+function recomputeQuoteTotals(body: any) {
+  const items = Array.isArray(body.items) ? body.items : [];
+  for (const it of items) {
+    it.net_price = round2((Number(it.qty) || 0) * (Number(it.unit_price) || 0));
+  }
+  const subtotal = round2(items.reduce((s: number, it: any) => s + it.net_price, 0));
+  let discount = round2(body.discount || 0);
+  if (discount < 0) discount = 0;
+  if (subtotal >= 0 && discount > subtotal) discount = subtotal;
+  const vatRate = body.vat_rate ?? 15;
+  const tax = round2((subtotal - discount) * vatRate / 100);
+  const grand = round2(subtotal - discount + tax);
+  if (Math.abs(grand - (Number(body.grand_total) || 0)) > 0.02) {
+    console.warn(`[totals] ${body.quote_id}: client total ${body.grand_total} replaced by server total ${grand}`);
+  }
+  body.subtotal = subtotal; body.discount = discount; body.tax = tax; body.grand_total = grand;
+}
+
 app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
+  // net = qty × unit price for every line (the browser value is not trusted), then the totals below
+  recomputeQuoteTotals(req.body);
   let {
     quote_id, date, customer_id, subject, subject_ar, discount, discount_rate, discount_type, subtotal, tax, grand_total, items,
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
@@ -2323,7 +2544,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     author_name, author_id, shared_with, version, force, is_new, currency,
     show_note, show_payment, show_warranty, show_manpower, show_mobilization, show_duration, show_bank_details, show_custom_field
   } = req.body;
-  const shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
+  let shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
   const updated_at = new Date().toISOString();
   const currentUser = (req as any).user;
   const actor = currentUser?.username || 'system';
@@ -2346,7 +2567,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     const existing = db.prepare(`
       SELECT q.id, q.version, q.status, q.type, q.subject, q.grand_total,
              q.discount, q.date, q.expiry_date, q.note, q.payment, q.warranty,
-             q.customer_id, q.author_id, c.name as customer_name
+             q.customer_id, q.author_id, q.deleted_at, q.shared_with, c.name as customer_name
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       WHERE q.quote_id = ?
@@ -2359,8 +2580,15 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
         : (currentUser.name || currentUser.username);
     }
 
-    // Concurrency collision protection: if client is creating a new quote but this ID already belongs to an established quote
-    if (is_new && existing && existing.status !== 'Draft' && existing.author_id !== currentUser.id) {
+    // Quote is in the Recycle Bin → never silently overwrite / resurrect it
+    if (existing && existing.deleted_at) {
+      return res.status(409).json({ error: 'This quote is in the Recycle Bin. Restore it first, or click New to create a new quote.' });
+    }
+
+    // Concurrency collision protection: client is creating a NEW quote but another user already owns this ID.
+    // (Previously Draft quotes were excluded, so two users saving at the same time either got "Access denied"
+    //  or — if the second user could edit all quotes — silently overwrote the first user's new quote.)
+    if (is_new && existing && existing.author_id !== currentUser.id) {
       return res.status(409).json({ error: 'ID_TAKEN' });
     }
 
@@ -2413,7 +2641,27 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       }
     }
 
+    // ── Permission enforcement (2026-11-03) — mirrors what the UI already hides ──
+    // Source quote of a revision (its type / sharing are inherited by the new revision)
+    const revSource = !existing && revision_of
+      ? db.prepare('SELECT type, shared_with FROM quotes WHERE quote_id = ?').get(revision_of) as any
+      : null;
+    // Convert to Invoice: only users with canConvertInvoice may turn a Quotation into a Tax Invoice
+    if (type === 'Tax Invoice' && !hasPermission(currentUser, 'canConvertInvoice')
+        && existing?.type !== 'Tax Invoice' && revSource?.type !== 'Tax Invoice') {
+      return res.status(403).json({ error: 'You do not have the "Convert to Invoice" permission.' });
+    }
+    // Sharing: users without Share / Edit Shared permission cannot change who a quote is shared with
+    // (the existing sharing is kept unchanged instead of failing the save)
+    if (!hasPermission(currentUser, 'canShareQuote') && !hasPermission(currentUser, 'canEditSharedQuote')) {
+      shared_with_str = existing ? (existing.shared_with ?? null) : (revSource?.shared_with ?? null);
+    }
+
     let finalVersion = 1;
+
+    // Only admins / users with canChangeAuthor may reassign the owner ("Prepared By") of a quote.
+    // Mirrors the UI, which only shows the Prepared By selector to those users.
+    const canChangeAuthor = currentUser.role === 'admin' || !!currentUser.permissions?.canChangeAuthor;
 
     // Build a human-readable diff before the transaction mutates the DB
     let logDetails: string | null = null;
@@ -2521,8 +2769,8 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion,
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate ?? 15, expiry_date || null, markup ?? 8,
+          author_name || null, (canChangeAuthor ? (author_id || existing.author_id) : existing.author_id), shared_with_str, finalVersion,
           show_note !== undefined ? show_note : 1,
           show_payment !== undefined ? show_payment : 1,
           show_warranty !== undefined ? show_warranty : 1,
@@ -2554,7 +2802,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1,
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, (canChangeAuthor ? (author_id || (req as any).user.id) : (req as any).user.id), vat_rate ?? 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1,
           show_note !== undefined ? show_note : 1,
           show_payment !== undefined ? show_payment : 1,
           show_warranty !== undefined ? show_warranty : 1,
@@ -2591,10 +2839,11 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
   try {
     const currentUser = (req as any).user;
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
-    if (!canSeeAll && quote.author_id !== currentUser.id) {
-      return res.status(403).json({ error: 'Access denied' });
+    // Owner, the original creator (even after "Prepared By" was reassigned), or users who can see all quotes.
+    if (!canSeeAll && quote.author_id !== currentUser.id && !isQuoteCreator(req.params.quote_id, currentUser)) {
+      return res.status(403).json({ error: 'Access denied: only the owner/creator of this quote (or a user with "View All Quotes") can delete it.' });
     }
     // SOFT delete: the quote (and its items and history) moves to the Recycle Bin and can be restored.
     // It is purged for good after `recycleBinDays` (Settings) unless pinned, or by an explicit permanent delete.
@@ -2956,6 +3205,14 @@ const pruneRecycleBin = () => {
     const days = parseRecycleBinDays((db.prepare("SELECT value FROM settings WHERE key = 'recycleBinDays'").get() as any)?.value);
     const cutoff = recycleBinCutoff(days);
     if (!cutoff) return;
+    // Grace period for quotes that were already in the Recycle Bin before auto-clear existed: the retention
+    // clock starts when this version first runs (otherwise the first start silently purged old deletions).
+    let since = (db.prepare("SELECT value FROM settings WHERE key = 'recycleBinAutoClearSince'").get() as any)?.value;
+    if (!since) {
+      since = new Date().toISOString();
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('recycleBinAutoClearSince', since);
+    }
+    if (since >= cutoff) return;
     const old = db.prepare('SELECT quote_id FROM quotes WHERE deleted_at IS NOT NULL AND deleted_at < ? AND COALESCE(retain_forever, 0) = 0').all(cutoff) as { quote_id: string }[];
     for (const r of old) purgeQuote(r.quote_id);
     if (old.length) console.log(`🗑️  Recycle Bin: permanently removed ${old.length} quote(s) older than ${days} days`);
@@ -2972,10 +3229,9 @@ app.patch('/api/quotes/:quote_id/note', requireAuth, validate(QuoteNoteSchema), 
     const currentUser = (req as any).user;
     const quoteId = req.params.quote_id;
     const { quote_note } = req.body;
-    const existing = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quoteId) as any;
+    const existing = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quoteId) as any;
     if (!existing) return res.status(404).json({ error: 'Quote not found' });
-    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    if (!canSeeAll && existing.author_id !== currentUser.id) {
+    if (!canEditQuote(existing, currentUser)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     db.prepare('UPDATE quotes SET quote_note = ? WHERE quote_id = ?').run(quote_note ?? null, quoteId);
@@ -2997,8 +3253,6 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
       return res.status(403).json({ error: 'Access denied: You do not have permission to view quote history.' });
     }
 
-    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-
     const quote = db.prepare(`
       SELECT q.quote_id, q.date, q.status, q.type, q.updated_at, q.author_id, q.currency, q.lost_reason, q.shared_with,
              c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
@@ -3013,6 +3267,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
     if (!isQuoteVisibleToUser(quote, currentUser)) {
       return res.status(403).json({ error: 'Access denied' });
     }
+    delete quote.shared_with;
 
     const logs = db.prepare(
       'SELECT * FROM activity_log WHERE quote_id = ? ORDER BY timestamp ASC'
@@ -3037,12 +3292,10 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
       return res.status(403).json({ error: 'Access denied: you do not have permission to undo timeline actions.' });
     }
 
-    const existing = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
-    if (existing) {
-      const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-      if (!canSeeAll && existing.author_id !== currentUser.id) {
-        return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
-      }
+    const existing = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quote_id) as any;
+    if (!existing) return res.status(404).json({ error: 'Quote not found' });
+    if (!canEditQuote(existing, currentUser)) {
+      return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
     }
 
     const logEntry = db.prepare('SELECT previous_state FROM activity_log WHERE id = ? AND quote_id = ?').get(log_id, quote_id) as any;
@@ -3058,7 +3311,10 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
 
     db.transaction(() => {
       // Restore main quote
-      const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id');
+      // Only restore real columns (snapshot keys are never trusted as SQL identifiers);
+      // keep current soft-delete flags untouched.
+      const realQuoteCols = new Set((db.pragma('table_info(quotes)') as any[]).map(c => c.name));
+      const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id' && k !== 'quote_id' && realQuoteCols.has(k) && !['deleted_at', 'deleted_by', 'retain_forever'].includes(k));
       const setClause = quoteCols.map(c => `${c} = ?`).join(', ');
       const values = quoteCols.map(c => oldQuote[c]);
 
@@ -3067,7 +3323,8 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
       // Restore items
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
       if (oldItems.length > 0) {
-        const itemCols = Object.keys(oldItems[0]).filter(k => k !== 'id');
+        const realItemCols = new Set((db.pragma('table_info(quote_items)') as any[]).map(c => c.name));
+        const itemCols = Object.keys(oldItems[0]).filter(k => k !== 'id' && realItemCols.has(k));
         const itemPlaceholders = itemCols.map(() => '?').join(', ');
         const insertStmt = db.prepare(`INSERT INTO quote_items (${itemCols.join(', ')}) VALUES (${itemPlaceholders})`);
 
@@ -3114,7 +3371,7 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
         db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(id, `Status changed to ${status}${lostReason ? ` (reason: ${lostReason})` : ''}`, actor, ts);
       }
     })();
-    res.json({ success: true });
+    res.json({ success: true, updated: ids.length });
   } catch (error: any) {
     res.status(500).json({ error: publicError(error) });
   }
@@ -3175,15 +3432,21 @@ app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema
 
 // ── Customer Stats ────────────────────────────────────────────────────────────
 app.get('/api/customers/stats', requireAuth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT customer_id,
-           SUM(grand_total) as total_won,
-           COUNT(*) as quote_count
+  // Same counting rules as the Dashboard (src/lib/quoteStats.ts): latest revision only,
+  // "won" = Accepted or Invoiced (was: SUM of every quote incl. drafts and all revisions).
+  const all = db.prepare(`
+    SELECT quote_id, customer_id, grand_total, status
     FROM quotes
     WHERE customer_id IS NOT NULL AND deleted_at IS NULL
-    GROUP BY customer_id
-  `).all();
-  res.json(rows);
+  `).all() as { quote_id: string; customer_id: number; grand_total: number | null; status: string | null }[];
+  const byCustomer = new Map<number, { customer_id: number; total_won: number; quote_count: number }>();
+  for (const q of latestRevisions(all)) {
+    const row = byCustomer.get(q.customer_id) || { customer_id: q.customer_id, total_won: 0, quote_count: 0 };
+    row.quote_count++;
+    if (isWon(q.status)) row.total_won = Math.round((row.total_won + (q.grand_total || 0)) * 100) / 100;
+    byCustomer.set(q.customer_id, row);
+  }
+  res.json([...byCustomer.values()]);
 });
 
 // ── Database Export / Import ───────────────────────────────────────────────────
@@ -3244,6 +3507,10 @@ app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenanc
     importErrors.push(msg);
   };
 
+  // better-sqlite3 enforces FOREIGN KEYs. Tables are cleared and re-filled one by one, so the intermediate
+  // state violates them (this made every JSON import fail with "FOREIGN KEY constraint failed").
+  // Disable enforcement for the import only (cannot be changed inside a transaction), then re-enable.
+  db.pragma('foreign_keys = OFF');
   try {
     db.transaction(() => {
       const BUSINESS_TABLES = ['customers', 'suppliers', 'products', 'quotes', 'quote_items'];
@@ -3295,10 +3562,14 @@ app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenanc
       }
     })();
 
-    res.json({ success: true });
+    const orphans = db.pragma('foreign_key_check') as any[];
+    if (orphans.length > 0) console.warn(`DB import finished with ${orphans.length} row(s) referencing missing parents`);
+    res.json({ success: true, warnings: orphans.length ? `${orphans.length} row(s) reference missing customers/quotes` : undefined });
   } catch (error: any) {
     const detail = importErrors.length > 0 ? importErrors[importErrors.length - 1] : error.message;
     res.status(500).json({ error: `Import failed: ${detail}`, details: importErrors });
+  } finally {
+    db.pragma('foreign_keys = ON');
   }
 });
 
@@ -4073,7 +4344,7 @@ app.post('/api/translate', requireAuth, async (req, res) => {
 
 // ── AI & Automation API ───────────────────────────────────────────────────────
 // RFQ Parsing (Multimodal LLM extraction)
-app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) => {
+app.post('/api/rfq/parse', requireAuth, requirePermission('canUseRFQ'), upload.single('file'), async (req, res) => {
   if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
     return res.status(400).json({ error: 'Please set OPENROUTER_API_KEY in your .env file to use AI features.' });
   }
@@ -4252,7 +4523,7 @@ app.post('/api/admin/price-sync/apply', requireAuth, requirePermission('canUsePr
 });
 
 // Database Assistant (Text-to-SQL)
-app.post('/api/ai/chat', requireAuth, async (req, res) => {
+app.post('/api/ai/chat', requireAuth, requirePermission('canUseAI'), async (req, res) => {
   if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
     return res.status(400).json({ error: 'Please set OPENROUTER_API_KEY in your .env file to use AI features.' });
   }
@@ -4330,6 +4601,7 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
     }
 
     let rows;
+    let roDb: any = null;
     try {
       rows = runAiQuery(DB_FILE, currentUser, cleanedQuery, 200);
     } catch (sqlErr: any) {
@@ -4487,6 +4759,11 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
 
 // ── GLOBAL EXPRESS ERROR HANDLER ──────────────────────────────────────────────
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Body-parser client errors (malformed JSON / payload too large / aborted upload) are not server faults
+  if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON body' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request body too large' });
+  if (err?.type === 'request.aborted') return res.status(400).json({ error: 'Request aborted' });
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Uploaded file is too large (max 100 MB).' });
   console.error('Unhandled API Error:', err);
   logSystemError('Express API', 'UnhandledRouteError', `Error in ${req.method} ${req.url}: ${err.message}`, err.stack);
   res.status(500).json({ error: 'Internal Server Error' });

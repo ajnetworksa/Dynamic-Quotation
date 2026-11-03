@@ -29,6 +29,8 @@ import { round2, lineTotal, computeTotals, discountFromRate, rateFromDiscount, c
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
 import html2canvas from 'html2canvas';
+import { localDate, localDatePlusDays, normalizeDate } from '../lib/dates';
+import { getItemRule as sharedGetItemRule, analyzeItem, analyzeItems, refreshItemCost, canSeeCost, clearCostColumns } from '../lib/pricing';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
@@ -112,6 +114,7 @@ export default function QuoteForm() {
   // outside the form) to align its table header perfectly with the 
   // document's items table.
   const printRef = useRef<HTMLDivElement>(null);
+  const editorScrollRef = useRef<HTMLDivElement>(null); // horizontal scroller around document + sidebar
   const formTopRef = useRef<HTMLDivElement>(null);
   const [formTopHeight, setFormTopHeight] = useState<number>(0);
   const user = getStoredUser();
@@ -163,12 +166,9 @@ export default function QuoteForm() {
 
   const [quoteId, setQuoteId] = useState('');
   const [idUnlocked, setIdUnlocked] = useState(false);
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [expiryDate, setExpiryDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 30);
-    return d.toISOString().split('T')[0];
-  });
+  // Local calendar dates (UTC made quotes created after midnight carry yesterday's date)
+  const [date, setDate] = useState(localDate());
+  const [expiryDate, setExpiryDate] = useState(() => localDatePlusDays(30));
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | number>('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [customerSearch, setCustomerSearch] = useState('');
@@ -443,8 +443,34 @@ export default function QuoteForm() {
   const UNIT_SUGGESTIONS = ['pc', 'set', 'lot', 'm²', 'hr', 'day', 'kg', 'm', 'lm', 'pair', 'roll'];
 
   // ── DRAFT LOCAL CACHE ────────────────────────────────────────────────────────
-  const DRAFT_KEY = 'quote_draft';
+  // Drafts live ONLY in this browser (never written to the shared quote row), so they can never overwrite
+  // another user's work. Keys are per user:
+  //   quote_draft:<userId>                → the NEW (not yet opened from the database) quote being typed
+  //   quote_edit_draft:<userId>:<quoteId> → unsaved changes to an EXISTING quote opened from Tracking/Dashboard
+  const DRAFT_KEY = `quote_draft:${user?.id ?? 'anon'}`;
+  const editDraftKey = (qid: string) => `quote_edit_draft:${user?.id ?? 'anon'}:${qid}`;
+  const legacyDraftMigratedRef = useRef(false);
+  if (!legacyDraftMigratedRef.current) {
+    legacyDraftMigratedRef.current = true;
+    try {
+      // one-time move of the old shared key ('quote_draft') to the per-user key
+      const legacy = localStorage.getItem('quote_draft');
+      if (legacy && !localStorage.getItem(DRAFT_KEY)) localStorage.setItem(DRAFT_KEY, legacy);
+      if (legacy) localStorage.removeItem('quote_draft');
+      // housekeeping: forget unsaved edit drafts older than 30 days
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      Object.keys(localStorage).filter(k => k.startsWith('quote_edit_draft:')).forEach(k => {
+        try { const t = Date.parse(JSON.parse(localStorage.getItem(k) || '{}').savedAt); if (!t || t < cutoff) localStorage.removeItem(k); } catch { localStorage.removeItem(k); }
+      });
+    } catch { }
+  }
   const [draftBanner, setDraftBanner] = useState(false);
+  // Banner shown when unsaved changes of an existing quote were found in this browser
+  const [editDraftNotice, setEditDraftNotice] = useState<null | { kind: 'restored' | 'outdated'; quoteId: string; savedAt: string; data?: any }>(null);
+  const editBaselineRef = useRef<string | null>(null);      // snapshot of the quote exactly as loaded/saved
+  const latestSnapshotRef = useRef<any>(null);              // snapshot of the current form (updated every render)
+  const lastInitRecallRef = useRef<string | null | undefined>(undefined); // document currently loaded in the form
+  const skipNextInitRef = useRef(false);                     // set by Duplicate (keeps the copied content)
 
   const restoreDraftData = useCallback((d: any) => {
     if (!d) return;
@@ -475,6 +501,10 @@ export default function QuoteForm() {
     if (d.vatRate !== undefined) setVatRate(d.vatRate);
     if (d.currency) setCurrency(d.currency);
     if (d.markup !== undefined) setMarkup(d.markup);
+    if (d.status) setStatus(d.status);
+    if (d.type) setType(d.type);
+    if (d.isRecorded && typeof d.version === 'number') setVersion(d.version);
+    if (d.sharedWith && typeof d.sharedWith === 'object') setSharedWith(d.sharedWith);
     if (d.authorName !== undefined) setAuthorName(d.authorName);
     if (d.authorId !== undefined) setAuthorId(d.authorId);
     if (d.note) setNote(d.note);
@@ -581,6 +611,34 @@ export default function QuoteForm() {
   }, []);
 
   useEffect(() => {
+    // The form stays mounted on every page. Only (re)load a document while the editor is on screen, and
+    // never wipe the form just because the user visited another page (that previously reset an opened
+    // quote to a half-blank form and lost unsaved work).
+    const target = recallQuoteId || null;
+    if (skipNextInitRef.current) {            // Duplicate: keep the copied content as a new draft
+      skipNextInitRef.current = false;
+      lastInitRecallRef.current = target;
+      prevRecallRef.current = recallQuoteId;
+      return;
+    }
+    if (lastInitRecallRef.current !== undefined) {
+      if (isClearingRef.current) {            // Clear button handles its own reset
+        lastInitRecallRef.current = target;
+        prevRecallRef.current = recallQuoteId;
+        return;
+      }
+      if (location.pathname !== '/quote') return;
+      if (target === lastInitRecallRef.current) return;   // same document → keep in-memory state
+      if (!target && lastInitRecallRef.current && !(location.state as any)?.newQuote) {
+        // Came back through the "Docs" menu → return to the quote that is still open
+        setSearchParams({ recall: lastInitRecallRef.current }, { replace: true });
+        return;
+      }
+    }
+    lastInitRecallRef.current = target;
+    editBaselineRef.current = null;
+    setEditDraftNotice(null);
+
     const init = async () => {
       // If we are not visible and not on the quote page, don't trigger the heavy init sequence
       if (document.visibilityState !== 'visible' && location.pathname !== '/quote') return;
@@ -622,13 +680,29 @@ export default function QuoteForm() {
       if (isClearingRef.current) return;
 
       if (recallQuoteId) {
+        isInitialLoadRef.current = true;
+        // An older "new quote" draft that is actually THIS recorded quote → treat it as an edit draft of it
+        try {
+          const nd = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+          if (nd && nd.isRecorded && nd.quoteId === recallQuoteId) {
+            if (!localStorage.getItem(editDraftKey(recallQuoteId))) {
+              localStorage.setItem(editDraftKey(recallQuoteId), JSON.stringify({ quoteId: recallQuoteId, savedAt: nd.savedAt || new Date().toISOString(), data: { ...nd, editingQuoteId: recallQuoteId } }));
+            }
+            localStorage.removeItem(DRAFT_KEY);
+          }
+        } catch { }
         await fetchQuote(recallQuoteId, dbCustomers, dbProducts);
         // Loading fills many fields; do not count that as the user's edits (clears after React has applied it).
         setTimeout(() => setHasUnsavedRecalledEdits(false), 900);
         setIsRecorded(true);
-        // Do not keep stale draft cache while viewing an existing database quote
-        localStorage.removeItem(DRAFT_KEY);
-        setTimeout(() => { isInitialLoadRef.current = false; }, 600);
+        // The new-quote draft (if any) is kept so the user can go back to it later.
+        const loadedId = recallQuoteId;
+        setTimeout(() => {
+          isInitialLoadRef.current = false;
+          if (lastInitRecallRef.current !== loadedId) return;  // user already moved to another quote
+          editBaselineRef.current = JSON.stringify(latestSnapshotRef.current);
+          restorePendingEditDraft(loadedId);
+        }, 600);
       } else if (!wasRecalling) {
         // Auto-restore locally cached draft if it exists (only for fresh quote creation, not after clearing a recalled quote)
         const draft = localStorage.getItem(DRAFT_KEY);
@@ -642,22 +716,27 @@ export default function QuoteForm() {
         } else {
           setQuoteId('');
           setIsRecorded(false);
-          setDate(new Date().toISOString().split('T')[0]);
+          setDate(localDate());
           setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
         }
         setTimeout(() => { isInitialLoadRef.current = false; }, 600);
       } else {
-        // Was recalling an existing quote and now cleared -> ensure blank fresh form and no draft restored
-        localStorage.removeItem(DRAFT_KEY);
-        setQuoteId('');
-        setIsRecorded(false);
-        setDate(new Date().toISOString().split('T')[0]);
-        setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
+        // Switching from an opened quote to a NEW document ("New Document" / "+ New Quote"):
+        // fully reset the form (the old code left the previous quote's customer, subject and terms behind),
+        // then bring back the user's unsaved new-quote draft if there is one.
+        isInitialLoadRef.current = true;
+        resetToBlankForm();
+        try {
+          const draft = localStorage.getItem(DRAFT_KEY);
+          if (draft) restoreDraftData(JSON.parse(draft));
+        } catch (e) {
+          console.error('Failed to parse cached draft:', e);
+        }
         setTimeout(() => { isInitialLoadRef.current = false; }, 600);
       }
     };
     init();
-  }, [recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [recallQuoteId, location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for live updates when documentTerms are saved in Settings tab
   useEffect(() => {
@@ -696,7 +775,10 @@ export default function QuoteForm() {
       fetchSuppliers();
       fetchDocumentTerms(!recallQuoteId && !selectedCustomerId && !subject && items.every(i => !i.description.trim()));
     }
-  }, [location.pathname, recallQuoteId, selectedCustomerId, subject, items, fetchDocumentTerms]);
+    // Only re-run when the user navigates to /quote (or opens another quote). Previously `items`,
+    // `subject` and `selectedCustomerId` were dependencies, so every keystroke re-downloaded the full
+    // customer, product and supplier lists plus the document terms (4 requests per keystroke).
+  }, [location.pathname, recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refetch lists when the browser tab gains focus (e.g. from another tab or window)
   // or via a regular background sync every 15 seconds so data is always fresh.
@@ -1057,8 +1139,10 @@ export default function QuoteForm() {
   const onRowBodyPointerDown = (e: React.PointerEvent, index: number) => {
     if (rowReorderMode !== 'drag') return;
     if ((e.target as HTMLElement).closest('.product-dropdown')) return;
-    const tag = (e.target as HTMLElement).tagName;
-    if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'LABEL', 'TH'].includes(tag)) return;
+    // Use closest(): clicking a button's ICON targets the <svg>/<path>, not the <button>. The old tagName check
+    // missed that, started a row drag and captured the pointer, so the button's click (e.g. 🗑 Remove Item,
+    // internal-note) never fired.
+    if ((e.target as HTMLElement).closest('input, textarea, select, button, a, label, th, [contenteditable="true"]')) return;
     longPressStartRef.current = { x: e.clientX, y: e.clientY };
     const el = e.currentTarget as HTMLElement;
 
@@ -1291,7 +1375,7 @@ export default function QuoteForm() {
       };
 
       setQuoteId(data.quote_id);
-      setDate(pick(parsedDraft?.date, data.date, new Date().toISOString().split('T')[0]));
+      setDate(normalizeDate(pick(parsedDraft?.date, data.date, '')) || localDate());
       setExpiryDate(pick(parsedDraft?.expiryDate, data.expiry_date, ''));
       const custId = pick(parsedDraft?.selectedCustomerId, data.customer_id, '');
       setSelectedCustomerId(custId);
@@ -1395,48 +1479,25 @@ export default function QuoteForm() {
         itemsToProcess = Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }));
       }
 
+      const productPriceById = new Map<number, number>(productsList.map(p => [p.id, p.unit_price]));
       setItems(itemsToProcess.map((item: any) => {
-        let original_price = item.original_price;
-        let manual_price = item.manual_price !== null && item.manual_price !== undefined ? item.manual_price : undefined;
-
-        let costShift: 'up' | 'down' | undefined = undefined;
-
-        if (item.product_id) {
-          const prod = productsList.find(p => p.id === item.product_id);
-          if (prod) {
-            const dbPrice = prod.unit_price;
-            if (original_price !== dbPrice && original_price !== undefined) {
-              if (dbPrice > original_price) {
-                increases++;
-                costShift = 'up';
-              } else {
-                decreases++;
-                costShift = 'down';
-              }
-
-              original_price = dbPrice;
-              const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8);
-              const expectedNewUnitPrice = dbPrice * (1 + currentMarkup / 100);
-              const currentUnitPrice = item.unit_price;
-              if (manual_price === undefined && Math.abs(currentUnitPrice - expectedNewUnitPrice) > 0.01) {
-                manual_price = Math.round(currentUnitPrice * 100) / 100;
-              }
-            }
-          }
-        }
-
-        // Round manual price if it exists
-        if (manual_price !== undefined) {
-          manual_price = Math.round(manual_price * 100) / 100;
-        }
+        // Cost refresh from the Product DB — shared with the Tracking Excel exports (src/lib/pricing.ts)
+        const costMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8);
+        const refreshed = refreshItemCost(item, productPriceById, costMarkup);
+        const original_price = refreshed.original_price;
+        const manual_price = refreshed.manual_price;
+        const costShift = refreshed.costShift;
+        if (costShift === 'up') increases++;
+        else if (costShift === 'down') decreases++;
 
         // Determine current unit price
         let unit_price = item.unit_price || 0;
         if (manual_price !== undefined) {
           unit_price = manual_price;
         } else if (original_price !== undefined) {
-          const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup || 8);
-          unit_price = Math.round(original_price * (1 + currentMarkup / 100) * 100) / 100;
+          // 0 % is a valid markup — `|| 8` turned it into 8 % and re-priced every line on opening
+          const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup ?? 8);
+          unit_price = Math.round((original_price as number) * (1 + currentMarkup / 100) * 100) / 100;
         }
 
         return {
@@ -1490,11 +1551,15 @@ export default function QuoteForm() {
       cacheTimerRef.current = null;
     }
     localStorage.removeItem(DRAFT_KEY);
+    const openedId = recallQuoteId || lastInitRecallRef.current;
+    if (openedId) localStorage.removeItem(editDraftKey(openedId));
+    editBaselineRef.current = null;
+    setEditDraftNotice(null);
 
     setQuoteId('');
     setIsRecorded(false);
     setSearchParams({});
-    setDate(new Date().toISOString().split('T')[0]);
+    setDate(localDate());
     setExpiryDate('');
     setSelectedCustomerId('');
     setSelectedCustomer(null);
@@ -1573,7 +1638,7 @@ export default function QuoteForm() {
     if (product) {
       setItems(prevItems => {
         const newItems = [...prevItems];
-        const newUnitPrice = product.unit_price * (1 + markup / 100);
+        const newUnitPrice = Math.round(product.unit_price * (1 + markup / 100) * 100) / 100;
         newItems[index] = {
           ...newItems[index],
           product_id: product.id,
@@ -1583,7 +1648,7 @@ export default function QuoteForm() {
           unit: product.unit,
           unit_price: newUnitPrice,
           manual_price: undefined,
-          net_price: newItems[index].qty * newUnitPrice,
+          net_price: Math.round(newItems[index].qty * newUnitPrice * 100) / 100,
           item_code: product.item_code,
           supplier_name: product.supplier_name
         };
@@ -1737,57 +1802,18 @@ export default function QuoteForm() {
   };
 
   // ── ADVANCED MU CALCULATION ───────────────────────────────────────────────
-  const getItemRule = (item: QuoteItem) => {
-    const desc = (item.description || '').toLowerCase();
-    if (muFilters.excluded.some(kw => desc.includes(kw.toLowerCase()))) return 'EXCL';
-    if (muFilters.zeroMarkup.some(kw => desc.includes(kw.toLowerCase()))) return 'ZM';
-
-    const hasManual = item.manual_price !== undefined && item.manual_price !== null;
-    const hasDB = item.original_price !== undefined && item.original_price !== null;
-    // User requested: only overwrite base price if it contains 'materials'
-    const isSpecial = desc.includes('materials');
-
-    if (hasManual) {
-      // Use manual price as the BASE calculation if it's special OR if no DB price exists to fall back on
-      if (isSpecial || !hasDB) {
-        return 'MAN';
-      }
-    }
-
-    if (hasDB) return 'DB';
-    return '--';
-  };
+  // Rules live in src/lib/pricing.ts (shared with all Excel exports in Tracking)
+  const getItemRule = (item: QuoteItem) => sharedGetItemRule(item, muFilters);
 
   // All money figures come from the shared module (src/lib/money.ts) so form, PDF and exports agree.
   const totals = computeTotals({ lineNets: items.map(i => i.net_price || 0), discount: rawDiscount, vatRate });
   const subtotal = totals.subtotal;
   const discount = totals.discount;
 
-  let baseTotal = 0;
-  let markupProfit = 0;
-
-  items.forEach(item => {
-    const rule = getItemRule(item);
-    const saleTotal = item.net_price || 0;
-
-    if (rule === 'EXCL') {
-      // Excluded: contributes nothing to base cost and nothing to profit
-    } else if (rule === 'ZM') {
-      // Zero markup: base cost equals sale price, so 0 profit
-      baseTotal += saleTotal;
-    } else {
-      let itemBaseUnit = 0;
-      if (rule === 'MAN') itemBaseUnit = item.manual_price!;
-      else if (rule === 'DB') itemBaseUnit = item.original_price!;
-
-      const itemBaseTotal = itemBaseUnit * item.qty;
-      baseTotal += itemBaseTotal;
-      markupProfit += (saleTotal - itemBaseTotal);
-    }
-  });
-
-  // Profit is what is left after the discount is given away.
-  markupProfit = round2(markupProfit - discount);
+  // B.TOTAL / TTL PROFIT — same function as every Excel export (src/lib/pricing.ts).
+  // TTL PROFIT = before discount & VAT, identical to the Excel exports the user verified.
+  // (PR #5 subtracted the discount here only → sidebar and Excel disagreed. Open decision, see progress.md.)
+  const { baseTotal, markupProfit } = analyzeItems(items, muFilters);
 
   useEffect(() => {
     if (discountMode === 'percentage') {
@@ -1895,6 +1921,13 @@ export default function QuoteForm() {
         setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         toast(recallQuoteId === activeQuoteId ? 'Quote updated successfully!' : `Quote data (${activeQuoteId}) is recorded to Tracking section!`);
         localStorage.removeItem(DRAFT_KEY); // clear local draft since officially recorded
+        localStorage.removeItem(editDraftKey(activeQuoteId));
+        setEditDraftNotice(null);
+        editBaselineRef.current = null;
+        setTimeout(() => {
+          // new baseline = what is now in the database
+          if (lastInitRecallRef.current === activeQuoteId) editBaselineRef.current = JSON.stringify(latestSnapshotRef.current);
+        }, 300);
         setShowOverwriteModal(false);
         setShowConflictModal(false);
         return true;
@@ -1903,6 +1936,8 @@ export default function QuoteForm() {
         if (errorData.error === 'ID_TAKEN') {
           toast("This Quote ID was just used by someone else! Generating a new one for you automatically...");
           handleCreateNewId();
+        } else if (typeof errorData.error === 'string' && errorData.error.includes('Recycle Bin')) {
+          toast(errorData.error);
         } else {
           setShowConflictModal(true);
         }
@@ -1979,10 +2014,108 @@ export default function QuoteForm() {
     }, 100);
   };
 
+  // Plain snapshot of everything the user can edit (used for both draft kinds)
+  const buildDraftSnapshot = () => ({
+    quoteId: idUnlocked ? quoteId : '',
+    editingQuoteId: quoteId,
+    isRecorded,
+    idUnlocked,
+    version, status, type, sharedWith,
+    date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, currency, markup, authorName, authorId,
+    selectedCustomerId, selectedCustomer, customerSearch,
+    note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
+    manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
+    bankDetails, bankDetailsAr, footer, footerAr, customFields,
+    showNote, showPayment, showWarranty, showManpower, showMobilization, showDuration, showBankDetails, showCustomField,
+    subtotal, tax, grandTotal,
+  });
+  latestSnapshotRef.current = buildDraftSnapshot();
+
+  // Unsaved changes of an EXISTING quote → stored per user + per quote in this browser only.
+  const persistEditDraft = (qid: string | null) => {
+    if (!qid || isInitialLoadRef.current || isClearingRef.current || editBaselineRef.current === null) return;
+    const snap = latestSnapshotRef.current;
+    if (!snap || snap.editingQuoteId !== qid) return;
+    try {
+      if (JSON.stringify(snap) === editBaselineRef.current) localStorage.removeItem(editDraftKey(qid));
+      else localStorage.setItem(editDraftKey(qid), JSON.stringify({ quoteId: qid, savedAt: new Date().toISOString(), data: snap }));
+    } catch { }
+  };
+
+  const restorePendingEditDraft = (qid: string) => {
+    try {
+      const raw = localStorage.getItem(editDraftKey(qid));
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      const data = d?.data;
+      const current = latestSnapshotRef.current;
+      if (!data || data.editingQuoteId !== qid || JSON.stringify(data) === JSON.stringify(current)) {
+        localStorage.removeItem(editDraftKey(qid));
+        return;
+      }
+      if ((data.version ?? 1) === (current?.version ?? 1)) {
+        // Nobody saved this quote since → put the user's unsaved work back automatically
+        restoreDraftData({ ...data, isRecorded: true, quoteId: qid });
+        setEditDraftNotice({ kind: 'restored', quoteId: qid, savedAt: d.savedAt });
+      } else {
+        // Someone saved a newer version → let the user decide (saving will then show the version-conflict dialog)
+        setEditDraftNotice({ kind: 'outdated', quoteId: qid, savedAt: d.savedAt, data });
+      }
+    } catch { }
+  };
+
+  const discardEditDraft = async () => {
+    const qid = editDraftNotice?.quoteId || recallQuoteId;
+    setEditDraftNotice(null);
+    if (!qid) return;
+    localStorage.removeItem(editDraftKey(qid));
+    isInitialLoadRef.current = true;
+    editBaselineRef.current = null;
+    await fetchQuote(qid);
+    setTimeout(() => {
+      isInitialLoadRef.current = false;
+      if (lastInitRecallRef.current === qid) editBaselineRef.current = JSON.stringify(latestSnapshotRef.current);
+    }, 600);
+  };
+
+  const loadOutdatedEditDraft = () => {
+    if (!editDraftNotice?.data) return;
+    restoreDraftData({ ...editDraftNotice.data, isRecorded: true, quoteId: editDraftNotice.quoteId });
+    setEditDraftNotice({ kind: 'restored', quoteId: editDraftNotice.quoteId, savedAt: editDraftNotice.savedAt });
+  };
+
+  // Full reset to an empty document (same fields as the Clear button, without the confirmation)
+  const resetToBlankForm = () => {
+    setQuoteId('');
+    setIsRecorded(false);
+    setIdUnlocked(false);
+    setVersion(1);
+    setDate(localDate());
+    setExpiryDate('');
+    setSelectedCustomerId('');
+    setSelectedCustomer(null);
+    setCustomerSearch('');
+    setSubject('');
+    setSubjectAr('');
+    setDiscount(0);
+    setDiscountRate(0);
+    setStatus('Draft');
+    setType('Quotation');
+    setVatRate(15);
+    setCurrency('SAR');
+    setAuthorName(user.name || user.username);
+    setAuthorId(null);
+    setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
+    setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
+    applyDefaultTerms(defaultTermsRef.current || getCachedTerms());
+  };
+
   // ── LOCAL DRAFT CACHE: Auto-saves to localStorage across tabs/reloads (NO DB WRITE) ────────
   const cacheDraftLocally = useCallback(() => {
     // Recalled quotes from database and active clear operations MUST NOT be cached into draft_key!
-    if (recallQuoteId || isClearingRef.current) return;
+    // Use the document actually loaded in the form (not the URL): on other pages the URL has no ?recall,
+    // which previously copied an opened quote into the new-quote draft.
+    if (recallQuoteId || lastInitRecallRef.current || isClearingRef.current) return;
 
     const isMeaningful = subject.trim() !== '' ||
       selectedCustomerId !== '' ||
@@ -1990,16 +2123,7 @@ export default function QuoteForm() {
     if (!isMeaningful) return;
 
     const draft = {
-      quoteId: idUnlocked ? quoteId : '',
-      isRecorded,
-      idUnlocked,
-      date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, currency, markup, authorName, authorId,
-      selectedCustomerId, selectedCustomer, customerSearch,
-      note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
-      manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
-      bankDetails, bankDetailsAr, footer, footerAr, customFields,
-      showNote, showPayment, showWarranty, showManpower, showMobilization, showDuration, showBankDetails, showCustomField,
-      subtotal, tax, grandTotal,
+      ...buildDraftSnapshot(),
       savedAt: new Date().toISOString(),
     };
 
@@ -2019,16 +2143,38 @@ export default function QuoteForm() {
     manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
     bankDetails, bankDetailsAr, footer, footerAr, customFields,
     showNote, showPayment, showWarranty, showManpower, showMobilization, showDuration, showBankDetails, showCustomField,
-    subtotal, tax, grandTotal]);
+    subtotal, tax, grandTotal, version, status, type, sharedWith]);
+
+  // Existing (opened) quote: keep unsaved changes in this browser, debounced; flushed on leave/unload
+  useEffect(() => {
+    const qid = lastInitRecallRef.current;
+    if (!qid) return;
+    let pending = true;
+    const t = setTimeout(() => { pending = false; persistEditDraft(qid); }, 500);
+    return () => {
+      clearTimeout(t);
+      if (pending) persistEditDraft(qid);   // flush the last keystrokes when switching page/quote
+    };
+  }, [cacheDraftLocally, recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const flush = () => persistEditDraft(lastInitRecallRef.current || null);
+    window.addEventListener('beforeunload', flush);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!isInitialLoadRef.current && !isClearingRef.current && recallQuoteId) setHasUnsavedRecalledEdits(true);
-    if (isInitialLoadRef.current || isClearingRef.current || recallQuoteId) return;
+    if (isInitialLoadRef.current || isClearingRef.current || recallQuoteId || lastInitRecallRef.current) return;
 
     setSaveStatus('unsaved');
     if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);
     cacheTimerRef.current = setTimeout(() => {
-      if (!isClearingRef.current && !recallQuoteId) {
+      if (!isClearingRef.current && !recallQuoteId && !lastInitRecallRef.current) {
         cacheDraftLocally();
       }
     }, 500);
@@ -2041,7 +2187,7 @@ export default function QuoteForm() {
   // Flush local cache on unload or tab close
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId) {
+      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId && !lastInitRecallRef.current) {
         cacheDraftLocally();
       }
       // Edits to a recalled quote exist only in memory: ask before the tab closes / reloads.
@@ -2053,7 +2199,7 @@ export default function QuoteForm() {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId) {
+      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId && !lastInitRecallRef.current) {
         cacheDraftLocally();
       }
     };
@@ -2116,13 +2262,19 @@ export default function QuoteForm() {
     if (!await confirmAsync('This will copy the current quote into a new unrecorded draft with today\'s date. Proceed?')) return;
     setQuoteId('');
     setIsRecorded(false);
-    // Clear the recall param so it saves as a new quote
+    const openedId = recallQuoteId || lastInitRecallRef.current;
+    if (openedId) localStorage.removeItem(editDraftKey(openedId));
+    editBaselineRef.current = null;
+    setEditDraftNotice(null);
+    // Clear the recall param so it saves as a new quote (keep the copied content — the old code's
+    // init effect reset the items to blank rows here)
+    skipNextInitRef.current = !!recallQuoteId;
     setSearchParams({});
-    setDate(new Date().toISOString().split('T')[0]);
+    setDate(localDate());
     setStatus('Draft');
     const exp = new Date();
     exp.setDate(exp.getDate() + 30);
-    setExpiryDate(exp.toISOString().split('T')[0]);
+    setExpiryDate(localDate(exp));
     toast('Quote duplicated! A new Quote ID will be assigned when you click Record.');
   };
 
@@ -2305,6 +2457,7 @@ export default function QuoteForm() {
     const prevNoteIndex = expandedNoteIndex;
     setExpandedNoteIndex(null);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (editorScrollRef.current) editorScrollRef.current.scrollLeft = 0;
 
     try {
       // Store original values and styles to use in onclone
@@ -2332,6 +2485,8 @@ export default function QuoteForm() {
         useCORS: true,
         logging: false,
         onclone: (clonedDoc) => {
+          // Exported PDF is always on white paper, even when the app is in Night mode
+          clonedDoc.documentElement.classList.remove('dark');
           const hideSelectors = [
             '[data-html2canvas-ignore="true"]',
             '[class*="print:hidden"]',
@@ -2620,6 +2775,7 @@ export default function QuoteForm() {
     const prevNoteIndex = expandedNoteIndex;
     setExpandedNoteIndex(null);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (editorScrollRef.current) editorScrollRef.current.scrollLeft = 0;
 
     try {
       const originalElements = printRef.current.querySelectorAll('input, textarea, select');
@@ -2641,6 +2797,8 @@ export default function QuoteForm() {
         useCORS: true,
         logging: false,
         onclone: (clonedDoc) => {
+          // Exported PDF is always on white paper, even when the app is in Night mode
+          clonedDoc.documentElement.classList.remove('dark');
           const clonedElements = clonedDoc.querySelectorAll('input, textarea, select');
           clonedElements.forEach((el: any, index) => {
             const data = elementData[index];
@@ -2877,7 +3035,7 @@ export default function QuoteForm() {
       [type.toUpperCase()], // 2
       ['Quote ID:', quoteId || 'DRAFT'], // 3
       ['Date:', date], // 4
-      ['Valid For:', '', 'صالحة لـ'], // 5
+      ['Valid Until:', expiryDate || '', 'صالح لغاية'], // 5
       [], // 6
       ['CUSTOMER INFO'], // 7
       ['Customer Name:', selectedCustomer?.name || '', '', '', '', 'Mobile:', selectedCustomer?.mobile || ''], // 8
@@ -2891,23 +3049,7 @@ export default function QuoteForm() {
     const itemsData = [
       ['ITEM', 'DESCRIPTION (EN)', 'DESCRIPTION (AR)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'ITEM CODE', 'SUPPLIER NAME', '', markup.toString(), 'Manual', 'BASE', 'TOTAL'], // 14
       ...items.map((item, index) => {
-        const rule = getItemRule(item);
-        let displayBase = 0;
-        let displayTotal = 0;
-
-        if (rule === 'EXCL') {
-          displayBase = 0;
-          displayTotal = 0;
-        } else if (rule === 'ZM') {
-          displayBase = item.unit_price || 0;
-          displayTotal = item.net_price || 0;
-        } else {
-          if (rule === 'MAN') displayBase = item.manual_price || 0;
-          else if (rule === 'DB') displayBase = item.original_price || 0;
-          else displayBase = item.original_price || 0;
-          displayTotal = displayBase * item.qty;
-        }
-
+        const { displayBase, displayTotal } = analyzeItem(item, muFilters);
         const manualVal = item.manual_price !== undefined ? item.manual_price : item.unit_price;
 
         return [
@@ -3072,6 +3214,9 @@ export default function QuoteForm() {
       }
     }
 
+    // No "Price Analysis" permission → internal cost columns (markup, Manual, BASE, TOTAL, B.TOTAL, TTL PROFIT) are left out
+    if (!canSeeCost(user)) clearCostColumns(ws, 11, 14);
+
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
@@ -3127,7 +3272,7 @@ export default function QuoteForm() {
 
   return (
     <div className="flex flex-col gap-6 dark:text-gray-100">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
+      <div className="flex flex-col md:flex-row md:flex-wrap justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
         <div className="flex items-center gap-4">
           <div className="bg-indigo-100 dark:bg-indigo-900/40 p-3 rounded-xl text-indigo-700 dark:text-indigo-400">
             <FileText size={24} />
@@ -3161,8 +3306,23 @@ export default function QuoteForm() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors" title="Clear all fields to start a new blank quote" aria-label="Clear all fields to start a new blank quote">
+        {editDraftNotice && (
+          <div className={`w-full md:order-last flex flex-wrap items-center gap-3 px-4 py-2 rounded-xl border text-sm ${editDraftNotice.kind === 'restored' ? 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300' : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-300'}`} data-testid="edit-draft-notice">
+            <AlertTriangle size={16} />
+            {editDraftNotice.kind === 'restored' ? (
+              <span className="flex-1">Unsaved changes from {new Date(editDraftNotice.savedAt).toLocaleString()} were restored. Click <b>Record</b> to save them.</span>
+            ) : (
+              <span className="flex-1">You have unsaved changes from {new Date(editDraftNotice.savedAt).toLocaleString()}, but someone saved this quote after that.</span>
+            )}
+            {editDraftNotice.kind === 'outdated' && (
+              <button onClick={loadOutdatedEditDraft} className="px-3 py-1 rounded-lg bg-white border border-current font-medium">Load my changes</button>
+            )}
+            <button onClick={async () => { if (await confirmAsync('Discard your unsaved changes and reload the saved version?')) discardEditDraft(); }} className="px-3 py-1 rounded-lg bg-white border border-current font-medium">Discard</button>
+          </div>
+        )}
+        {/* Toolbar wraps onto a 2nd line instead of squeezing labels into two lines */}
+        <div className="flex flex-wrap items-center justify-start md:justify-end gap-2 w-full md:w-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">
+          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors" title="Clear all fields to start a new blank quote">
             <RefreshCw size={18} /> Clear
           </button>
           {workflowVisibility.updateTermsButton && (
@@ -3267,7 +3427,9 @@ export default function QuoteForm() {
         </div>
       </div>
 
-      <div className="flex flex-col xl:flex-row gap-6">
+      {/* The A4 document keeps its fixed print width; on smaller screens this area scrolls sideways
+          instead of pushing the whole page (header, toolbar) off-screen. */}
+      <div ref={editorScrollRef} className="flex flex-col xl:flex-row gap-6 pb-2 overflow-x-auto print:overflow-visible print:pb-0">
         {/* Printable Quote Form */}
         <div
           ref={printRef}
@@ -4459,8 +4621,8 @@ export default function QuoteForm() {
                   <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
                 <div className="flex justify-between items-center px-1 text-sm">
-                  <span className="text-gray-600" title="Profit as a share of the sale price (after discount). Markup is profit as a share of cost.">Margin %</span>
-                  <span className="font-mono">{marginPercent(discountedSubtotal, markupProfit)}%</span>
+                  <span className="text-gray-600" title="Profit as a share of the sale price (both before discount & VAT, like TTL PROFIT). Markup is profit as a share of cost.">Margin %</span>
+                  <span className="font-mono">{marginPercent(subtotal, markupProfit)}%</span>
                 </div>
 
                 <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">

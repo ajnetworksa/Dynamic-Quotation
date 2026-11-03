@@ -130,7 +130,8 @@ export default function ProductDB() {
 
   const handleDelete = async (id: number) => {
     if (!await confirmAsync('Are you sure you want to delete this product?')) return;
-    await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); toast(`Could not delete product: ${d.error || `HTTP ${res.status}`}`); }
     fetchProducts();
   };
 

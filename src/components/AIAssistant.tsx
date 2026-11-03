@@ -71,7 +71,7 @@ export default function AIAssistant() {
     return (
       <button 
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 p-4 bg-indigo-600 text-white rounded-full shadow-xl hover:bg-indigo-700 transition-transform hover:scale-110 z-50 flex items-center justify-center"
+        className="fixed bottom-6 right-6 p-4 bg-indigo-600 text-white rounded-full shadow-xl hover:bg-indigo-700 transition-transform hover:scale-110 z-50 flex items-center justify-center print:hidden"
         title="Ask Database AI" aria-label="Ask Database AI"
       >
         <Bot size={28} />
@@ -80,7 +80,7 @@ export default function AIAssistant() {
   }
 
   return (
-    <div className={`fixed bottom-6 right-6 bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden z-50 transition-all duration-300 ${isExpanded ? 'w-[800px] h-[80vh]' : 'w-[400px] h-[600px]'} max-w-[calc(100vw-32px)] max-h-[calc(100vh-32px)]`}>
+    <div className={`print:hidden fixed bottom-6 right-6 bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden z-50 transition-all duration-300 ${isExpanded ? 'w-[800px] h-[80vh]' : 'w-[400px] h-[600px]'} max-w-[calc(100vw-32px)] max-h-[calc(100vh-32px)]`}>
       {/* Header */}
       <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-3 text-white flex items-center justify-between shadow-md shrink-0">
         <div className="flex items-center gap-2">

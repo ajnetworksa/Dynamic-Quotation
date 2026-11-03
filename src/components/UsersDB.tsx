@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { confirmAsync } from '../lib/notify';
+import { getStoredUser } from '../lib/storage';
 import { Plus, Trash2, Edit2, Save, X, Shield, User, Bot, FileSearch, Settings as SettingsIcon, Database, Users, Eye, UserCheck, Layers, FileText, Bookmark, Send, Printer, History, KeyRound, Search, ChevronDown, ChevronUp, Crown, PenLine, Check } from 'lucide-react';
 
 interface Permissions {
@@ -99,12 +100,16 @@ const avatarColour = (role: string) => role === 'admin' ? 'bg-purple-600' : role
 
 const grantedKeys = (perms: Permissions | undefined) => ALL_PERMISSIONS.filter(p => perms?.[p.key]);
 
+// Administration permissions: only a real administrator may grant / remove them (also enforced on the server)
+const ADMIN_LEVEL_PERMISSIONS: PermissionKey[] = ['canManageUsers', 'canManageSettings', 'canDatabaseMaintenance'];
+const isActorAdmin = () => getStoredUser()?.role === 'admin';
+
 // ── Permission editor, grouped by category ───────────────────────────────────
 function PermissionToggles({
   perms,
   role,
   onChange,
-  onSetMany,
+  onSetMany: onSetManyRaw,
   hideQuoteVis,
 }: {
   perms: Permissions;
@@ -114,6 +119,9 @@ function PermissionToggles({
   hideQuoteVis?: boolean;
 }) {
   const [query, setQuery] = useState('');
+  const isLocked = (k: PermissionKey) => ADMIN_LEVEL_PERMISSIONS.includes(k) && !isActorAdmin();
+  // "All" / "None" never touch the locked administration permissions
+  const onSetMany = (keys: PermissionKey[], value: boolean) => onSetManyRaw(keys.filter(k => !isLocked(k)), value);
   if (role === 'admin') {
     return (
       <div className="flex items-center gap-2 p-4 rounded-xl border border-purple-200 bg-purple-50 text-sm text-purple-700 font-medium">
@@ -172,12 +180,14 @@ function PermissionToggles({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-gray-100">
               {items.map(p => {
                 const checked = !!perms?.[p.key];
+                const locked = isLocked(p.key);
                 return (
                   <label
                     key={p.key}
-                    className={`flex items-start gap-3 p-3 cursor-pointer transition-colors ${checked ? 'bg-indigo-50' : 'bg-white hover:bg-gray-50'}`}
+                    title={locked ? 'Only an administrator can change this permission' : undefined}
+                    className={`flex items-start gap-3 p-3 transition-colors ${locked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${checked ? 'bg-indigo-50' : 'bg-white hover:bg-gray-50'}`}
                   >
-                    <input type="checkbox" checked={checked} onChange={() => onChange(p.key)} className="mt-0.5 w-4 h-4 accent-indigo-600 shrink-0" />
+                    <input type="checkbox" checked={checked} disabled={locked} onChange={() => { if (!locked) onChange(p.key); }} className="mt-0.5 w-4 h-4 accent-indigo-600 shrink-0" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 text-sm font-medium text-gray-800"><span className="text-gray-400">{p.icon}</span>{p.label}</div>
                       <p className="text-xs text-gray-500 mt-0.5 leading-snug">{p.description}</p>

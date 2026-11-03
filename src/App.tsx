@@ -69,13 +69,16 @@ function NavItem({ to, icon: Icon, label }: { to: string; icon: any; label: stri
   return (
     <Link
       to={to}
+      title={t(label)}
+      aria-label={t(label)}
       aria-current={isActive ? 'page' : undefined}
-      className={`flex items-center gap-2 px-3 xl:px-4 py-2 rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
-        isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
+        isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'
       }`}
     >
-      <Icon size={20} />
-      <span className="font-medium">{t(label)}</span>
+      <Icon size={20} className="shrink-0" />
+      {/* Labels only where they fit; on smaller screens the active item keeps its label, others show icon + tooltip */}
+      <span className={`font-medium text-sm ${isActive ? 'inline' : 'hidden min-[1700px]:inline'}`}>{t(label)}</span>
     </Link>
   );
 }
@@ -104,6 +107,10 @@ const PERM_LABELS: Record<string, string> = {
   canShareQuote: 'Share Quotes',
   canEditSharedQuote: 'Edit Shared Quotes',
   canUndoQuote: 'Undo Timeline Actions',
+  canUseKanban: 'Use Kanban Board',
+  canManageRecycleBin: 'Manage Recycle Bin',
+  canViewAuditLog: 'Audit Log',
+  canEditCatalog: 'Edit Catalog',
 };
 
 const PERM_DESCRIPTIONS: Record<string, string> = {
@@ -129,6 +136,10 @@ const PERM_DESCRIPTIONS: Record<string, string> = {
   canShareQuote: 'Allow sharing specific quotes with selected users or groups.',
   canEditSharedQuote: 'Allow editing and saving quotes that were shared with this user.',
   canUndoQuote: 'Allow restoring quotes to previous states via the timeline.',
+  canUseKanban: 'Access the interactive Kanban board for quotation stages.',
+  canManageRecycleBin: 'Open the Recycle Bin to restore or permanently delete removed quotes.',
+  canViewAuditLog: 'View the audit log of logins, user changes, exports and deletions.',
+  canEditCatalog: 'Add and edit customers, products and suppliers (and import them from CSV).',
 };
 
 // ── Profile Modal ─────────────────────────────────────────────────────────────
@@ -538,17 +549,18 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col">
       <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:bg-white focus:text-indigo-700 focus:px-3 focus:py-2 focus:rounded-lg focus:shadow-lg">{t('Skip to content')}</a>
-      <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
+      <header className="bg-white/90 dark:bg-gray-900/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors duration-300 print:hidden">
+        <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
+          {/* One row: logo | nav (shrinks & scrolls) | theme + profile. Nothing may spill outside the header. */}
+          <div className="flex items-center h-16 gap-3 min-w-0">
             <div className="flex items-center gap-2 shrink-0">
               <div className="bg-indigo-600 p-2 rounded-lg">
-                <FileText className="text-white" size={24} />
+                <FileText className="text-white" size={22} />
               </div>
-              <h1 className="text-xl font-bold text-gray-900 whitespace-nowrap">AJ Network Solutions</h1>
+              <h1 className="hidden xl:block text-lg font-bold text-gray-900 dark:text-white whitespace-nowrap">AJ Network Solutions</h1>
             </div>
-            <div className="flex items-center gap-2 w-full md:w-auto md:flex-1 md:min-w-0 md:justify-end">
-              <nav aria-label="Main" className="flex gap-1 overflow-x-auto flex-1 min-w-0 pb-2 md:pb-0 scrollbar-hide items-center">
+            <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
+              <nav aria-label="Main" className="flex gap-1 overflow-x-auto min-w-0 scrollbar-hide items-center">
                 <NavItem to="/" icon={LayoutDashboard} label="Dashboard" />
                 <NavItem to="/quote" icon={FileText} label="Docs" />
                 <NavItem to="/products" icon={Database} label="Product DB" />
@@ -582,8 +594,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               {/* Theme Toggle */}
               <button
                 onClick={() => setIsDarkMode(!isDarkMode)}
-                className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition-colors"
-                title={isDarkMode ? 'Light Mode' : 'Dark Mode'} aria-label={isDarkMode ? 'Light Mode' : 'Dark Mode'}
+                className="shrink-0 p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-300 transition-colors"
+                title={isDarkMode ? 'Switch to Day mode' : 'Switch to Night mode'}
+                aria-label={isDarkMode ? 'Light Mode' : 'Dark Mode'}
               >
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
@@ -596,7 +609,8 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
         </div>
       </header>
 
-      <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full outline-none">
+      {/* The quote editor needs more width (A4 document + analysis sidebar); other pages stay centred */}
+      <main id="main-content" tabIndex={-1} className={`outline-none flex-1 mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full min-w-0 ${location.pathname === '/quote' ? 'max-w-[1920px]' : 'max-w-7xl'}`}>
         <div className="max-md:overflow-x-auto" style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
           <QuoteForm />
         </div>
@@ -653,6 +667,16 @@ export default function App() {
     // Only save once the user has actually used the toggle, so the OS default keeps working until then.
     applyDarkMode(isDarkMode, isDarkMode !== initialDark.current || hasSavedTheme());
   }, [isDarkMode]);
+
+  // Printing (Ctrl+P / browser menu / Print button) is always done in Day mode → white paper
+  useEffect(() => {
+    let wasDark = false;
+    const before = () => { wasDark = document.documentElement.classList.contains('dark'); document.documentElement.classList.remove('dark'); };
+    const after = () => { if (wasDark) document.documentElement.classList.add('dark'); };
+    window.addEventListener('beforeprint', before);
+    window.addEventListener('afterprint', after);
+    return () => { window.removeEventListener('beforeprint', before); window.removeEventListener('afterprint', after); };
+  }, []);
 
   useEffect(() => {
     const handleAuthChange = () => {

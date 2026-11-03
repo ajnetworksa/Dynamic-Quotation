@@ -7,6 +7,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileText, CheckCircle, XCircle, Clock, TrendingUp, Send, Users, BarChart2, Award, Repeat2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { normalizeDate } from '../lib/dates';
+import { latestRevisions } from '../lib/quoteStats';
 
 interface Quote {
     id: number;
@@ -29,6 +31,8 @@ const STATUS_COLORS: Record<string, string> = {
     Rejected: 'bg-red-100 text-red-800',
     Sent: 'bg-yellow-100 text-yellow-800',
     Draft: 'bg-gray-100 text-gray-800',
+    Invoiced: 'bg-purple-100 text-purple-800',
+    Cancelled: 'bg-gray-200 text-gray-600',
 };
 
 export default function Dashboard() {
@@ -50,7 +54,9 @@ export default function Dashboard() {
             if (!res.ok) return;
             const data = await res.json();
             if (Array.isArray(data)) {
-                setQuotes(data);
+                // Counting rules (src/lib/quoteStats.ts): only the latest revision of each quotation counts,
+                // dates normalised (old imports stored Excel serial numbers such as "45418.0").
+                setQuotes(latestRevisions(data).map((q: Quote) => ({ ...q, date: normalizeDate(q.date) })));
             }
         } catch (err) {
             console.error('Failed to load dashboard data', err);
@@ -166,7 +172,7 @@ export default function Dashboard() {
                         <BarChart2 size={18} /> Tracking
                     </button>
                     <button
-                        onClick={() => navigate('/quote')}
+                        onClick={() => navigate('/quote', { state: { newQuote: true } })}
                         className="flex items-center gap-2 px-5 py-2.5 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow font-medium"
                     >
                         <FileText size={18} /> New Document
@@ -197,7 +203,7 @@ export default function Dashboard() {
             <div className={`grid grid-cols-2 ${canViewRevenue ? 'md:grid-cols-3 lg:grid-cols-6' : 'md:grid-cols-4'} gap-4`}>
                 {[
                     { label: 'Total Documents', value: stats.totalDocs, icon: <FileText size={22} />, color: 'bg-indigo-100 text-indigo-600', hide: false },
-                    { label: 'Won Revenue', value: `${activeCurrency} ${stats.totalRevenue.toLocaleString()}`, icon: <CheckCircle size={22} />, color: 'bg-emerald-100 text-emerald-600', hide: !canViewRevenue },
+                    { label: 'Won Revenue (incl. VAT)', value: `${activeCurrency} ${stats.totalRevenue.toLocaleString()}`, icon: <CheckCircle size={22} />, color: 'bg-emerald-100 text-emerald-600', hide: !canViewRevenue },
                     { label: 'This Month (Won)', value: `${activeCurrency} ${stats.monthRevenue.toLocaleString()}`, icon: <TrendingUp size={22} />, color: 'bg-blue-100 text-blue-600', hide: !canViewRevenue },
                     { label: 'This Month (Docs)', value: stats.monthCount, icon: <BarChart2 size={22} />, color: 'bg-violet-100 text-violet-600', hide: false },
                     { label: 'Pending / Draft', value: stats.pendingCount, icon: <Clock size={22} />, color: 'bg-amber-100 text-amber-600', hide: false },
@@ -227,7 +233,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Monthly Revenue Bar Chart */}
                     <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <h3 className="text-lg font-bold text-gray-800 mb-5">Monthly Won Revenue ({activeCurrency})</h3>
+                        <h3 className="text-lg font-bold text-gray-800 mb-5">Monthly Won Revenue ({activeCurrency}, incl. VAT)</h3>
                         <div className="flex items-end gap-4 h-40">
                             {last6Months.map((m) => {
                                 const heightPct = maxBar > 0 ? (m.total / maxBar) * 100 : 0;
@@ -240,7 +246,8 @@ export default function Dashboard() {
                                         </div>
                                         <div className="w-full rounded-t-md transition-all duration-300"
                                             style={{
-                                                height: `${Math.max(heightPct, 2)}%`,
+                                                // pixels: a % height had no reference height here, so the bars never showed
+                                                height: `${Math.max(Math.round(heightPct * 1.3), 3)}px`,
                                                 background: isCurrent
                                                     ? 'linear-gradient(to top, #4f46e5, #818cf8)'
                                                     : 'linear-gradient(to top, #cbd5e1, #e2e8f0)'

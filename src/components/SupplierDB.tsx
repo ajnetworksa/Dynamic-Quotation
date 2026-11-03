@@ -64,7 +64,8 @@ export default function SupplierDB() {
   };
   const handleDelete = async (id: number) => {
     if (!await confirmAsync('Delete this supplier?')) return;
-    await fetch(`/api/suppliers/${id}`, { method: 'DELETE' });
+    const res = await fetch(`/api/suppliers/${id}`, { method: 'DELETE' });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); toast(`Could not delete supplier: ${d.error || `HTTP ${res.status}`}`); }
     fetchSuppliers();
   };
   const startEdit = (s: Supplier) => { setIsEditing(s.id); setEditForm(s); };

@@ -17,7 +17,7 @@ c=sqlite3.connect("$S/quotes.db")
 print("stored session token != raw:", c.execute("select token from sessions limit 1").fetchone()[0] != "$TOK")
 PY
 echo "short pw create user: $(curl -s -X POST -H "$H" -H "$J" -d '{"username":"bob","password":"short","role":"user"}' $B/api/users | head -c 120)"
-echo "create bob: $(curl -s -X POST -H "$H" -H "$J" -d '{"username":"bob","password":"bobpassword12","name":"Bob","role":"user"}' $B/api/users)"
+echo "create bob: $(curl -s -X POST -H "$H" -H "$J" -d '{"username":"bob","password":"bobpassword12","name":"Bob","role":"user","permissions":{"canChangePassword":true}}' $B/api/users)"
 echo "translate bad lang: $(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$H" -H "$J" -d '{"text":"hi","sl":"en&x=1","tl":"ar"}' $B/api/translate)"
 BT=$(curl -s -X POST -H "$J" -d '{"username":"bob","password":"bobpassword12"}' $B/api/login | sed 's/.*"token":"\([^"]*\)".*/\1/'); BH="Authorization: Bearer $BT"
 echo "next-id x2 (admin, bob): $(curl -s -H "$H" $B/api/quotes/next-id) $(curl -s -H "$BH" $B/api/quotes/next-id) admin again: $(curl -s -H "$H" $B/api/quotes/next-id)"

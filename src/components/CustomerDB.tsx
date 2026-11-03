@@ -102,9 +102,22 @@ export default function CustomerDB() {
     }
   };
 
+  // Returns null on success, otherwise the server's error message
+  const deleteCustomerRequest = async (id: number): Promise<string | null> => {
+    try {
+      const res = await fetch(`/api/customers/${id}`, { method: 'DELETE' });
+      if (res.ok) return null;
+      const data = await res.json().catch(() => ({}));
+      return data.error || `HTTP ${res.status}`;
+    } catch (e: any) {
+      return `Network error: ${e?.message || e}`;
+    }
+  };
+
   const handleDelete = async (id: number) => {
     if (!await confirmAsync('Are you sure you want to delete this customer?')) return;
-    await fetch(`/api/customers/${id}`, { method: 'DELETE' });
+    const err = await deleteCustomerRequest(id);
+    if (err) toast(`Could not delete customer: ${err}`);
     fetchCustomers();
   };
 

@@ -7,11 +7,14 @@ import { ymdOf, parseQuoteDate } from '../lib/dates';
 import { STATUS_BADGE as SHARED_BADGES, STATUSES, normalizeStatus } from '../lib/status';
 const STATUS_BADGE: Record<string, string> = SHARED_BADGES;
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Trash2, FileText, Search, X, Filter, Download, CheckSquare, Bell, Clock, Calendar, Layers, StickyNote, FileSpreadsheet } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import QuoteDiffViewer from './QuoteDiffViewer';
+import { localDate, normalizeDate } from '../lib/dates';
+import { analyzeItem, analyzeItems, normalizeMuFilters, prepareItemsLikeEditor, canSeeCost, clearCostColumns, type MuFilters } from '../lib/pricing';
 
 interface Quote {
   id: number;
@@ -76,6 +79,24 @@ export default function Tracking() {
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
+  // Height of the bulk-action bar (it can wrap to 2 lines) → equal spacer at the bottom of the page
+  const bulkBarRef = useRef<HTMLDivElement | null>(null);
+  const [bulkBarHeight, setBulkBarHeight] = useState(72);
+  useEffect(() => {
+    const el = bulkBarRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setBulkBarHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [selectedIds.size > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  // While the bar is shown, reserve its height at the bottom of the page so the last rows and
+  // the pagination can always be scrolled above it (the bar used to cover them).
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const prev = document.body.style.paddingBottom;
+    document.body.style.paddingBottom = `${bulkBarHeight + 8}px`;
+    return () => { document.body.style.paddingBottom = prev; };
+  }, [selectedIds.size > 0, bulkBarHeight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [sortKey, setSortKey] = useState<SortKey>('quote_id');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -154,11 +175,11 @@ export default function Tracking() {
     }
   };
 
-  // Changing any filter resets to page 1 and drops the selection, so a bulk action can never touch rows
-  // the user can no longer see.
+  // Changing any filter resets to page 1. The selection is KEPT (as before PR #5): users search for one
+  // customer, tick quotes, search the next customer and tick more, then export one Detailed Summary.
+  // The bottom bar always shows how many records are selected and has "Clear Selection".
   useEffect(() => {
     setCurrentPage(1);
-    setSelectedIds(new Set());
   }, [search, statusFilter, typeFilter, creatorFilter, dateFrom, dateTo]);
 
   const handleRecall = (quote_id: string) => navigate(`/quote?recall=${quote_id}`);
@@ -236,30 +257,22 @@ export default function Tracking() {
     if (!isOk) return;
 
     // Fetch filters for logic
-    let muFilters = { excl: [] as string[], zm: [] as string[], man: [] as string[], db: [] as string[] };
+    // Same MU filters + rules as the Quote editor (src/lib/pricing.ts)
+    let muFilters: MuFilters = { zeroMarkup: [], excluded: [] };
     try {
       const settingsRes = await fetch('/api/settings');
       if (settingsRes.ok) {
         const settingsList = await settingsRes.json();
         const settingsMap: any = {};
         settingsList.forEach((s: any) => settingsMap[s.key] = s.value);
-        if (settingsMap.muFilters) {
-          muFilters = JSON.parse(settingsMap.muFilters);
-          // Keywords are compared against lower-cased text, so lower-case them here too.
-          for (const k of Object.keys(muFilters) as Array<keyof typeof muFilters>) {
-            muFilters[k] = (muFilters[k] || []).map((x: string) => String(x).toLowerCase());
-          }
-        }
+        if (settingsMap.muFilters) muFilters = normalizeMuFilters(settingsMap.muFilters);
       }
     } catch (e) { }
-
-    const getItemRule = (item: any) => {
-      if (muFilters.excl.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'EXCL';
-      if (muFilters.zm.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'ZM';
-      if (muFilters.man.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'MAN';
-      if (muFilters.db.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'DB';
-      return 'MU';
-    };
+    const productPriceById = new Map<number, number>();
+    try {
+      const pr = await fetch('/api/products');
+      if (pr.ok) (await pr.json()).forEach((p: any) => productPriceById.set(p.id, p.unit_price));
+    } catch (e) { }
 
     for (const id of selectedIds) {
       try {
@@ -307,13 +320,20 @@ export default function Tracking() {
         };
 
         const items = parsedDraft?.items || rawData.items || [];
+        // Cost analysis exactly as the Quote editor shows it (today's product cost, same rules)
+        const analysisItems = prepareItemsLikeEditor(
+          items,
+          productPriceById,
+          parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup !== undefined ? rawData.markup : 8),
+          parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup ?? 8),
+        );
 
         const quoteInfo = [
           [], // 1
           [(quote.type || 'QUOTATION').toUpperCase()], // 2
           ['Quote ID:', quote.quote_id], // 3
           ['Date:', quote.date], // 4
-          ['Valid For:', '', 'صالحة لـ'], // 5
+          ['Valid Until:', normalizeDate(parsedDraft?.expiryDate || rawData.expiry_date) || '', 'صالح لغاية'], // 5
           [], // 6
           ['CUSTOMER INFO'], // 7
           ['Customer Name:', quote.customer_name || '', '', '', '', 'Mobile:', quote.customer_mobile || ''], // 8
@@ -324,31 +344,12 @@ export default function Tracking() {
           [] // 13
         ];
 
-        let baseTotal = 0;
-        let markupProfit = 0;
+        const { baseTotal, markupProfit } = analyzeItems(analysisItems, muFilters);
 
         const itemsData = [
           ['ITEM', 'DESCRIPTION (EN)', 'DESCRIPTION (AR)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'ITEM CODE', 'SUPPLIER NAME', '', String(quote.markup || 0), 'Manual', 'BASE', 'TOTAL'], // 14
           ...items.map((item: any, index: number) => {
-            const rule = getItemRule(item);
-            let displayBase = 0;
-            let displayTotal = 0;
-
-            if (rule === 'EXCL') {
-              displayBase = 0;
-              displayTotal = 0;
-            } else if (rule === 'ZM') {
-              displayBase = item.unit_price || 0;
-              displayTotal = item.net_price || 0;
-            } else {
-              if (rule === 'MAN') displayBase = item.manual_price || 0;
-              else if (rule === 'DB') displayBase = item.original_price || 0;
-              else displayBase = item.original_price || 0;
-              displayTotal = displayBase * (item.qty || 1);
-            }
-            baseTotal += displayTotal;
-
-            const manualVal = item.manual_price !== undefined ? item.manual_price : item.unit_price;
+            const { displayBase, displayTotal, manualValue: manualVal } = analyzeItem(analysisItems[index], muFilters);
 
             return [
               index + 1,
@@ -369,8 +370,8 @@ export default function Tracking() {
           }),
           ['', '', '', '', '', 'SUBTOTAL', quote.subtotal, '', '', '', '', '', 'B.TOTAL', baseTotal],
           ['', '', '', '', '', 'DISCOUNT', quote.discount],
-          ['', '', '', '', '', `VAT (${quote.vat_rate ?? 15}%)`, quote.tax],
-          ['', '', '', '', '', 'TOTAL PACKAGE', quote.grand_total, '', '', '', '', '', 'TTL PROFIT', (quote.grand_total || 0) - baseTotal],
+          ['', '', '', '', '', `VAT (${parsedDraft?.vatRate ?? rawData.vat_rate ?? 15}%)`, quote.tax],
+          ['', '', '', '', '', 'TOTAL PACKAGE', quote.grand_total, '', '', '', '', '', 'TTL PROFIT', markupProfit],
           [''],
           ['TERMS & CONDITIONS'],
           ...((quote.note || quote.note_ar) ? [['NOTES', quote.note || '', quote.note_ar || '']] : []),
@@ -499,6 +500,9 @@ export default function Tracking() {
             }
           }
         }
+
+        // No "Price Analysis" permission → internal cost columns are left out of the file
+        if (!canSeeCost(user)) clearCostColumns(ws, 11, 14);
 
         const buffer = await workbook.xlsx.writeBuffer();
         const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -699,30 +703,22 @@ export default function Tracking() {
     if (!isOk) return;
 
     // Fetch filters for MU / ZM / MAN / DB
-    let muFilters = { excl: [] as string[], zm: [] as string[], man: [] as string[], db: [] as string[] };
+    // Same MU filters + rules as the Quote editor (src/lib/pricing.ts)
+    let muFilters: MuFilters = { zeroMarkup: [], excluded: [] };
     try {
       const settingsRes = await fetch('/api/settings');
       if (settingsRes.ok) {
         const settingsList = await settingsRes.json();
         const settingsMap: any = {};
         settingsList.forEach((s: any) => settingsMap[s.key] = s.value);
-        if (settingsMap.muFilters) {
-          muFilters = JSON.parse(settingsMap.muFilters);
-          // Keywords are compared against lower-cased text, so lower-case them here too.
-          for (const k of Object.keys(muFilters) as Array<keyof typeof muFilters>) {
-            muFilters[k] = (muFilters[k] || []).map((x: string) => String(x).toLowerCase());
-          }
-        }
+        if (settingsMap.muFilters) muFilters = normalizeMuFilters(settingsMap.muFilters);
       }
     } catch (e) { }
-
-    const getItemRule = (item: any) => {
-      if (muFilters.excl.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'EXCL';
-      if (muFilters.zm.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'ZM';
-      if (muFilters.man.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'MAN';
-      if (muFilters.db.some(sub => (item.description || '').toLowerCase().includes(sub) || (item.supplier_name || '').toLowerCase().includes(sub))) return 'DB';
-      return 'MU';
-    };
+    const productPriceById = new Map<number, number>();
+    try {
+      const pr = await fetch('/api/products');
+      if (pr.ok) (await pr.json()).forEach((p: any) => productPriceById.set(p.id, p.unit_price));
+    } catch (e) { }
 
     const workbook = new ExcelJS.Workbook();
     const ws = workbook.addWorksheet('Detailed Summary');
@@ -746,6 +742,8 @@ export default function Tracking() {
     let currentRow = 1;
     let quoteIndex = 0;
     let firstCustomerName = '';
+    let previousCustomerKey: string | null = null;   // customer of the previous quote block
+    let differentCustomers = false;
 
     for (const id of selectedIds) {
       try {
@@ -774,8 +772,20 @@ export default function Tracking() {
         if (quoteIndex === 0 && quote.customer_name) {
           firstCustomerName = quote.customer_name;
         }
+        // Show "Customer Name" on the first quote and again whenever the customer changes
+        const customerKey = (quote.customer_name || '').trim().toLowerCase();
+        const showCustomerName = quoteIndex === 0 || customerKey !== previousCustomerKey;
+        if (quoteIndex > 0 && customerKey !== previousCustomerKey) differentCustomers = true;
+        previousCustomerKey = customerKey;
 
         const items = parsedDraft?.items || rawData.items || [];
+        // Cost analysis exactly as the Quote editor shows it (today's product cost, same rules)
+        const analysisItems = prepareItemsLikeEditor(
+          items,
+          productPriceById,
+          parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup !== undefined ? rawData.markup : 8),
+          parsedDraft?.markup !== undefined ? parsedDraft.markup : (rawData.markup ?? 8),
+        );
 
         // 1. Quote ID Metadata (Clean plain text, no box borders)
         const qIdRow = currentRow;
@@ -786,8 +796,8 @@ export default function Tracking() {
         qRowObj.getCell(2).font = { name: 'Arial', size: 10, bold: true };
         currentRow++;
 
-        // 2. Customer Info (Customer Name for first quote, Subject for all quotes)
-        if (quoteIndex === 0) {
+        // 2. Customer Info (Customer Name when it differs from the previous quote, Subject for all quotes)
+        if (showCustomerName) {
           const rName = currentRow;
           const rNameObj = ws.getRow(rName);
           rNameObj.getCell(1).value = 'Customer Name:';
@@ -840,27 +850,10 @@ export default function Tracking() {
         currentRow++;
 
         // 4. Item Rows
-        let baseTotal = 0;
+        // B.TOTAL / TTL PROFIT exactly as in the Quote editor (was: no 'materials' rule, profit from TOTAL PACKAGE incl. VAT)
+        const { baseTotal, markupProfit } = analyzeItems(analysisItems, muFilters);
         items.forEach((item: any, index: number) => {
-          const rule = getItemRule(item);
-          let displayBase = 0;
-          let displayTotal = 0;
-
-          if (rule === 'EXCL') {
-            displayBase = 0;
-            displayTotal = 0;
-          } else if (rule === 'ZM') {
-            displayBase = item.unit_price || 0;
-            displayTotal = item.net_price || 0;
-          } else {
-            if (rule === 'MAN') displayBase = item.manual_price || 0;
-            else if (rule === 'DB') displayBase = item.original_price || 0;
-            else displayBase = item.original_price || 0;
-            displayTotal = displayBase * (item.qty || 1);
-          }
-          baseTotal += displayTotal;
-
-          const manualVal = item.manual_price !== undefined ? item.manual_price : item.unit_price;
+          const { displayBase, displayTotal, manualValue: manualVal } = analyzeItem(analysisItems[index], muFilters);
 
           const rowObj = ws.getRow(currentRow);
           rowObj.values = [
@@ -941,7 +934,7 @@ export default function Tracking() {
 
         // VAT
         const rVat = ws.getRow(currentRow);
-        rVat.getCell(5).value = `VAT (${quote.vat_rate ?? 15}%)`;
+        rVat.getCell(5).value = `VAT (${parsedDraft?.vatRate ?? rawData.vat_rate ?? 15}%)`;
         rVat.getCell(5).font = { name: 'Arial', size: 10, bold: true };
         rVat.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };
         rVat.getCell(6).value = quote.tax || 0;
@@ -966,7 +959,7 @@ export default function Tracking() {
         rTot.getCell(12).font = { name: 'Arial', size: 10, bold: true };
         rTot.getCell(12).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } };
         rTot.getCell(12).alignment = { horizontal: 'right', vertical: 'middle' };
-        rTot.getCell(13).value = (quote.grand_total || 0) - baseTotal;
+        rTot.getCell(13).value = markupProfit;
         rTot.getCell(13).font = { name: 'Arial', size: 10, bold: true };
         rTot.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFACC15' } };
         rTot.getCell(13).alignment = { horizontal: 'right', vertical: 'middle' };
@@ -981,9 +974,12 @@ export default function Tracking() {
       }
     }
 
+    // No "Price Analysis" permission → markup / Manual / BASE / TOTAL / B.TOTAL / TTL PROFIT columns are left out
+    if (!canSeeCost(user)) clearCostColumns(ws, 10, 13);
+
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const cleanClient = firstCustomerName ? firstCustomerName.replace(/[^a-zA-Z0-9_\-.\s]/g, '').trim() : 'Project';
+    const cleanClient = differentCustomers ? 'Multiple_Customers' : (firstCustomerName ? firstCustomerName.replace(/[^a-zA-Z0-9_\-.\s]/g, '').trim() : 'Project');
     saveAs(blob, `Detailed_Summary_${cleanClient}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
@@ -1176,8 +1172,8 @@ export default function Tracking() {
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold text-gray-800">Quotation Records</h2>
-            <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-full">
+            <h2 className="text-xl font-semibold text-gray-800 whitespace-nowrap">Quotation Records</h2>
+            <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-full whitespace-nowrap">
               {filtered.length} / {quotes.length}
             </span>
           </div>
@@ -1226,6 +1222,8 @@ export default function Tracking() {
                 <option value="Sent">Sent</option>
                 <option value="Accepted">Accepted</option>
                 <option value="Rejected">Rejected</option>
+                <option value="Invoiced">Invoiced</option>
+                <option value="Cancelled">Cancelled</option>
               </select>
             </div>
 
@@ -1321,7 +1319,7 @@ export default function Tracking() {
                 }
                 return String(d);
               };
-              const overdue = quote.followup_date && quote.followup_date < ymdOf(new Date()) && !['Accepted', 'Rejected', 'Invoiced', 'Cancelled'].includes(quote.status || '');
+              const overdue = quote.followup_date && normalizeDate(quote.followup_date) < localDate() && !['Accepted', 'Rejected', 'Invoiced', 'Cancelled'].includes(quote.status || '');
               return (
                 <tr 
                   key={quote.id} 
@@ -1467,7 +1465,15 @@ export default function Tracking() {
                           onClick={async (e) => {
                             e.stopPropagation();
                             if (!await confirmAsync('Move this record to the Recycle Bin?')) return;
-                            await fetch(`/api/quotes/${quote.quote_id}`, { method: 'DELETE' });
+                            try {
+                              const delRes = await fetch(`/api/quotes/${encodeURIComponent(quote.quote_id)}`, { method: 'DELETE' });
+                              if (!delRes.ok) {
+                                const errData = await delRes.json().catch(() => ({}));
+                                toast(`Could not delete ${quote.quote_id}: ${errData.error || `HTTP ${delRes.status}`}`);
+                              }
+                            } catch (err: any) {
+                              toast(`Network error while deleting: ${err?.message || err}`);
+                            }
                             fetchQuotes();
                           }}
                           className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -1532,13 +1538,13 @@ export default function Tracking() {
         </div>
       </div>
 
-      {selectedIds.size > 0 && <div className="h-32 sm:h-20" aria-hidden="true" />}
-      {/* Bulk Status Sticky Bar */}
+      {/* Bulk Status Sticky Bar — rendered into <body>: the page-transition wrapper uses a CSS transform,
+          which made `position: fixed` follow the page box (bar cut off left/right, covering the last rows). */}
       {
-        selectedIds.size > 0 && (
-          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] p-3 sm:p-4 flex flex-wrap justify-between items-center gap-3 z-50 animate-slide-up max-h-[40vh] overflow-y-auto">
-            <div className="text-gray-700 font-medium">Selected {selectedIds.size} records</div>
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        selectedIds.size > 0 && createPortal(
+          <div ref={bulkBarRef} className="print:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] pl-4 pr-24 py-3 flex flex-wrap justify-between items-center gap-3 z-40 animate-slide-up">
+            <div className="text-gray-700 font-medium whitespace-nowrap">Selected {selectedIds.size} record{selectedIds.size === 1 ? '' : 's'}</div>
+            <div className="flex flex-wrap items-center justify-end gap-2 [&>button]:whitespace-nowrap">
               <select
                 value={bulkStatus}
                 onChange={e => setBulkStatus(e.target.value)}
@@ -1592,7 +1598,8 @@ export default function Tracking() {
                 Cancel
               </button>
             </div>
-          </div>
+          </div>,
+          document.body
         )
       }
 

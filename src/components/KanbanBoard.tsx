@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Loader2, ChevronRight, DollarSign, Clock, X, AlertCircle
+  Loader2, ChevronRight, Clock, X, AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { t, useLang } from '../lib/i18n';
 import { promptAsync } from '../lib/notify';
+import { parseQuoteDate } from '../lib/dates';
 
 // Pipeline stages in order. Rejected / Cancelled are closed states reachable via the reject button
 // (or set elsewhere, e.g. Tracking) and are shown so those quotes never disappear from the board.
@@ -36,8 +37,9 @@ interface Quote {
 const money = (n: number | null | undefined) =>
   (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// parseQuoteDate also understands Excel serial numbers from imported quotes ("45418" was shown as-is)
 const shortDate = (d: string) => {
-  const parsed = new Date(d);
+  const parsed = parseQuoteDate(d) || new Date(NaN);
   return isNaN(parsed.getTime()) ? (d || '') : parsed.toLocaleDateString();
 };
 
@@ -114,7 +116,7 @@ export default function KanbanBoard() {
           <p className="text-gray-500 dark:text-gray-400">{t('Track and manage your quotation pipeline')}</p>
         </div>
         <button
-          onClick={() => navigate('/quote')}
+          onClick={() => navigate('/quote', { state: { newQuote: true } })}
           className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100 dark:shadow-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
         >
           {t('+ New Quote')}
@@ -234,7 +236,7 @@ export default function KanbanBoard() {
 
                       <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-50 dark:border-gray-700/50">
                         <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold text-xs">
-                          <DollarSign size={12} />
+                          <span className="text-[10px] font-semibold">SAR</span>
                           {money(quote.grand_total)}
                         </div>
                         <div className="flex items-center gap-1 text-[10px] text-gray-500">
