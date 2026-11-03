@@ -1,4 +1,11 @@
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
+import CompanyProfileSettings from './CompanyProfileSettings';
+import EncryptedBackupPanel from './EncryptedBackupPanel';
+import ChoiceSettingCard from './settings/ChoiceSettingCard';
+import RecycleBinSettings from './settings/RecycleBinSettings';
+import { SettingsNav, SectionHeader, parseSettingsSection, SettingsSectionId } from './settings/SettingsNav';
+import { useLocation, useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
 import { Download, Upload, Database, AlertTriangle, CheckCircle2, XCircle, Loader2, Image as ImageIcon, TerminalSquare, Trash2, ChevronDown, RefreshCw, Filter, Plus, X, Shield, FileText, Monitor, Server, Percent, Languages, Sparkles, Type } from 'lucide-react';
 import ExcelJS from 'exceljs';
@@ -6,6 +13,16 @@ import { saveAs } from 'file-saver';
 const APP_VERSION = '1.3.1';
 
 export default function Settings() {
+  // The page is split into sections (sidebar); the active one lives in the URL hash, e.g. /settings#email.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeSection = parseSettingsSection(location.hash);
+  const selectSection = (id: SettingsSectionId) => {
+    navigate({ hash: id }, { replace: true });
+    window.scrollTo({ top: 0 });
+  };
+  const showSection = (id: SettingsSectionId) => activeSection === 'all' || activeSection === id;
+
   const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [zipStatus, setZipStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [importStatus, setImportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -128,12 +145,8 @@ export default function Settings() {
   const [workflowStatus, setWorkflowStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Row reorder mode: 'click' = up/down arrow buttons, 'drag' = drag-and-drop handles
-  const [rowReorderMode, setRowReorderMode] = useState<'click' | 'drag'>('click');
-  const [rowReorderStatus, setRowReorderStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Discount Calculation Mode: 'amount' = Direct SAR amount, 'percentage' = Percentage % of Subtotal, 'both' = Show and allow both
-  const [discountMode, setDiscountMode] = useState<'amount' | 'percentage' | 'both'>('amount');
-  const [discountModeStatus, setDiscountModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // PDF Generation Engine
   const [pdfSystem, setPdfSystem] = useState<'client' | 'server'>('client');
@@ -144,8 +157,6 @@ export default function Settings() {
   const [devModeStatus, setDevModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Translation Mode: 'manual' = Only translate when clicking Translate, 'auto' = Auto-translate on blur/typing
-  const [translationMode, setTranslationMode] = useState<'manual' | 'auto'>('manual');
-  const [translationModeStatus, setTranslationModeStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // System Update
   const [updateStatus, setUpdateStatus] = useState<{ current: string; latest: string; hasUpdate: boolean; changelog: string } | null>(null);
@@ -313,16 +324,6 @@ export default function Settings() {
       })
       .catch(console.error);
 
-    fetch('/api/settings/rowReorderMode')
-      .then(res => res.json())
-      .then(data => { if (data.value) setRowReorderMode(data.value as 'click' | 'drag'); })
-      .catch(console.error);
-
-    fetch('/api/settings/discountMode')
-      .then(res => res.json())
-      .then(data => { if (data.value) setDiscountMode(data.value as 'amount' | 'percentage' | 'both'); })
-      .catch(console.error);
-
     fetch('/api/settings/pdfSystem')
       .then(res => res.json())
       .then(data => {
@@ -358,16 +359,6 @@ export default function Settings() {
     fetch('/api/settings/quotePrefix')
       .then(res => res.json())
       .then(data => { if (data.value) setQuotePrefix(data.value); })
-      .catch(console.error);
-
-    fetch('/api/settings/translationMode')
-      .then(res => res.json())
-      .then(data => {
-        if (data.value) {
-          setTranslationMode(data.value as 'manual' | 'auto');
-          localStorage.setItem('translationMode', data.value);
-        }
-      })
       .catch(console.error);
 
     fetch('/api/settings/documentTerms', {
@@ -419,7 +410,7 @@ export default function Settings() {
   };
 
   const handleClearLogs = async () => {
-    if (!confirm('Are you sure you want to clear all system logs?')) return;
+    if (!await confirmAsync('Are you sure you want to clear all system logs?')) return;
     try {
       const res = await fetch('/api/admin/logs', {
         method: 'DELETE',
@@ -497,11 +488,11 @@ export default function Settings() {
     }
   };
 
-  const handleImportDB = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportDB = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm('WARNING: Importing a database backup will overwrite all current data. Do you want to proceed?')) {
+    if (!await confirmAsync('WARNING: Importing a database backup will overwrite all current data. Do you want to proceed?')) {
       e.target.value = '';
       return;
     }
@@ -569,9 +560,9 @@ export default function Settings() {
           if (errorData.details && errorData.details.length > 0) {
             console.table(errorData.details.map((d: string) => ({ error: d })));
             const detailLines = errorData.details.map((d: string) => `• ${d}`).join('\n');
-            alert(`Import failed — the following rows could not be imported:\n\n${detailLines}`);
+            toast(`Import failed — the following rows could not be imported:\n\n${detailLines}`);
           } else {
-            alert(`Import failed: ${errorData.error || 'Unknown error'}`);
+            toast(`Import failed: ${errorData.error || 'Unknown error'}`);
           }
           setImportStatus('error');
           setTimeout(() => setImportStatus('idle'), 5000);
@@ -675,7 +666,7 @@ export default function Settings() {
         } else {
           const errData = await res.json().catch(() => ({}));
           console.error('[Settings] Stamp upload failed:', res.status, res.statusText, errData);
-          alert(`Stamp upload failed: ${res.status} ${res.statusText}. ${errData.error || ''}`);
+          toast(`Stamp upload failed: ${res.status} ${res.statusText}. ${errData.error || ''}`);
           setStampImageStatus('error');
           setTimeout(() => setStampImageStatus('idle'), 5000);
         }
@@ -818,14 +809,14 @@ export default function Settings() {
     }
   };
 
-  const handleResetDocumentTerms = () => {
-    if (confirm('Clear all Document Terms & Conditions fields?')) {
+  const handleResetDocumentTerms = async () => {
+    if (await confirmAsync('Clear all Document Terms & Conditions fields?')) {
       setDocumentTerms(DEFAULT_DOCUMENT_TERMS);
     }
   };
 
   const handleBulkUpdateAllQuotes = async () => {
-    const confirmUpdate = window.confirm(
+    const confirmUpdate = await confirmAsync(
       '⚠️ ADMIN BULK DATABASE UPDATE:\n\nThis will update the Notes and Terms (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details, and Footer) across ALL quotations in the database to match the current fields shown here.\n\nQuote items, pricing, discounts, dates, and customer details will NOT be changed.\n\nAre you sure you want to proceed?'
     );
     if (!confirmUpdate) return;
@@ -849,12 +840,12 @@ export default function Settings() {
       const data = await res.json();
       if (res.ok && data.success) {
         setBulkUpdateResult(`Successfully updated ${data.count} quotation(s) in the database!`);
-        alert(`Success! Updated ${data.count} quotation(s) across the database with the current document terms.`);
+        toast(`Success! Updated ${data.count} quotation(s) across the database with the current document terms.`);
       } else {
         throw new Error(data.error || 'Failed to bulk update quotes');
       }
     } catch (err: any) {
-      alert(`Error updating quotes: ${err.message}`);
+      toast(`Error updating quotes: ${err.message}`);
     } finally {
       setBulkUpdatingQuotes(false);
     }
@@ -930,52 +921,6 @@ export default function Settings() {
     setTimeout(() => setMuFilterStatus('idle'), 3000);
   };
 
-  const handleRowReorderToggle = async (val: 'click' | 'drag') => {
-    setRowReorderMode(val);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'rowReorderMode', value: val })
-      });
-      setRowReorderStatus('success');
-    } catch {
-      setRowReorderStatus('error');
-    }
-    setTimeout(() => setRowReorderStatus('idle'), 2000);
-  };
-
-  const handleTranslationModeToggle = async (val: 'manual' | 'auto') => {
-    setTranslationMode(val);
-    localStorage.setItem('translationMode', val);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'translationMode', value: val })
-      });
-      setTranslationModeStatus('success');
-    } catch {
-      setTranslationModeStatus('error');
-    }
-    setTimeout(() => setTranslationModeStatus('idle'), 2000);
-  };
-
-  const handleDiscountModeToggle = async (val: 'amount' | 'percentage' | 'both') => {
-    setDiscountMode(val);
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: JSON.stringify({ key: 'discountMode', value: val })
-      });
-      setDiscountModeStatus('success');
-    } catch {
-      setDiscountModeStatus('error');
-    }
-    setTimeout(() => setDiscountModeStatus('idle'), 2000);
-  };
-
   const handlePdfSystemToggle = async (val: 'client' | 'server') => {
     setPdfSystem(val);
     try {
@@ -1011,7 +956,7 @@ export default function Settings() {
       const res = await fetch('/api/admin/backup');
       if (!res.ok) {
         const errorData = await res.json();
-        alert(`Failed to download backup: ${errorData.error}`);
+        toast(`Failed to download backup: ${errorData.error}`);
         return;
       }
       const blob = await res.blob();
@@ -1025,7 +970,7 @@ export default function Settings() {
       document.body.removeChild(a);
     } catch (error) {
       console.error('Download error:', error);
-      alert('Error downloading backup');
+      toast('Error downloading backup');
     }
   };
 
@@ -1037,7 +982,7 @@ export default function Settings() {
       });
       if (!res.ok) {
         const errorData = await res.json();
-        alert(`Failed to download ZIP backup: ${errorData.error}`);
+        toast(`Failed to download ZIP backup: ${errorData.error}`);
         setZipStatus('error');
         setTimeout(() => setZipStatus('idle'), 5000);
         return;
@@ -1086,9 +1031,9 @@ export default function Settings() {
       });
       if (res.ok) {
         fetchAutoBackups();
-        alert('Daily backup snapshot created successfully!');
+        toast('Daily backup snapshot created successfully!');
       } else {
-        alert('Failed to trigger daily backup snapshot.');
+        toast('Failed to trigger daily backup snapshot.');
       }
     } catch (err) {
       console.error('Error triggering daily backup snapshot:', err);
@@ -1101,7 +1046,7 @@ export default function Settings() {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       if (!res.ok) {
-        alert('Failed to download automated backup file.');
+        toast('Failed to download automated backup file.');
         return;
       }
       const blob = await res.blob();
@@ -1146,7 +1091,7 @@ export default function Settings() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm('CRITICAL WARNING: Restoring from a Complete System Archive (ZIP) will completely overwrite your current database and settings. This cannot be undone. Are you sure you want to proceed?')) {
+    if (!await confirmAsync('CRITICAL WARNING: Restoring from a Complete System Archive (ZIP) will completely overwrite your current database and settings. This cannot be undone. Are you sure you want to proceed?')) {
       e.target.value = '';
       return;
     }
@@ -1163,17 +1108,17 @@ export default function Settings() {
       });
       if (res.ok) {
         setRestoreStatus('success');
-        alert('System restored successfully! The page will now reload to apply all restored database changes.');
+        toast('System restored successfully! The page will now reload to apply all restored database changes.');
         window.location.reload();
       } else {
         const errorData = await res.json();
-        alert(`System restore failed: ${errorData.error || 'Unknown error'}`);
+        toast(`System restore failed: ${errorData.error || 'Unknown error'}`);
         setRestoreStatus('error');
         setTimeout(() => setRestoreStatus('idle'), 5000);
       }
     } catch (err) {
       console.error('ZIP restore error:', err);
-      alert('System restore failed due to a network error.');
+      toast('System restore failed due to a network error.');
       setRestoreStatus('error');
       setTimeout(() => setRestoreStatus('idle'), 5000);
     } finally {
@@ -1200,7 +1145,7 @@ export default function Settings() {
   };
 
   const handlePerformUpdate = async () => {
-    if (!confirm('Are you sure you want to update the system? The server will restart and you will be logged out.')) return;
+    if (!await confirmAsync('Are you sure you want to update the system? The server will restart and you will be logged out.')) return;
     setPerformUpdateStatus('loading');
     setUpdateError(null);
     try {
@@ -1211,7 +1156,7 @@ export default function Settings() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setPerformUpdateStatus('success');
-        alert('Update successful! The system is restarting. Please wait a few seconds and then reload the page.');
+        toast('Update successful! The system is restarting. Please wait a few seconds and then reload the page.');
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         window.location.reload();
@@ -1248,2156 +1193,2035 @@ export default function Settings() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <Database className="text-indigo-600" />
-          <h2 className="text-xl font-semibold text-gray-800">Database Management</h2>
-        </div>
+    <div className="max-w-6xl mx-auto md:flex md:items-start md:gap-6">
+      <SettingsNav active={activeSection} onSelect={selectSection} />
 
-        <div className="p-6 space-y-8">
-          {/* Export Section */}
-          <div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Export Database</h3>
-            <p className="text-gray-600 mb-4 text-sm">
-              Download a complete backup of your customers, products, and quotes data in Excel format.
-            </p>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={handleExportDB}
-                disabled={exportStatus === 'loading'}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-70"
-              >
-                {exportStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                {exportStatus === 'loading' ? 'Exporting...' : 'Export Backup'}
-              </button>
+      <div className="flex-1 min-w-0 space-y-6">
+        <SectionHeader section={activeSection} />
 
-              {exportStatus === 'success' && (
-                <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
-                  <CheckCircle2 size={16} /> Export successful
-                </span>
-              )}
-              {exportStatus === 'error' && (
-                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                  <XCircle size={16} /> Export failed
-                </span>
-              )}
-            </div>
+        {showSection('company') && (
+          <>
+              <CompanyProfileSettings />
 
-            <h3 className="text-lg font-medium text-gray-900 mt-8 mb-2">System Backup (Raw DB)</h3>
-            <p className="text-gray-600 mb-4 text-sm">
-              Directly download the underlying SQLite `.db` master file.
-            </p>
-            <button
-              onClick={handleDownloadSystemDB}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
-            >
-              <Database size={18} /> Download Master File
-            </button>
-
-            <h3 className="text-lg font-medium text-purple-900 mt-8 mb-2">Complete System Archive (ZIP Backup)</h3>
-            <p className="text-gray-600 mb-4 text-sm">
-              Download a comprehensive `.zip` package containing your raw database (`quotes.db`), the clean Excel spreadsheet data, and all uploaded company logos, footers, and stamps as actual image files.
-            </p>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={handleDownloadZipBackup}
-                disabled={zipStatus === 'loading'}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-70"
-              >
-                {zipStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                {zipStatus === 'loading' ? 'Archiving...' : 'Download ZIP Backup'}
-              </button>
-
-              {zipStatus === 'success' && (
-                <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
-                  <CheckCircle2 size={16} /> Archive created successfully
-                </span>
-              )}
-              {zipStatus === 'error' && (
-                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                  <XCircle size={16} /> Failed to create archive
-                </span>
-              )}
-            </div>
-          </div>
-
-          <hr className="border-gray-200" />
-
-          {/* Import Section */}
-          <div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center gap-2">
-              Import Database
-              <AlertTriangle size={18} className="text-amber-500" />
-            </h3>
-            <p className="text-gray-600 mb-4 text-sm">
-              Restore your database from a previous Excel backup file.
-              <strong className="text-red-600 block mt-1">Warning: This will completely replace all existing data.</strong>
-            </p>
-
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <input
-                  type="file"
-                  accept=".xlsx, .xls"
-                  onChange={handleImportDB}
-                  disabled={importStatus === 'loading'}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                />
-                <button
-                  disabled={importStatus === 'loading'}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                >
-                  {importStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-                  {importStatus === 'loading' ? 'Importing...' : 'Select Backup File'}
-                </button>
-              </div>
-
-              {importStatus === 'success' && (
-                <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
-                  <CheckCircle2 size={16} /> Import successful! Reloading...
-                </span>
-              )}
-              {importStatus === 'error' && (
-                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                  <XCircle size={16} /> Import failed
-                </span>
-              )}
-            </div>
-          </div>
-
-          <hr className="border-gray-200" />
-
-          {/* ZIP Restore Section */}
-          <div>
-            <h3 className="text-lg font-medium text-purple-900 mb-2 flex items-center gap-2">
-              ZIP Restore System (Complete Disaster Recovery)
-              <AlertTriangle size={18} className="text-purple-500" />
-            </h3>
-            <p className="text-gray-600 mb-4 text-sm">
-              Upload a previously generated system archive `.zip` to restore the complete master database, brand setups, and media assets in a single step.
-              <strong className="text-red-600 block mt-1">Warning: This completely overwrites all current system quotes, supplier lists, and configuration settings.</strong>
-            </p>
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <input
-                  type="file"
-                  accept=".zip"
-                  onChange={handleRestoreZip}
-                  disabled={restoreStatus === 'loading'}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                />
-                <button
-                  disabled={restoreStatus === 'loading'}
-                  className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
-                >
-                  {restoreStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-                  {restoreStatus === 'loading' ? 'Restoring System...' : 'Upload ZIP Backup Archive'}
-                </button>
-              </div>
-              {restoreStatus === 'success' && (
-                <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
-                  <CheckCircle2 size={16} /> Restore successful! Reloading...
-                </span>
-              )}
-              {restoreStatus === 'error' && (
-                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                  <XCircle size={16} /> Restore failed
-                </span>
-              )}
-            </div>
-          </div>
-
-          <hr className="border-gray-200" />
-
-          {/* Database Maintenance & Compaction */}
-          <div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Optimize & Compact Database</h3>
-            <p className="text-gray-600 mb-4 text-sm">
-              Rebuild indices, defragment, and vacuum the underlying SQLite database to reduce file size and speed up system searches.
-            </p>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={handleOptimizeDB}
-                disabled={optimizeStatus === 'loading'}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50"
-              >
-                {optimizeStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                {optimizeStatus === 'loading' ? 'Compacting...' : 'Run Database Compaction'}
-              </button>
-              
-              {optimizeStatus === 'success' && optimizeResult && (
-                <div className="text-sm font-medium text-emerald-600">
-                  <div className="flex items-center gap-1">
-                    <CheckCircle2 size={16} /> Compaction complete!
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5 font-normal">
-                    Saved {(optimizeResult.savedBytes / 1024).toFixed(1)} KB (Old size: {(optimizeResult.oldSize / 1024).toFixed(0)} KB → New size: {(optimizeResult.newSize / 1024).toFixed(0)} KB)
-                  </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <ImageIcon className="text-indigo-600" />
+                  <h2 className="text-xl font-semibold text-gray-800">Logo Setup</h2>
                 </div>
-              )}
-              {optimizeStatus === 'error' && (
-                <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                  <XCircle size={16} /> Optimization failed
-                </span>
-              )}
-            </div>
-          </div>
+                <div className="p-6">
+                  <p className="text-gray-600 mb-4 text-sm">
+                    Upload your company logo. This logo will automatically appear on the Quote Form and in exported PDFs.
+                  </p>
 
-          <hr className="border-gray-200" />
+                  <div className="flex items-start gap-8">
+                    <div className="flex-1">
+                      <div className="relative inline-block">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleLogoUpload}
+                          disabled={logoStatus === 'loading'}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <button
+                          disabled={logoStatus === 'loading'}
+                          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                        >
+                          {logoStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                          {logoStatus === 'loading' ? 'Uploading...' : 'Upload New Logo'}
+                        </button>
+                      </div>
 
-          {/* Rolling Daily Backups with Retention */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">Rolling Daily Backups</h3>
-                <p className="text-gray-600 text-sm mt-0.5">
-                  Automatic non-blocking rolling backup snapshots taken daily. The system keeps the last 7 days of backups.
-                </p>
-              </div>
-              <button
-                onClick={handleTriggerAutoBackup}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-lg transition-colors border border-gray-200"
-              >
-                <RefreshCw size={14} /> Trigger Today's Snapshot
-              </button>
-            </div>
+                      <div className="mt-3 h-6">
+                        {logoStatus === 'success' && (
+                          <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                            <CheckCircle2 size={16} /> Logo updated successfully
+                          </span>
+                        )}
+                        {logoStatus === 'error' && (
+                          <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                            <XCircle size={16} /> Failed to upload logo
+                          </span>
+                        )}
+                      </div>
 
-            {autoBackupsLoading ? (
-              <div className="flex items-center justify-center py-6 text-gray-400 gap-2">
-                <Loader2 size={20} className="animate-spin" />
-                <span className="text-sm">Loading rolling backups list...</span>
-              </div>
-            ) : autoBackups.length === 0 ? (
-              <div className="text-center py-6 border-2 border-dashed border-gray-100 rounded-xl text-gray-400 text-sm">
-                No rolling daily backups available yet.
-              </div>
-            ) : (
-              <div className="border border-gray-200 rounded-xl overflow-hidden bg-gray-50 divide-y divide-gray-200 max-h-60 overflow-y-auto">
-                {autoBackups.map((bk) => (
-                  <div key={bk.filename} className="flex items-center justify-between p-3 text-sm hover:bg-white transition-colors">
-                    <div className="flex items-center gap-3">
-                      <Database className="text-gray-400" size={18} />
-                      <div>
-                        <div className="font-semibold text-gray-800 font-mono text-xs">{bk.filename}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          Created: {new Date(bk.createdAt).toLocaleString()}
+                      <div className="mt-6 border-t border-gray-100 pt-6">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Adjust Logo Size
+                        </label>
+                        <div className="flex items-center gap-4">
+                          <input
+                            type="range"
+                            min="16"
+                            max="64"
+                            value={logoSize}
+                            onChange={(e) => setLogoSize(parseInt(e.target.value, 10))}
+                            onMouseUp={async () => {
+                              setLogoSizeStatus('loading');
+                              try {
+                                const res = await fetch('/api/settings', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                                  body: JSON.stringify({ key: 'logoSize', value: logoSize.toString() })
+                                });
+                                if (res.ok) {
+                                  setLogoSizeStatus('success');
+                                  setTimeout(() => setLogoSizeStatus('idle'), 3000);
+                                } else {
+                                  setLogoSizeStatus('error');
+                                }
+                              } catch (e) {
+                                setLogoSizeStatus('error');
+                              }
+                            }}
+                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                          />
+                          <span className="text-gray-600 text-sm font-mono w-8">{logoSize}</span>
+                        </div>
+                        <div className="mt-2 h-4">
+                          {logoSizeStatus === 'success' && (
+                            <span className="text-emerald-600 text-xs font-medium">Size saved</span>
+                          )}
+                          {logoSizeStatus === 'error' && (
+                            <span className="text-red-600 text-xs font-medium">Failed to save size</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-6 border-t border-gray-100 pt-6">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Adjust Terms Font Size (px)
+                        </label>
+                        <div className="flex items-center gap-4">
+                          <input
+                            type="range"
+                            min="8"
+                            max="24"
+                            value={termsFontSize}
+                            onChange={(e) => setTermsFontSize(parseInt(e.target.value, 10))}
+                            onMouseUp={async () => {
+                              setTermsFontSizeStatus('loading');
+                              try {
+                                const res = await fetch('/api/settings', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                                  body: JSON.stringify({ key: 'termsFontSize', value: termsFontSize.toString() })
+                                });
+                                if (res.ok) {
+                                  setTermsFontSizeStatus('success');
+                                  setTimeout(() => setTermsFontSizeStatus('idle'), 3000);
+                                } else {
+                                  setTermsFontSizeStatus('error');
+                                }
+                              } catch (e) {
+                                setTermsFontSizeStatus('error');
+                              }
+                            }}
+                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                          />
+                          <span className="text-gray-600 text-sm font-mono w-8">{termsFontSize}px</span>
+                        </div>
+                        <div className="mt-2 h-4">
+                          {termsFontSizeStatus === 'success' && (
+                            <span className="text-emerald-600 text-xs font-medium">Size saved</span>
+                          )}
+                          {termsFontSizeStatus === 'error' && (
+                            <span className="text-red-600 text-xs font-medium">Failed to save size</span>
+                          )}
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <span className="text-xs text-gray-500 font-medium">{(bk.size / 1024).toFixed(0)} KB</span>
-                      <button
-                        onClick={() => handleDownloadAutoBackup(bk.filename)}
-                        className="p-1.5 bg-white text-indigo-600 hover:text-indigo-800 rounded-lg hover:shadow-sm border border-gray-200 transition-all"
-                        title="Download Snapshot"
+
+                    <div className="w-48 h-48 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50 overflow-hidden shrink-0">
+                      {currentLogo ? (
+                        <img src={currentLogo} alt="Current Logo" className="max-w-full max-h-full object-contain p-2" />
+                      ) : (
+                        <span className="text-gray-400 text-sm text-center px-4">No logo uploaded</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer Image Setup */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <ImageIcon className="text-indigo-600" />
+                  <h2 className="text-xl font-semibold text-gray-800">Footer Image Setup</h2>
+                </div>
+                <div className="p-6">
+                  <p className="text-gray-600 mb-4 text-sm">
+                    Upload a footer image (like a signature, stamp, or company details block). This image will automatically appear at the bottom of the Quote Form and exported PDFs.
+                  </p>
+
+                  <div className="flex items-start gap-8">
+                    <div className="flex-1">
+                      <div className="relative inline-block">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleFooterUpload}
+                          disabled={footerImageStatus === 'loading'}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <button
+                          disabled={footerImageStatus === 'loading'}
+                          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                        >
+                          {footerImageStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                          {footerImageStatus === 'loading' ? 'Uploading...' : 'Upload New Footer'}
+                        </button>
+                      </div>
+
+                      <div className="mt-3 h-6">
+                        {footerImageStatus === 'success' && (
+                          <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                            <CheckCircle2 size={16} /> Footer image updated successfully
+                          </span>
+                        )}
+                        {footerImageStatus === 'error' && (
+                          <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                            <XCircle size={16} /> Failed to upload footer image
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-6 border-t border-gray-100 pt-6">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Adjust Footer Image Height
+                        </label>
+                        <div className="flex items-center gap-4">
+                          <input
+                            type="range"
+                            min="15"
+                            max="120"
+                            value={footerSize}
+                            onChange={(e) => setFooterSize(parseInt(e.target.value, 10))}
+                            onMouseUp={async () => {
+                              setFooterSizeStatus('loading');
+                              try {
+                                const res = await fetch('/api/settings', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                                  body: JSON.stringify({ key: 'footerSize', value: footerSize.toString() })
+                                });
+                                if (res.ok) {
+                                  setFooterSizeStatus('success');
+                                  setTimeout(() => setFooterSizeStatus('idle'), 3000);
+                                } else {
+                                  setFooterSizeStatus('error');
+                                }
+                              } catch (e) {
+                                setFooterSizeStatus('error');
+                              }
+                            }}
+                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                          />
+                          <span className="text-gray-600 text-sm font-mono w-8">{footerSize}</span>
+                        </div>
+                        <div className="mt-2 h-4">
+                          {footerSizeStatus === 'success' && (
+                            <span className="text-emerald-600 text-xs font-medium">Height saved</span>
+                          )}
+                          {footerSizeStatus === 'error' && (
+                            <span className="text-red-600 text-xs font-medium">Failed to save height</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="w-64 h-24 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50 overflow-hidden shrink-0">
+                      {currentFooterImage ? (
+                        <img src={currentFooterImage} alt="Current Footer" className="max-w-full max-h-full object-contain p-2" />
+                      ) : (
+                        <span className="text-gray-400 text-sm text-center px-4">No footer uploaded</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Stamp Image Setup */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <ImageIcon className="text-indigo-600" />
+                  <h2 className="text-xl font-semibold text-gray-800">Company Stamp Setup</h2>
+                </div>
+                <div className="p-6">
+                  <p className="text-gray-600 mb-4 text-sm">
+                    Upload your official company stamp (PNG with transparent background recommended). It will appear centered above the footer on documents and is included when using <strong>Export PDF + Stamp</strong>.
+                  </p>
+                  <div className="flex items-start gap-8">
+                    <div className="flex-1">
+                      <div className="relative inline-block">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleStampUpload}
+                          disabled={stampImageStatus === 'loading'}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <button
+                          disabled={stampImageStatus === 'loading'}
+                          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                        >
+                          {stampImageStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                          {stampImageStatus === 'loading' ? 'Uploading...' : 'Upload Stamp Image'}
+                        </button>
+                      </div>
+                      <div className="mt-3 h-6">
+                        {stampImageStatus === 'success' && (
+                          <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                            <CheckCircle2 size={16} /> Stamp image updated successfully
+                          </span>
+                        )}
+                        {stampImageStatus === 'error' && (
+                          <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                            <XCircle size={16} /> Failed to upload stamp image
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-6 border-t border-gray-100 pt-6 space-y-5">
+                        {/* Stamp Width & Height / Shape controls */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h3 className="text-sm font-semibold text-gray-800">Stamp Shape & Dimensions</h3>
+                              <p className="text-xs text-gray-500">Fine-tune width and height manually to eliminate any oval distortion.</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newH = Math.round(stampWidth / 1.37055);
+                                setStampHeight(newH);
+                                saveStampDimensions(stampWidth, newH);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all"
+                              title="Automatically calculate height so the stamp graphic forms a perfect 1:1 circle" aria-label="Automatically calculate height so the stamp graphic forms a perfect 1:1 circle"
+                            >
+                              <Sparkles size={14} /> Auto-Fix to 1:1 Circle
+                            </button>
+                          </div>
+
+                          <div>
+                            <div className="flex justify-between items-center mb-1.5">
+                              <label className="text-xs font-medium text-gray-700">Stamp Width (px)</label>
+                              <span className="text-xs font-mono font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{stampWidth}px</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="range" min="50" max="350" value={stampWidth}
+                                onChange={(e) => setStampWidth(parseInt(e.target.value, 10))}
+                                onMouseUp={() => saveStampDimensions(stampWidth, stampHeight)}
+                                onTouchEnd={() => saveStampDimensions(stampWidth, stampHeight)}
+                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="flex justify-between items-center mb-1.5">
+                              <label className="text-xs font-medium text-gray-700">Stamp Height (px)</label>
+                              <span className="text-xs font-mono font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{stampHeight}px</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="range" min="40" max="300" value={stampHeight}
+                                onChange={(e) => setStampHeight(parseInt(e.target.value, 10))}
+                                onMouseUp={() => saveStampDimensions(stampWidth, stampHeight)}
+                                onTouchEnd={() => saveStampDimensions(stampWidth, stampHeight)}
+                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Offsets */}
+                        <div>
+                          <div className="flex justify-between items-center mb-1.5">
+                            <label className="text-sm font-medium text-gray-700">
+                              Horizontal Position Offset (px) - Move Right/Left
+                            </label>
+                            <span className="text-xs font-mono text-gray-600 w-12 text-right">{stampOffsetX}px</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <input
+                              type="range" min="-800" max="800" value={stampOffsetX}
+                              onChange={(e) => setStampOffsetX(parseInt(e.target.value, 10))}
+                              onMouseUp={async () => {
+                                setStampPositionStatus('loading');
+                                try {
+                                  const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampOffsetX', value: stampOffsetX.toString() }) });
+                                  if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
+                                  else setStampPositionStatus('error');
+                                } catch { setStampPositionStatus('error'); }
+                              }}
+                              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between items-center mb-1.5">
+                            <label className="text-sm font-medium text-gray-700">
+                              Vertical Position Offset (px) - Move Up/Down
+                            </label>
+                            <span className="text-xs font-mono text-gray-600 w-12 text-right">{stampOffsetY}px</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <input
+                              type="range" min="-400" max="400" value={stampOffsetY}
+                              onChange={(e) => setStampOffsetY(parseInt(e.target.value, 10))}
+                              onMouseUp={async () => {
+                                setStampPositionStatus('loading');
+                                try {
+                                  const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampOffsetY', value: stampOffsetY.toString() }) });
+                                  if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
+                                  else setStampPositionStatus('error');
+                                } catch { setStampPositionStatus('error'); }
+                              }}
+                              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="h-4">
+                          {stampPositionStatus === 'loading' && <span className="text-indigo-600 text-xs font-medium flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving...</span>}
+                          {stampPositionStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Layout saved</span>}
+                          {stampPositionStatus === 'error' && <span className="text-red-600 text-xs font-medium">Failed to save layout</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Live Preview with Circular Alignment Guide */}
+                    <div className="flex flex-col items-center gap-2.5 shrink-0">
+                      <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Live Alignment Guide</span>
+                      <div
+                        className="w-44 h-44 border-2 border-dashed border-indigo-400 rounded-full flex items-center justify-center bg-slate-50 relative overflow-hidden shadow-sm"
+                        title="The dashed border represents a true 1:1 circle guide. Adjust Width & Height until the stamp fills it evenly."
                       >
-                        <Download size={15} />
+                        {currentStampImage ? (
+                          <img
+                            src={currentStampImage}
+                            alt="Current Stamp"
+                            style={{
+                              width: `${Math.round(stampWidth * 1.15)}px`,
+                              height: `${Math.round(stampHeight * 1.15)}px`,
+                              maxWidth: '96%',
+                              maxHeight: '96%',
+                              objectFit: 'fill',
+                            }}
+                            className="transition-all duration-100"
+                          />
+                        ) : (
+                          <span className="text-gray-400 text-xs text-center px-3">No stamp uploaded</span>
+                        )}
+                      </div>
+                      {currentStampImage && (
+                        <div className="text-center">
+                          {Math.abs(stampWidth / stampHeight - 1.37055) < 0.05 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 size={12} /> True Circle (1:1)
+                            </span>
+                          ) : stampWidth / stampHeight > 1.37055 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                              ↔ Stretched Horizontally
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                              ↕ Stretched Vertically
+                            </span>
+                          )}
+                          <p className="text-[10px] text-gray-400 mt-1 max-w-[170px]">
+                            Dashed ring is a circular guide for checking symmetry
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-xl font-semibold text-gray-800">Theme Colors Setup</h2>
+                  </div>
+                  <button
+                    onClick={handleThemeSave}
+                    disabled={themeStatus === 'loading'}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                  >
+                    {themeStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Colors'}
+                  </button>
+                </div>
+                <div className="p-6">
+                  <p className="text-gray-600 mb-6 text-sm">
+                    Customize the colors used in the Quote Form and exported PDFs.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Table Header Background</label>
+                      <div className="flex items-center gap-3">
+                        <input type="color" value={themeColors.headerBg} onChange={e => setThemeColors({ ...themeColors, headerBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                        <span className="font-mono text-gray-500 text-sm">{themeColors.headerBg}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Table Header Text</label>
+                      <div className="flex items-center gap-3">
+                        <input type="color" value={themeColors.headerText} onChange={e => setThemeColors({ ...themeColors, headerText: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                        <span className="font-mono text-gray-500 text-sm">{themeColors.headerText}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Alternating Row (Stripe)</label>
+                      <div className="flex items-center gap-3">
+                        <input type="color" value={themeColors.stripeBg} onChange={e => setThemeColors({ ...themeColors, stripeBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                        <span className="font-mono text-gray-500 text-sm">{themeColors.stripeBg}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Totals Box Background</label>
+                      <div className="flex items-center gap-3">
+                        <input type="color" value={themeColors.totalsBg} onChange={e => setThemeColors({ ...themeColors, totalsBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
+                        <span className="font-mono text-gray-500 text-sm">{themeColors.totalsBg}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-6 h-6">
+                    {themeStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> Theme colors saved successfully</span>}
+                    {themeStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save theme colors</span>}
+                  </div>
+                </div>
+              </div>
+          </>
+        )}
+
+        {showSection('documents') && (
+          <>
+              {/* Document Font Sizes Setup */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Type className="text-indigo-600" />
+                    <div>
+                      <h2 className="text-xl font-semibold text-gray-800">Document Font Sizes Setup</h2>
+                      <p className="text-gray-500 text-xs mt-0.5">Adjust text font sizes individually for line items table, notes, payment, warranty, bank details, and other terms.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {fontSizeSaveStatus === 'loading' && <span className="text-xs text-indigo-600 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving...</span>}
+                    {fontSizeSaveStatus === 'success' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
+                    {fontSizeSaveStatus === 'error' && <span className="text-xs text-red-600 flex items-center gap-1"><XCircle size={14} /> Save failed</span>}
+                  </div>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+                    {/* Table Line Items */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-semibold text-sm text-gray-800">📋 Table Line Items</span>
+                          <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{tableFontSize}px</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3">Item names, descriptions (EN/AR), units, and prices in the items table.</p>
+                        <input
+                          type="range" min="9" max="22" value={tableFontSize}
+                          onChange={(e) => setTableFontSize(parseInt(e.target.value, 10))}
+                          onMouseUp={() => handleSaveFontSize('tableFontSize', tableFontSize)}
+                          onTouchEnd={() => handleSaveFontSize('tableFontSize', tableFontSize)}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div className="mt-3 pt-2.5 border-t border-slate-200">
+                        <p className="text-gray-700 truncate font-medium" style={{ fontSize: `${tableFontSize}px` }}>Sample Product / وصف تجريبي</p>
+                      </div>
+                    </div>
+
+                    {/* Note Section */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-semibold text-sm text-gray-800">📝 Notes Section</span>
+                          <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{noteFontSize}px</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3">Special quotation notes and instructions below the table.</p>
+                        <input
+                          type="range" min="8" max="24" value={noteFontSize}
+                          onChange={(e) => setNoteFontSize(parseInt(e.target.value, 10))}
+                          onMouseUp={() => handleSaveFontSize('noteFontSize', noteFontSize)}
+                          onTouchEnd={() => handleSaveFontSize('noteFontSize', noteFontSize)}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div className="mt-3 pt-2.5 border-t border-slate-200">
+                        <p className="text-gray-700 truncate" style={{ fontSize: `${noteFontSize}px` }}>NOTE: Work will be change order / ملاحظة</p>
+                      </div>
+                    </div>
+
+                    {/* Payment Terms */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-semibold text-sm text-gray-800">💳 Payment Terms</span>
+                          <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{paymentFontSize}px</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3">Payment conditions and schedule clause.</p>
+                        <input
+                          type="range" min="8" max="24" value={paymentFontSize}
+                          onChange={(e) => setPaymentFontSize(parseInt(e.target.value, 10))}
+                          onMouseUp={() => handleSaveFontSize('paymentFontSize', paymentFontSize)}
+                          onTouchEnd={() => handleSaveFontSize('paymentFontSize', paymentFontSize)}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div className="mt-3 pt-2.5 border-t border-slate-200">
+                        <p className="text-gray-700 truncate" style={{ fontSize: `${paymentFontSize}px` }}>PAYMENT: As per contract / حسب العقد</p>
+                      </div>
+                    </div>
+
+                    {/* Warranty Terms */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-semibold text-sm text-gray-800">🛡️ Warranty Terms</span>
+                          <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{warrantyFontSize}px</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3">Warranty coverage, period, and conditions clause.</p>
+                        <input
+                          type="range" min="8" max="24" value={warrantyFontSize}
+                          onChange={(e) => setWarrantyFontSize(parseInt(e.target.value, 10))}
+                          onMouseUp={() => handleSaveFontSize('warrantyFontSize', warrantyFontSize)}
+                          onTouchEnd={() => handleSaveFontSize('warrantyFontSize', warrantyFontSize)}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div className="mt-3 pt-2.5 border-t border-slate-200">
+                        <p className="text-gray-700 truncate" style={{ fontSize: `${warrantyFontSize}px` }}>WARRANTY: 2 Years warranty / ضمان سنتين</p>
+                      </div>
+                    </div>
+
+                    {/* Bank Details */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-semibold text-sm text-gray-800">🏦 Bank Details</span>
+                          <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{bankDetailsFontSize}px</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3">Bank account numbers, IBAN, and beneficiary info.</p>
+                        <input
+                          type="range" min="8" max="24" value={bankDetailsFontSize}
+                          onChange={(e) => setBankDetailsFontSize(parseInt(e.target.value, 10))}
+                          onMouseUp={() => handleSaveFontSize('bankDetailsFontSize', bankDetailsFontSize)}
+                          onTouchEnd={() => handleSaveFontSize('bankDetailsFontSize', bankDetailsFontSize)}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div className="mt-3 pt-2.5 border-t border-slate-200">
+                        <p className="text-gray-700 truncate font-mono" style={{ fontSize: `${bankDetailsFontSize}px` }}>IBAN: SA0230400... / الحساب</p>
+                      </div>
+                    </div>
+
+                    {/* Other Terms (Manpower, Mobilization, Duration, Custom) */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-semibold text-sm text-gray-800">⏱️ Other Terms</span>
+                          <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{otherTermsFontSize}px</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3">Manpower, Mobilization, Project Duration, and Custom Fields.</p>
+                        <input
+                          type="range" min="8" max="24" value={otherTermsFontSize}
+                          onChange={(e) => setOtherTermsFontSize(parseInt(e.target.value, 10))}
+                          onMouseUp={() => handleSaveFontSize('otherTermsFontSize', otherTermsFontSize)}
+                          onTouchEnd={() => handleSaveFontSize('otherTermsFontSize', otherTermsFontSize)}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                      <div className="mt-3 pt-2.5 border-t border-slate-200">
+                        <p className="text-gray-700 truncate" style={{ fontSize: `${otherTermsFontSize}px` }}>DURATION: 2 Weeks / المدة أسبوعين</p>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Terms Top Gap Control */}
+                  <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-semibold text-sm text-gray-800">📏 Gap: Items Table → Terms/Notes</span>
+                      <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{termsTopGap}pt</span>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-3">Controls the vertical spacing between the line items table and the terms/notes section below it in the PDF.</p>
+                    <input
+                      type="range" min="0" max="150" value={termsTopGap}
+                      onChange={(e) => setTermsTopGap(parseInt(e.target.value, 10))}
+                      onMouseUp={() => handleSaveFontSize('termsTopGap', termsTopGap)}
+                      onTouchEnd={() => handleSaveFontSize('termsTopGap', termsTopGap)}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Default Document Terms & Conditions */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <FileText className="text-indigo-600" />
+                    <div>
+                      <h2 className="text-xl font-semibold text-gray-800">Default Quotation Terms & Conditions</h2>
+                      <p className="text-xs text-gray-500 mt-0.5">Configure default terms, notes, and bank details for new quotations</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAutoTranslateTerms}
+                      disabled={translatingTerms}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-gray-100 text-gray-700 text-sm font-medium rounded-lg transition-colors border border-gray-300 disabled:opacity-50"
+                      title="Auto-translate English text to Arabic" aria-label="Auto-translate English text to Arabic"
+                    >
+                      <RefreshCw size={15} className={translatingTerms ? "animate-spin" : ""} />
+                      {translatingTerms ? 'Translating...' : 'Translate to Arabic'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetDocumentTerms}
+                      className="px-3 py-2 bg-white hover:bg-red-50 hover:text-red-600 text-gray-600 text-sm font-medium rounded-lg transition-colors border border-gray-300"
+                      title="Clear all fields" aria-label="Clear all fields"
+                    >
+                      Clear Fields
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveDocumentTerms}
+                      disabled={termsStatus === 'loading'}
+                      className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 shadow-sm"
+                    >
+                      {termsStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                      Save Terms Defaults
+                    </button>
+                    {user.role === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={handleBulkUpdateAllQuotes}
+                        disabled={bulkUpdatingQuotes}
+                        className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                        title="Update all existing quotes in the database with these terms" aria-label="Update all existing quotes in the database with these terms"
+                      >
+                        {bulkUpdatingQuotes ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}
+                        <span>{bulkUpdatingQuotes ? 'Updating DB...' : 'Update All Quotes in DB'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-6 space-y-6">
+                  <p className="text-gray-600 text-sm">
+                    These values serve as the standard template for every new quotation. Changes here automatically populate new quotes and when clicking "Clear Form".
+                  </p>
+
+                  {user.role === 'admin' && (
+                    <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm text-amber-900 dark:text-amber-200">
+                      <div className="flex items-start sm:items-center gap-2.5">
+                        <Shield size={20} className="shrink-0 text-amber-600 mt-0.5 sm:mt-0" />
+                        <div>
+                          <div className="font-semibold text-amber-900 dark:text-amber-100">Admin Database Sync:</div>
+                          <div className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                            Have older quotes saved in the database with outdated terms or notes? Click below to update notes, payment, warranty, duration, and bank details across all existing quotes in the database.
+                          </div>
+                          {bulkUpdateResult && (
+                            <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mt-1.5 flex items-center gap-1">
+                              <CheckCircle2 size={14} /> {bulkUpdateResult}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleBulkUpdateAllQuotes}
+                        disabled={bulkUpdatingQuotes}
+                        className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+                      >
+                        {bulkUpdatingQuotes ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                        <span>{bulkUpdatingQuotes ? 'Updating All Quotes...' : 'Update All Quotes in DB'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {user.role === 'admin' && (
+                    <div className="flex items-center justify-between p-3.5 bg-gray-50 dark:bg-gray-800/60 rounded-xl border border-gray-200 dark:border-gray-700 text-xs">
+                      <div>
+                        <span className="font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                          <RefreshCw size={13} className="text-indigo-600" />
+                          Show &quot;Update Terms&quot; button in quote editor
+                        </span>
+                        <p className="text-gray-500 dark:text-gray-400 text-[11px] mt-0.5">
+                          When enabled, displays a button on quotes so users can quickly update notes and terms to these defaults.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleWorkflowToggle('updateTermsButton')}
+                        className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ml-4 ${workflowVisibility.updateTermsButton ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                        title={workflowVisibility.updateTermsButton ? 'Click to hide Update Terms button on quotes' : 'Click to show Update Terms button on quotes'} aria-label={workflowVisibility.updateTermsButton ? 'Click to hide Update Terms button on quotes' : 'Click to show Update Terms button on quotes'}
+                      >
+                        <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${workflowVisibility.updateTermsButton ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 1. Note Header & Note */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-200 pb-2">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        1. Notice / Remarks (NOTE:)
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={documentTerms.showNote !== false}
+                            onChange={e => setDocumentTerms({ ...documentTerms, showNote: e.target.checked })}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                          />
+                          Show by default
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-xs text-gray-500 font-medium">Header Label:</label>
+                          <input
+                            type="text"
+                            value={documentTerms.noteHeader}
+                            onChange={e => setDocumentTerms({ ...documentTerms, noteHeader: e.target.value })}
+                            placeholder="NOTE:"
+                            className="px-2.5 py-1 text-xs border border-gray-300 rounded font-bold uppercase focus:ring-1 focus:ring-indigo-500 bg-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English Note</label>
+                        <textarea
+                          rows={3}
+                          value={documentTerms.note}
+                          onChange={e => setDocumentTerms({ ...documentTerms, note: e.target.value })}
+                          placeholder="Notice text in English..."
+                          className="w-full p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Note (ملاحظة بالعربية)</label>
+                        <textarea
+                          rows={3}
+                          dir="rtl"
+                          value={documentTerms.noteAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, noteAr: e.target.value })}
+                          placeholder="نص الملاحظة بالعربية..."
+                          className="w-full p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. Payment */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        2. Payment Terms (PAYMENT:)
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={documentTerms.showPayment !== false}
+                          onChange={e => setDocumentTerms({ ...documentTerms, showPayment: e.target.checked })}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        Show by default
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                        <input
+                          type="text"
+                          value={documentTerms.payment}
+                          onChange={e => setDocumentTerms({ ...documentTerms, payment: e.target.value })}
+                          placeholder="e.g. Full Payment in ADVANCE"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white italic"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (شروط الدفع)</label>
+                        <input
+                          type="text"
+                          dir="rtl"
+                          value={documentTerms.paymentAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, paymentAr: e.target.value })}
+                          placeholder="مثال: الدفع الكامل مقدما"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. Warranty */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        3. Warranty Terms (WARRANTY:)
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={documentTerms.showWarranty !== false}
+                          onChange={e => setDocumentTerms({ ...documentTerms, showWarranty: e.target.checked })}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        Show by default
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                        <input
+                          type="text"
+                          value={documentTerms.warranty}
+                          onChange={e => setDocumentTerms({ ...documentTerms, warranty: e.target.value })}
+                          placeholder="e.g. 2 YEARS limited warranty"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (الضمان)</label>
+                        <input
+                          type="text"
+                          dir="rtl"
+                          value={documentTerms.warrantyAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, warrantyAr: e.target.value })}
+                          placeholder="مثال: ضمان محدود لمدة عامين"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4. Manpower */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        4. Manpower (MANPOWER:)
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={documentTerms.showManpower !== false}
+                          onChange={e => setDocumentTerms({ ...documentTerms, showManpower: e.target.checked })}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        Show by default
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                        <input
+                          type="text"
+                          value={documentTerms.manpower}
+                          onChange={e => setDocumentTerms({ ...documentTerms, manpower: e.target.value })}
+                          placeholder="e.g. 2 Technicians, 1 Supervisor"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (القوى العاملة)</label>
+                        <input
+                          type="text"
+                          dir="rtl"
+                          value={documentTerms.manpowerAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, manpowerAr: e.target.value })}
+                          placeholder="مثال: 2 فنيين، 1 مشرف"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 5. Mobilization */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        5. Mobilization (MOBILIZATION:)
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={documentTerms.showMobilization !== false}
+                          onChange={e => setDocumentTerms({ ...documentTerms, showMobilization: e.target.checked })}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        Show by default
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                        <input
+                          type="text"
+                          value={documentTerms.mobilization}
+                          onChange={e => setDocumentTerms({ ...documentTerms, mobilization: e.target.value })}
+                          placeholder="e.g. 3-4 days upon confirmation of payment"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (بدء العمل والجاهزية)</label>
+                        <input
+                          type="text"
+                          dir="rtl"
+                          value={documentTerms.mobilizationAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, mobilizationAr: e.target.value })}
+                          placeholder="مثال: 3-4 أيام بعد تأكيد الدفع"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 6. Duration */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        6. Duration (DURATION:)
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={documentTerms.showDuration !== false}
+                          onChange={e => setDocumentTerms({ ...documentTerms, showDuration: e.target.checked })}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        Show by default
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
+                        <input
+                          type="text"
+                          value={documentTerms.duration}
+                          onChange={e => setDocumentTerms({ ...documentTerms, duration: e.target.value })}
+                          placeholder="e.g. 1-2 Working Days"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (مدة التنفيذ)</label>
+                        <input
+                          type="text"
+                          dir="rtl"
+                          value={documentTerms.durationAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, durationAr: e.target.value })}
+                          placeholder="مثال: 1-2 أيام عمل"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 7. Bank Details */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+                      <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        7. Bank Details (BANK DETAILS:)
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={documentTerms.showBankDetails !== false}
+                          onChange={e => setDocumentTerms({ ...documentTerms, showBankDetails: e.target.checked })}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        Show by default
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English Bank Details (Multiline)</label>
+                        <textarea
+                          rows={4}
+                          value={documentTerms.bankDetails}
+                          onChange={e => setDocumentTerms({ ...documentTerms, bankDetails: e.target.value })}
+                          placeholder="Bank name, Account number, IBAN, Company name..."
+                          className="w-full p-2.5 text-sm font-mono border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Bank Details (البيانات البنكية)</label>
+                        <textarea
+                          rows={4}
+                          dir="rtl"
+                          value={documentTerms.bankDetailsAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, bankDetailsAr: e.target.value })}
+                          placeholder="اسم البنك، رقم الحساب، الآيبان، اسم الشركة..."
+                          className="w-full p-2.5 text-sm font-mono border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 8. Footer Message */}
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+                    <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                      8. Document Footer Text (FOOTER:)
+                    </span>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">English Closing Note</label>
+                        <input
+                          type="text"
+                          value={documentTerms.footer}
+                          onChange={e => setDocumentTerms({ ...documentTerms, footer: e.target.value })}
+                          placeholder="e.g. Thank you for your business!"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Closing Note (عبارة الشكر الختامية)</label>
+                        <input
+                          type="text"
+                          dir="rtl"
+                          value={documentTerms.footerAr}
+                          onChange={e => setDocumentTerms({ ...documentTerms, footerAr: e.target.value })}
+                          placeholder="مثال: شكرا لتعاملكم معنا!"
+                          className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Status feedback message */}
+                  <div className="h-6">
+                    {termsStatus === 'success' && (
+                      <span className="text-emerald-600 text-sm font-medium flex items-center gap-1">
+                        <CheckCircle2 size={16} /> Default Terms & Conditions saved successfully!
+                      </span>
+                    )}
+                    {termsStatus === 'error' && (
+                      <span className="text-red-600 text-sm font-medium flex items-center gap-1">
+                        <XCircle size={16} /> Failed to save Terms & Conditions. Make sure you have administrator permissions.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* PDF Generation Engine */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+                    <FileText size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold text-gray-800">PDF Generation Engine</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">Select the PDF generator to use for exporting Quotations</p>
+                  </div>
+                </div>
+                <div className="p-6">
+                  <div className="max-w-md">
+                    <div
+                      onClick={() => handlePdfSystemToggle('client')}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        pdfSystem === 'client' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Monitor size={18} className={pdfSystem === 'client' ? 'text-indigo-600' : 'text-gray-400'} />
+                          <span className="font-semibold text-gray-800">Legacy Canvas (Client)</span>
+                        </div>
+                        {pdfSystem === 'client' && <CheckCircle2 size={18} className="text-indigo-600" />}
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        Uses the old html2canvas method. Prints exactly as it appears on screen but may be blurry and not selectable.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="h-5 mt-3">
+                    {pdfSystemStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> System preference saved</span>}
+                    {pdfSystemStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save preference</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Quote ID Prefix */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700 font-mono font-bold text-sm">#</div>
+                  <div>
+                    <h2 className="text-xl font-semibold text-gray-800">Quote ID Prefix</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">Customize the prefix used when generating new quote numbers (e.g. AJ-10001, ACME-10001)</p>
+                  </div>
+                </div>
+                <div className="p-6 flex items-center gap-4">
+                  <div className="flex items-center gap-3 flex-1 max-w-xs">
+                    <input
+                      type="text"
+                      value={quotePrefix}
+                      maxLength={8}
+                      onChange={e => setQuotePrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                      className="w-32 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono font-bold text-center text-lg uppercase"
+                      placeholder="AJ"
+                    />
+                    <span className="text-gray-400 font-mono text-lg">— 10001, 10002 …</span>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!quotePrefix.trim()) return;
+                      setQuotePrefixStatus('loading');
+                      try {
+                        const res = await fetch('/api/settings', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+                          body: JSON.stringify({ key: 'quotePrefix', value: quotePrefix.trim() })
+                        });
+                        if (res.ok) { setQuotePrefixStatus('success'); setTimeout(() => setQuotePrefixStatus('idle'), 3000); }
+                        else setQuotePrefixStatus('error');
+                      } catch { setQuotePrefixStatus('error'); }
+                    }}
+                    disabled={quotePrefixStatus === 'loading'}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 text-sm font-medium"
+                  >
+                    {quotePrefixStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save Prefix'}
+                  </button>
+                  <div className="h-5">
+                    {quotePrefixStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
+                    {quotePrefixStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* MU Calculation Filters */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Filter className="text-indigo-600" />
+                    <div>
+                      <h2 className="text-xl font-semibold text-gray-800">MU Calculation Filters</h2>
+                      <p className="text-sm text-gray-500 mt-0.5">Control which item types are included in the Markup Profit (MU) calculation</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleMuFilterSave}
+                    disabled={muFilterStatus === 'loading'}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                  >
+                    {muFilterStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Filters'}
+                  </button>
+                </div>
+                <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+
+                  {/* Zero Markup List */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-700 mb-1">Zero Markup Keywords</h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Items whose description contains any of these words are included in MU but contribute <strong>zero profit</strong> (their base cost = their sale price).
+                    </p>
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="text"
+                        placeholder="e.g. Materials"
+                        value={muFilterInput.zero}
+                        onChange={e => setMuFilterInput(f => ({ ...f, zero: e.target.value }))}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && muFilterInput.zero.trim()) {
+                            const kw = muFilterInput.zero.trim();
+                            if (!zeroMarkupKeywords.includes(kw)) setZeroMarkupKeywords(prev => [...prev, kw]);
+                            setMuFilterInput(f => ({ ...f, zero: '' }));
+                          }
+                        }}
+                        className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                      <button
+                        onClick={() => {
+                          const kw = muFilterInput.zero.trim();
+                          if (kw && !zeroMarkupKeywords.includes(kw)) setZeroMarkupKeywords(prev => [...prev, kw]);
+                          setMuFilterInput(f => ({ ...f, zero: '' }));
+                        }}
+                        className="px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+                      >
+                        <Plus size={16} />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {zeroMarkupKeywords.map(kw => (
+                        <span key={kw} className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full text-sm font-medium">
+                          {kw}
+                          <button onClick={() => setZeroMarkupKeywords(prev => prev.filter(k => k !== kw))} className="hover:text-red-600 transition-colors">
+                            <X size={13} />
+                          </button>
+                        </span>
+                      ))}
+                      {zeroMarkupKeywords.length === 0 && <span className="text-xs text-gray-400 italic">No keywords added</span>}
+                    </div>
+                  </div>
+
+                  {/* Excluded List */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-700 mb-1">Excluded Keywords</h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Items whose description contains any of these words are <strong>completely excluded</strong> from the MU calculation (neither profit nor cost).
+                    </p>
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="text"
+                        placeholder="e.g. Installation"
+                        value={muFilterInput.excluded}
+                        onChange={e => setMuFilterInput(f => ({ ...f, excluded: e.target.value }))}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && muFilterInput.excluded.trim()) {
+                            const kw = muFilterInput.excluded.trim();
+                            if (!excludedKeywords.includes(kw)) setExcludedKeywords(prev => [...prev, kw]);
+                            setMuFilterInput(f => ({ ...f, excluded: '' }));
+                          }
+                        }}
+                        className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                      <button
+                        onClick={() => {
+                          const kw = muFilterInput.excluded.trim();
+                          if (kw && !excludedKeywords.includes(kw)) setExcludedKeywords(prev => [...prev, kw]);
+                          setMuFilterInput(f => ({ ...f, excluded: '' }));
+                        }}
+                        className="px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+                      >
+                        <Plus size={16} />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {excludedKeywords.map(kw => (
+                        <span key={kw} className="flex items-center gap-1.5 px-3 py-1 bg-red-50 border border-red-200 text-red-800 rounded-full text-sm font-medium">
+                          {kw}
+                          <button onClick={() => setExcludedKeywords(prev => prev.filter(k => k !== kw))} className="hover:text-red-600 transition-colors">
+                            <X size={13} />
+                          </button>
+                        </span>
+                      ))}
+                      {excludedKeywords.length === 0 && <span className="text-xs text-gray-400 italic">No keywords added</span>}
+                    </div>
+                  </div>
+
+                </div>
+                <div className="px-6 pb-4 h-6">
+                  {muFilterStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> MU filters saved successfully</span>}
+                  {muFilterStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save MU filters</span>}
+                </div>
+              </div>
+          </>
+        )}
+
+        {showSection('quotes') && (
+          <>
+              {/* Row Reorder Mode */}
+              <ChoiceSettingCard
+                settingKey="rowReorderMode"
+                title="Row Reorder Mode"
+                subtitle="Choose how items are reordered in the Quote Form"
+                icon={<div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-lg">⠿</div>}
+                defaultValue="click"
+                options={[
+                  { value: 'click', title: '↑ ↓ Click Arrows', description: 'Up and down arrow buttons appear beside each row. Click once per step to move rows.' },
+                  { value: 'drag', title: '⠿ Drag & Drop', description: 'A grip handle replaces the arrows. Click and drag any row to reorder it instantly.' },
+                ]}
+              />
+
+              {/* Translation Mode */}
+              <ChoiceSettingCard
+                settingKey="translationMode"
+                title="Translation Mode / وضع الترجمة"
+                subtitle="Control whether Arabic translation happens automatically or only when clicking the Translate button"
+                icon={<div className="p-2 bg-indigo-100 rounded-lg text-indigo-700"><Languages size={20} /></div>}
+                defaultValue="manual"
+                onChange={v => { try { localStorage.setItem('translationMode', v); } catch { /* storage unavailable */ } }}
+                options={[
+                  { value: 'manual', title: 'Manual (Only when clicking "Translate")', description: 'Translation will only run when you explicitly click the "Translate" button. No automatic translation occurs while typing or changing fields.' },
+                  { value: 'auto', title: 'Auto (Translate on blur / typing)', description: 'Automatically translates descriptions, notes, and items when you finish typing or select products.' },
+                ]}
+              />
+
+              {/* Discount Calculation Mode */}
+              <ChoiceSettingCard
+                settingKey="discountMode"
+                title="Discount Calculation Mode"
+                subtitle="Select how discounts are entered and calculated in the Quotation form"
+                icon={<div className="p-2 bg-indigo-100 rounded-lg text-indigo-700 font-bold text-sm">%</div>}
+                defaultValue="amount"
+                options={[
+                  { value: 'amount', title: 'Direct Amount', description: 'Discount is entered directly as a fixed currency amount (in the quote currency).' },
+                  { value: 'percentage', title: 'Percentage (%)', description: 'Discount is entered as a percentage (e.g. 10%). The system automatically calculates the reduction based on the Subtotal.' },
+                  { value: 'both', title: 'Both (Percentage & Amount)', description: 'Displays both the percentage (%) input and the direct amount simultaneously. Editing either input automatically recalculates the other.' },
+                ]}
+              />
+
+              {/* Access Control: Workflow Visibility */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+                    <Shield size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold text-gray-800">Access Control</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">Toggle system-wide visibility for key workflow buttons</p>
+                  </div>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[
+                      { id: 'invoice', label: 'Invoice Button', desc: 'Convert Quote to Tax Invoice' },
+                      { id: 'template', label: 'Save Template', desc: 'Save reusable term templates' },
+                      { id: 'email', label: 'Email Button', desc: 'Send Quote via SMTP' },
+                      { id: 'print', label: 'Print Button', desc: 'Open browser print dialog' },
+                      { id: 'preparedBy', label: 'Prepared By', desc: 'Show "Prepared By" on documents' },
+                      { id: 'shareWith', label: 'Share With', desc: 'Show "Share With" panel on quotes' },
+                      { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
+                      { id: 'internalNotes', label: 'Internal Notes', desc: 'Enable private internal notes on quote items' },
+                      { id: 'bottomNote', label: 'Bottom Note Section', desc: 'Show terms/conditions note section at page bottom' },
+                      { id: 'updateTermsButton', label: 'Update Terms Button', desc: 'Show button on quote to update notes and terms to defaults' },
+                    ].map((btn) => (
+                      <div
+                        key={btn.id}
+                        onClick={() => handleWorkflowToggle(btn.id as any)}
+                        className={`flex flex-col p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                          workflowVisibility[btn.id as keyof typeof workflowVisibility]
+                            ? 'border-indigo-500 bg-indigo-50'
+                            : 'border-gray-100 bg-white hover:border-gray-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-bold text-gray-800">{btn.label}</span>
+                          <div className={`w-10 h-5 rounded-full relative transition-colors ${workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'bg-indigo-600' : 'bg-gray-300'}`}>
+                            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'left-5.5' : 'left-0.5'}`} style={{ transform: workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'translateX(20px)' : 'translateX(0)' }}></div>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-gray-500 leading-tight">{btn.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 flex justify-end h-4">
+                    {workflowStatus === 'loading' && <Loader2 size={16} className="animate-spin text-indigo-600" />}
+                    {workflowStatus === 'success' && <span className="text-emerald-600 text-xs font-semibold flex items-center gap-1"><CheckCircle2 size={14} /> Workflow settings updated</span>}
+                    {workflowStatus === 'error' && <span className="text-red-600 text-xs font-semibold flex items-center gap-1"><XCircle size={14} /> Failed to save settings</span>}
+                  </div>
+                </div>
+              </div>
+          </>
+        )}
+
+        {showSection('email') && (
+          <>
+              {/* SMTP Email Configuration */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-xl font-semibold text-gray-800">SMTP Server settings</h2>
+                  </div>
+                  <button
+                    onClick={handleSmtpSave}
+                    disabled={smtpStatus === 'loading'}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                  >
+                    {smtpStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Config'}
+                  </button>
+                </div>
+                <div className="p-6">
+                  <p className="text-gray-600 mb-6 text-sm">
+                    Configure your SMTP server here to allow sending Quotations and Invoices directly to clients via email.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Host Server</label>
+                      <input type="text" placeholder="smtp.gmail.com" value={smtpConfig.host} onChange={e => setSmtpConfig({ ...smtpConfig, host: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Port</label>
+                      <input type="number" placeholder="465" value={smtpConfig.port} onChange={e => setSmtpConfig({ ...smtpConfig, port: parseInt(e.target.value, 10) })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Username / Email</label>
+                      <input type="text" placeholder="user@company.com" value={smtpConfig.user} onChange={e => setSmtpConfig({ ...smtpConfig, user: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Password / App Password</label>
+                      <input type="password" placeholder={(smtpConfig as any).passSet ? 'Saved (leave blank to keep)' : '••••••••'} value={smtpConfig.pass} onChange={e => setSmtpConfig({ ...smtpConfig, pass: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">From Name</label>
+                      <input type="text" placeholder="AJ Network Solutions" value={smtpConfig.fromName} onChange={e => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                  </div>
+                  <div className="mt-4 h-6">
+                    {smtpStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> SMTP configuration saved</span>}
+                    {smtpStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save SMTP details</span>}
+                  </div>
+                </div>
+              </div>
+          </>
+        )}
+
+        {showSection('data') && (
+          <>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <Database className="text-indigo-600" />
+                  <h2 className="text-xl font-semibold text-gray-800">Database Management</h2>
+                </div>
+
+                <div className="p-6 space-y-8">
+                  {/* Export Section */}
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Export Database</h3>
+                    <p className="text-gray-600 mb-4 text-sm">
+                      Download a complete backup of your customers, products, and quotes data in Excel format.
+                    </p>
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={handleExportDB}
+                        disabled={exportStatus === 'loading'}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-70"
+                      >
+                        {exportStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                        {exportStatus === 'loading' ? 'Exporting...' : 'Export Backup'}
+                      </button>
+
+                      {exportStatus === 'success' && (
+                        <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                          <CheckCircle2 size={16} /> Export successful
+                        </span>
+                      )}
+                      {exportStatus === 'error' && (
+                        <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                          <XCircle size={16} /> Export failed
+                        </span>
+                      )}
+                    </div>
+
+                    <h3 className="text-lg font-medium text-gray-900 mt-8 mb-2">System Backup (Raw DB)</h3>
+                    <p className="text-gray-600 mb-4 text-sm">
+                      Directly download the underlying SQLite `.db` master file.
+                    </p>
+                    <button
+                      onClick={handleDownloadSystemDB}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                    >
+                      <Database size={18} /> Download Master File
+                    </button>
+
+                    <h3 className="text-lg font-medium text-purple-900 mt-8 mb-2">Complete System Archive (ZIP Backup)</h3>
+                    <p className="text-gray-600 mb-4 text-sm">
+                      Download a comprehensive `.zip` package containing your raw database (`quotes.db`), the clean Excel spreadsheet data, and all uploaded company logos, footers, and stamps as actual image files.
+                    </p>
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={handleDownloadZipBackup}
+                        disabled={zipStatus === 'loading'}
+                        className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-70"
+                      >
+                        {zipStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                        {zipStatus === 'loading' ? 'Archiving...' : 'Download ZIP Backup'}
+                      </button>
+
+                      {zipStatus === 'success' && (
+                        <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                          <CheckCircle2 size={16} /> Archive created successfully
+                        </span>
+                      )}
+                      {zipStatus === 'error' && (
+                        <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                          <XCircle size={16} /> Failed to create archive
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <EncryptedBackupPanel />
+
+                  <hr className="border-gray-200" />
+
+                  {/* Import Section */}
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2 flex items-center gap-2">
+                      Import Database
+                      <AlertTriangle size={18} className="text-amber-500" />
+                    </h3>
+                    <p className="text-gray-600 mb-4 text-sm">
+                      Restore your database from a previous Excel backup file.
+                      <strong className="text-red-600 block mt-1">Warning: This will completely replace all existing data.</strong>
+                    </p>
+
+                    <div className="flex items-center gap-4">
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept=".xlsx, .xls"
+                          onChange={handleImportDB}
+                          disabled={importStatus === 'loading'}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <button
+                          disabled={importStatus === 'loading'}
+                          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                        >
+                          {importStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                          {importStatus === 'loading' ? 'Importing...' : 'Select Backup File'}
+                        </button>
+                      </div>
+
+                      {importStatus === 'success' && (
+                        <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                          <CheckCircle2 size={16} /> Import successful! Reloading...
+                        </span>
+                      )}
+                      {importStatus === 'error' && (
+                        <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                          <XCircle size={16} /> Import failed
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <hr className="border-gray-200" />
+
+                  {/* ZIP Restore Section */}
+                  <div>
+                    <h3 className="text-lg font-medium text-purple-900 mb-2 flex items-center gap-2">
+                      ZIP Restore System (Complete Disaster Recovery)
+                      <AlertTriangle size={18} className="text-purple-500" />
+                    </h3>
+                    <p className="text-gray-600 mb-4 text-sm">
+                      Upload a previously generated system archive `.zip` to restore the complete master database, brand setups, and media assets in a single step.
+                      <strong className="text-red-600 block mt-1">Warning: This completely overwrites all current system quotes, supplier lists, and configuration settings.</strong>
+                    </p>
+                    <div className="flex items-center gap-4">
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept=".zip"
+                          onChange={handleRestoreZip}
+                          disabled={restoreStatus === 'loading'}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <button
+                          disabled={restoreStatus === 'loading'}
+                          className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
+                        >
+                          {restoreStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                          {restoreStatus === 'loading' ? 'Restoring System...' : 'Upload ZIP Backup Archive'}
+                        </button>
+                      </div>
+                      {restoreStatus === 'success' && (
+                        <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
+                          <CheckCircle2 size={16} /> Restore successful! Reloading...
+                        </span>
+                      )}
+                      {restoreStatus === 'error' && (
+                        <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                          <XCircle size={16} /> Restore failed
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <hr className="border-gray-200" />
+
+                  {/* Database Maintenance & Compaction */}
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Optimize & Compact Database</h3>
+                    <p className="text-gray-600 mb-4 text-sm">
+                      Rebuild indices, defragment, and vacuum the underlying SQLite database to reduce file size and speed up system searches.
+                    </p>
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={handleOptimizeDB}
+                        disabled={optimizeStatus === 'loading'}
+                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                      >
+                        {optimizeStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                        {optimizeStatus === 'loading' ? 'Compacting...' : 'Run Database Compaction'}
+                      </button>
+              
+                      {optimizeStatus === 'success' && optimizeResult && (
+                        <div className="text-sm font-medium text-emerald-600">
+                          <div className="flex items-center gap-1">
+                            <CheckCircle2 size={16} /> Compaction complete!
+                          </div>
+                          <div className="text-xs text-gray-500 mt-0.5 font-normal">
+                            Saved {(optimizeResult.savedBytes / 1024).toFixed(1)} KB (Old size: {(optimizeResult.oldSize / 1024).toFixed(0)} KB → New size: {(optimizeResult.newSize / 1024).toFixed(0)} KB)
+                          </div>
+                        </div>
+                      )}
+                      {optimizeStatus === 'error' && (
+                        <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
+                          <XCircle size={16} /> Optimization failed
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <hr className="border-gray-200" />
+
+                  {/* Rolling Daily Backups with Retention */}
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-lg font-medium text-gray-900">Rolling Daily Backups</h3>
+                        <p className="text-gray-600 text-sm mt-0.5">
+                          Automatic non-blocking rolling backup snapshots taken daily. The system keeps the last 7 days of backups.
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleTriggerAutoBackup}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-lg transition-colors border border-gray-200"
+                      >
+                        <RefreshCw size={14} /> Trigger Today's Snapshot
+                      </button>
+                    </div>
+
+                    {autoBackupsLoading ? (
+                      <div className="flex items-center justify-center py-6 text-gray-400 gap-2">
+                        <Loader2 size={20} className="animate-spin" />
+                        <span className="text-sm">Loading rolling backups list...</span>
+                      </div>
+                    ) : autoBackups.length === 0 ? (
+                      <div className="text-center py-6 border-2 border-dashed border-gray-100 rounded-xl text-gray-400 text-sm">
+                        No rolling daily backups available yet.
+                      </div>
+                    ) : (
+                      <div className="border border-gray-200 rounded-xl overflow-hidden bg-gray-50 divide-y divide-gray-200 max-h-60 overflow-y-auto">
+                        {autoBackups.map((bk) => (
+                          <div key={bk.filename} className="flex items-center justify-between p-3 text-sm hover:bg-white transition-colors">
+                            <div className="flex items-center gap-3">
+                              <Database className="text-gray-400" size={18} />
+                              <div>
+                                <div className="font-semibold text-gray-800 font-mono text-xs">{bk.filename}</div>
+                                <div className="text-xs text-gray-500 mt-0.5">
+                                  Created: {new Date(bk.createdAt).toLocaleString()}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <span className="text-xs text-gray-500 font-medium">{(bk.size / 1024).toFixed(0)} KB</span>
+                              <button
+                                onClick={() => handleDownloadAutoBackup(bk.filename)}
+                                className="p-1.5 bg-white text-indigo-600 hover:text-indigo-800 rounded-lg hover:shadow-sm border border-gray-200 transition-all"
+                                title="Download Snapshot" aria-label="Download Snapshot"
+                              >
+                                <Download size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <RecycleBinSettings />
+          </>
+        )}
+
+        {showSection('system') && (
+          <>
+              {/* System Logs (Admin Only) */}
+              {user.role === 'admin' && (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="p-6 border-b border-gray-200 bg-gray-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="flex items-center gap-3">
+                      <TerminalSquare className="text-gray-700" />
+                      <h2 className="text-xl font-semibold text-gray-800">System Logs</h2>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-700">Expire:</span>
+                        <div className="relative">
+                          <select
+                            value={logExpirationDays}
+                            onChange={(e) => handleSaveLogExpiration(parseInt(e.target.value, 10))}
+                            className="appearance-none pl-3 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                          >
+                            <option value="1">1 Day</option>
+                            <option value="2">2 Days</option>
+                            <option value="7">7 Days</option>
+                            <option value="14">14 Days</option>
+                            <option value="30">30 Days</option>
+                            <option value="0">Never</option>
+                          </select>
+                          <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                        </div>
+                      </div>
+                      <button
+                        onClick={fetchLogs}
+                        disabled={logsStatus === 'loading'}
+                        className="flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors text-sm font-medium disabled:opacity-50"
+                      >
+                        <RefreshCw size={16} className={logsStatus === 'loading' ? 'animate-spin' : ''} /> Refresh
+                      </button>
+                      <button
+                        onClick={handleClearLogs}
+                        className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors text-sm font-medium"
+                      >
+                        <Trash2 size={16} /> Clear Logs
                       </button>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <ImageIcon className="text-indigo-600" />
-          <h2 className="text-xl font-semibold text-gray-800">Logo Setup</h2>
-        </div>
-        <div className="p-6">
-          <p className="text-gray-600 mb-4 text-sm">
-            Upload your company logo. This logo will automatically appear on the Quote Form and in exported PDFs.
-          </p>
-
-          <div className="flex items-start gap-8">
-            <div className="flex-1">
-              <div className="relative inline-block">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleLogoUpload}
-                  disabled={logoStatus === 'loading'}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                />
-                <button
-                  disabled={logoStatus === 'loading'}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                >
-                  {logoStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-                  {logoStatus === 'loading' ? 'Uploading...' : 'Upload New Logo'}
-                </button>
-              </div>
-
-              <div className="mt-3 h-6">
-                {logoStatus === 'success' && (
-                  <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
-                    <CheckCircle2 size={16} /> Logo updated successfully
-                  </span>
-                )}
-                {logoStatus === 'error' && (
-                  <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                    <XCircle size={16} /> Failed to upload logo
-                  </span>
-                )}
-              </div>
-
-              <div className="mt-6 border-t border-gray-100 pt-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Adjust Logo Size
-                </label>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="range"
-                    min="16"
-                    max="64"
-                    value={logoSize}
-                    onChange={(e) => setLogoSize(parseInt(e.target.value, 10))}
-                    onMouseUp={async () => {
-                      setLogoSizeStatus('loading');
-                      try {
-                        const res = await fetch('/api/settings', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-                          body: JSON.stringify({ key: 'logoSize', value: logoSize.toString() })
-                        });
-                        if (res.ok) {
-                          setLogoSizeStatus('success');
-                          setTimeout(() => setLogoSizeStatus('idle'), 3000);
-                        } else {
-                          setLogoSizeStatus('error');
-                        }
-                      } catch (e) {
-                        setLogoSizeStatus('error');
-                      }
-                    }}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-gray-600 text-sm font-mono w-8">{logoSize}</span>
-                </div>
-                <div className="mt-2 h-4">
-                  {logoSizeStatus === 'success' && (
-                    <span className="text-emerald-600 text-xs font-medium">Size saved</span>
-                  )}
-                  {logoSizeStatus === 'error' && (
-                    <span className="text-red-600 text-xs font-medium">Failed to save size</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-6 border-t border-gray-100 pt-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Adjust Terms Font Size (px)
-                </label>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="range"
-                    min="8"
-                    max="24"
-                    value={termsFontSize}
-                    onChange={(e) => setTermsFontSize(parseInt(e.target.value, 10))}
-                    onMouseUp={async () => {
-                      setTermsFontSizeStatus('loading');
-                      try {
-                        const res = await fetch('/api/settings', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-                          body: JSON.stringify({ key: 'termsFontSize', value: termsFontSize.toString() })
-                        });
-                        if (res.ok) {
-                          setTermsFontSizeStatus('success');
-                          setTimeout(() => setTermsFontSizeStatus('idle'), 3000);
-                        } else {
-                          setTermsFontSizeStatus('error');
-                        }
-                      } catch (e) {
-                        setTermsFontSizeStatus('error');
-                      }
-                    }}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-gray-600 text-sm font-mono w-8">{termsFontSize}px</span>
-                </div>
-                <div className="mt-2 h-4">
-                  {termsFontSizeStatus === 'success' && (
-                    <span className="text-emerald-600 text-xs font-medium">Size saved</span>
-                  )}
-                  {termsFontSizeStatus === 'error' && (
-                    <span className="text-red-600 text-xs font-medium">Failed to save size</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="w-48 h-48 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50 overflow-hidden shrink-0">
-              {currentLogo ? (
-                <img src={currentLogo} alt="Current Logo" className="max-w-full max-h-full object-contain p-2" />
-              ) : (
-                <span className="text-gray-400 text-sm text-center px-4">No logo uploaded</span>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Footer Image Setup */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <ImageIcon className="text-indigo-600" />
-          <h2 className="text-xl font-semibold text-gray-800">Footer Image Setup</h2>
-        </div>
-        <div className="p-6">
-          <p className="text-gray-600 mb-4 text-sm">
-            Upload a footer image (like a signature, stamp, or company details block). This image will automatically appear at the bottom of the Quote Form and exported PDFs.
-          </p>
-
-          <div className="flex items-start gap-8">
-            <div className="flex-1">
-              <div className="relative inline-block">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFooterUpload}
-                  disabled={footerImageStatus === 'loading'}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                />
-                <button
-                  disabled={footerImageStatus === 'loading'}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                >
-                  {footerImageStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-                  {footerImageStatus === 'loading' ? 'Uploading...' : 'Upload New Footer'}
-                </button>
-              </div>
-
-              <div className="mt-3 h-6">
-                {footerImageStatus === 'success' && (
-                  <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
-                    <CheckCircle2 size={16} /> Footer image updated successfully
-                  </span>
-                )}
-                {footerImageStatus === 'error' && (
-                  <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                    <XCircle size={16} /> Failed to upload footer image
-                  </span>
-                )}
-              </div>
-
-              <div className="mt-6 border-t border-gray-100 pt-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Adjust Footer Image Height
-                </label>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="range"
-                    min="15"
-                    max="120"
-                    value={footerSize}
-                    onChange={(e) => setFooterSize(parseInt(e.target.value, 10))}
-                    onMouseUp={async () => {
-                      setFooterSizeStatus('loading');
-                      try {
-                        const res = await fetch('/api/settings', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-                          body: JSON.stringify({ key: 'footerSize', value: footerSize.toString() })
-                        });
-                        if (res.ok) {
-                          setFooterSizeStatus('success');
-                          setTimeout(() => setFooterSizeStatus('idle'), 3000);
-                        } else {
-                          setFooterSizeStatus('error');
-                        }
-                      } catch (e) {
-                        setFooterSizeStatus('error');
-                      }
-                    }}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-gray-600 text-sm font-mono w-8">{footerSize}</span>
-                </div>
-                <div className="mt-2 h-4">
-                  {footerSizeStatus === 'success' && (
-                    <span className="text-emerald-600 text-xs font-medium">Height saved</span>
-                  )}
-                  {footerSizeStatus === 'error' && (
-                    <span className="text-red-600 text-xs font-medium">Failed to save height</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="w-64 h-24 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-gray-50 overflow-hidden shrink-0">
-              {currentFooterImage ? (
-                <img src={currentFooterImage} alt="Current Footer" className="max-w-full max-h-full object-contain p-2" />
-              ) : (
-                <span className="text-gray-400 text-sm text-center px-4">No footer uploaded</span>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Stamp Image Setup */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <ImageIcon className="text-indigo-600" />
-          <h2 className="text-xl font-semibold text-gray-800">Company Stamp Setup</h2>
-        </div>
-        <div className="p-6">
-          <p className="text-gray-600 mb-4 text-sm">
-            Upload your official company stamp (PNG with transparent background recommended). It will appear centered above the footer on documents and is included when using <strong>Export PDF + Stamp</strong>.
-          </p>
-          <div className="flex items-start gap-8">
-            <div className="flex-1">
-              <div className="relative inline-block">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleStampUpload}
-                  disabled={stampImageStatus === 'loading'}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                />
-                <button
-                  disabled={stampImageStatus === 'loading'}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                >
-                  {stampImageStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-                  {stampImageStatus === 'loading' ? 'Uploading...' : 'Upload Stamp Image'}
-                </button>
-              </div>
-              <div className="mt-3 h-6">
-                {stampImageStatus === 'success' && (
-                  <span className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
-                    <CheckCircle2 size={16} /> Stamp image updated successfully
-                  </span>
-                )}
-                {stampImageStatus === 'error' && (
-                  <span className="flex items-center gap-1 text-red-600 text-sm font-medium">
-                    <XCircle size={16} /> Failed to upload stamp image
-                  </span>
-                )}
-              </div>
-
-              <div className="mt-6 border-t border-gray-100 pt-6 space-y-5">
-                {/* Stamp Width & Height / Shape controls */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-800">Stamp Shape & Dimensions</h3>
-                      <p className="text-xs text-gray-500">Fine-tune width and height manually to eliminate any oval distortion.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const newH = Math.round(stampWidth / 1.37055);
-                        setStampHeight(newH);
-                        saveStampDimensions(stampWidth, newH);
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all"
-                      title="Automatically calculate height so the stamp graphic forms a perfect 1:1 circle"
-                    >
-                      <Sparkles size={14} /> Auto-Fix to 1:1 Circle
-                    </button>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between items-center mb-1.5">
-                      <label className="text-xs font-medium text-gray-700">Stamp Width (px)</label>
-                      <span className="text-xs font-mono font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{stampWidth}px</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="range" min="50" max="350" value={stampWidth}
-                        onChange={(e) => setStampWidth(parseInt(e.target.value, 10))}
-                        onMouseUp={() => saveStampDimensions(stampWidth, stampHeight)}
-                        onTouchEnd={() => saveStampDimensions(stampWidth, stampHeight)}
-                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between items-center mb-1.5">
-                      <label className="text-xs font-medium text-gray-700">Stamp Height (px)</label>
-                      <span className="text-xs font-mono font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{stampHeight}px</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="range" min="40" max="300" value={stampHeight}
-                        onChange={(e) => setStampHeight(parseInt(e.target.value, 10))}
-                        onMouseUp={() => saveStampDimensions(stampWidth, stampHeight)}
-                        onTouchEnd={() => saveStampDimensions(stampWidth, stampHeight)}
-                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Offsets */}
-                <div>
-                  <div className="flex justify-between items-center mb-1.5">
-                    <label className="text-sm font-medium text-gray-700">
-                      Horizontal Position Offset (px) - Move Right/Left
-                    </label>
-                    <span className="text-xs font-mono text-gray-600 w-12 text-right">{stampOffsetX}px</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <input
-                      type="range" min="-800" max="800" value={stampOffsetX}
-                      onChange={(e) => setStampOffsetX(parseInt(e.target.value, 10))}
-                      onMouseUp={async () => {
-                        setStampPositionStatus('loading');
-                        try {
-                          const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampOffsetX', value: stampOffsetX.toString() }) });
-                          if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
-                          else setStampPositionStatus('error');
-                        } catch { setStampPositionStatus('error'); }
-                      }}
-                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex justify-between items-center mb-1.5">
-                    <label className="text-sm font-medium text-gray-700">
-                      Vertical Position Offset (px) - Move Up/Down
-                    </label>
-                    <span className="text-xs font-mono text-gray-600 w-12 text-right">{stampOffsetY}px</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <input
-                      type="range" min="-400" max="400" value={stampOffsetY}
-                      onChange={(e) => setStampOffsetY(parseInt(e.target.value, 10))}
-                      onMouseUp={async () => {
-                        setStampPositionStatus('loading');
-                        try {
-                          const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ key: 'stampOffsetY', value: stampOffsetY.toString() }) });
-                          if (res.ok) { setStampPositionStatus('success'); setTimeout(() => setStampPositionStatus('idle'), 3000); }
-                          else setStampPositionStatus('error');
-                        } catch { setStampPositionStatus('error'); }
-                      }}
-                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                </div>
-
-                <div className="h-4">
-                  {stampPositionStatus === 'loading' && <span className="text-indigo-600 text-xs font-medium flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving...</span>}
-                  {stampPositionStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Layout saved</span>}
-                  {stampPositionStatus === 'error' && <span className="text-red-600 text-xs font-medium">Failed to save layout</span>}
-                </div>
-              </div>
-            </div>
-
-            {/* Live Preview with Circular Alignment Guide */}
-            <div className="flex flex-col items-center gap-2.5 shrink-0">
-              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Live Alignment Guide</span>
-              <div
-                className="w-44 h-44 border-2 border-dashed border-indigo-400 rounded-full flex items-center justify-center bg-slate-50 relative overflow-hidden shadow-sm"
-                title="The dashed border represents a true 1:1 circle guide. Adjust Width & Height until the stamp fills it evenly."
-              >
-                {currentStampImage ? (
-                  <img
-                    src={currentStampImage}
-                    alt="Current Stamp"
-                    style={{
-                      width: `${Math.round(stampWidth * 1.15)}px`,
-                      height: `${Math.round(stampHeight * 1.15)}px`,
-                      maxWidth: '96%',
-                      maxHeight: '96%',
-                      objectFit: 'fill',
-                    }}
-                    className="transition-all duration-100"
-                  />
-                ) : (
-                  <span className="text-gray-400 text-xs text-center px-3">No stamp uploaded</span>
-                )}
-              </div>
-              {currentStampImage && (
-                <div className="text-center">
-                  {Math.abs(stampWidth / stampHeight - 1.37055) < 0.05 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                      <CheckCircle2 size={12} /> True Circle (1:1)
-                    </span>
-                  ) : stampWidth / stampHeight > 1.37055 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
-                      ↔ Stretched Horizontally
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
-                      ↕ Stretched Vertically
-                    </span>
-                  )}
-                  <p className="text-[10px] text-gray-400 mt-1 max-w-[170px]">
-                    Dashed ring is a circular guide for checking symmetry
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Document Font Sizes Setup */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Type className="text-indigo-600" />
-            <div>
-              <h2 className="text-xl font-semibold text-gray-800">Document Font Sizes Setup</h2>
-              <p className="text-gray-500 text-xs mt-0.5">Adjust text font sizes individually for line items table, notes, payment, warranty, bank details, and other terms.</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {fontSizeSaveStatus === 'loading' && <span className="text-xs text-indigo-600 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving...</span>}
-            {fontSizeSaveStatus === 'success' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
-            {fontSizeSaveStatus === 'error' && <span className="text-xs text-red-600 flex items-center gap-1"><XCircle size={14} /> Save failed</span>}
-          </div>
-        </div>
-        <div className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-
-            {/* Table Line Items */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-sm text-gray-800">📋 Table Line Items</span>
-                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{tableFontSize}px</span>
-                </div>
-                <p className="text-xs text-gray-500 mb-3">Item names, descriptions (EN/AR), units, and prices in the items table.</p>
-                <input
-                  type="range" min="9" max="22" value={tableFontSize}
-                  onChange={(e) => setTableFontSize(parseInt(e.target.value, 10))}
-                  onMouseUp={() => handleSaveFontSize('tableFontSize', tableFontSize)}
-                  onTouchEnd={() => handleSaveFontSize('tableFontSize', tableFontSize)}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-200">
-                <p className="text-gray-700 truncate font-medium" style={{ fontSize: `${tableFontSize}px` }}>Sample Product / وصف تجريبي</p>
-              </div>
-            </div>
-
-            {/* Note Section */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-sm text-gray-800">📝 Notes Section</span>
-                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{noteFontSize}px</span>
-                </div>
-                <p className="text-xs text-gray-500 mb-3">Special quotation notes and instructions below the table.</p>
-                <input
-                  type="range" min="8" max="24" value={noteFontSize}
-                  onChange={(e) => setNoteFontSize(parseInt(e.target.value, 10))}
-                  onMouseUp={() => handleSaveFontSize('noteFontSize', noteFontSize)}
-                  onTouchEnd={() => handleSaveFontSize('noteFontSize', noteFontSize)}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-200">
-                <p className="text-gray-700 truncate" style={{ fontSize: `${noteFontSize}px` }}>NOTE: Work will be change order / ملاحظة</p>
-              </div>
-            </div>
-
-            {/* Payment Terms */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-sm text-gray-800">💳 Payment Terms</span>
-                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{paymentFontSize}px</span>
-                </div>
-                <p className="text-xs text-gray-500 mb-3">Payment conditions and schedule clause.</p>
-                <input
-                  type="range" min="8" max="24" value={paymentFontSize}
-                  onChange={(e) => setPaymentFontSize(parseInt(e.target.value, 10))}
-                  onMouseUp={() => handleSaveFontSize('paymentFontSize', paymentFontSize)}
-                  onTouchEnd={() => handleSaveFontSize('paymentFontSize', paymentFontSize)}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-200">
-                <p className="text-gray-700 truncate" style={{ fontSize: `${paymentFontSize}px` }}>PAYMENT: As per contract / حسب العقد</p>
-              </div>
-            </div>
-
-            {/* Warranty Terms */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-sm text-gray-800">🛡️ Warranty Terms</span>
-                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{warrantyFontSize}px</span>
-                </div>
-                <p className="text-xs text-gray-500 mb-3">Warranty coverage, period, and conditions clause.</p>
-                <input
-                  type="range" min="8" max="24" value={warrantyFontSize}
-                  onChange={(e) => setWarrantyFontSize(parseInt(e.target.value, 10))}
-                  onMouseUp={() => handleSaveFontSize('warrantyFontSize', warrantyFontSize)}
-                  onTouchEnd={() => handleSaveFontSize('warrantyFontSize', warrantyFontSize)}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-200">
-                <p className="text-gray-700 truncate" style={{ fontSize: `${warrantyFontSize}px` }}>WARRANTY: 2 Years warranty / ضمان سنتين</p>
-              </div>
-            </div>
-
-            {/* Bank Details */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-sm text-gray-800">🏦 Bank Details</span>
-                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{bankDetailsFontSize}px</span>
-                </div>
-                <p className="text-xs text-gray-500 mb-3">Bank account numbers, IBAN, and beneficiary info.</p>
-                <input
-                  type="range" min="8" max="24" value={bankDetailsFontSize}
-                  onChange={(e) => setBankDetailsFontSize(parseInt(e.target.value, 10))}
-                  onMouseUp={() => handleSaveFontSize('bankDetailsFontSize', bankDetailsFontSize)}
-                  onTouchEnd={() => handleSaveFontSize('bankDetailsFontSize', bankDetailsFontSize)}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-200">
-                <p className="text-gray-700 truncate font-mono" style={{ fontSize: `${bankDetailsFontSize}px` }}>IBAN: SA0230400... / الحساب</p>
-              </div>
-            </div>
-
-            {/* Other Terms (Manpower, Mobilization, Duration, Custom) */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-sm text-gray-800">⏱️ Other Terms</span>
-                  <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{otherTermsFontSize}px</span>
-                </div>
-                <p className="text-xs text-gray-500 mb-3">Manpower, Mobilization, Project Duration, and Custom Fields.</p>
-                <input
-                  type="range" min="8" max="24" value={otherTermsFontSize}
-                  onChange={(e) => setOtherTermsFontSize(parseInt(e.target.value, 10))}
-                  onMouseUp={() => handleSaveFontSize('otherTermsFontSize', otherTermsFontSize)}
-                  onTouchEnd={() => handleSaveFontSize('otherTermsFontSize', otherTermsFontSize)}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-200">
-                <p className="text-gray-700 truncate" style={{ fontSize: `${otherTermsFontSize}px` }}>DURATION: 2 Weeks / المدة أسبوعين</p>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Terms Top Gap Control */}
-          <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
-            <div className="flex justify-between items-center mb-1">
-              <span className="font-semibold text-sm text-gray-800">📏 Gap: Items Table → Terms/Notes</span>
-              <span className="text-xs font-mono font-bold bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-600">{termsTopGap}pt</span>
-            </div>
-            <p className="text-xs text-gray-500 mb-3">Controls the vertical spacing between the line items table and the terms/notes section below it in the PDF.</p>
-            <input
-              type="range" min="0" max="150" value={termsTopGap}
-              onChange={(e) => setTermsTopGap(parseInt(e.target.value, 10))}
-              onMouseUp={() => handleSaveFontSize('termsTopGap', termsTopGap)}
-              onTouchEnd={() => handleSaveFontSize('termsTopGap', termsTopGap)}
-              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            />
-          </div>
-
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold text-gray-800">Theme Colors Setup</h2>
-          </div>
-          <button
-            onClick={handleThemeSave}
-            disabled={themeStatus === 'loading'}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
-          >
-            {themeStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Colors'}
-          </button>
-        </div>
-        <div className="p-6">
-          <p className="text-gray-600 mb-6 text-sm">
-            Customize the colors used in the Quote Form and exported PDFs.
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Table Header Background</label>
-              <div className="flex items-center gap-3">
-                <input type="color" value={themeColors.headerBg} onChange={e => setThemeColors({ ...themeColors, headerBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
-                <span className="font-mono text-gray-500 text-sm">{themeColors.headerBg}</span>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Table Header Text</label>
-              <div className="flex items-center gap-3">
-                <input type="color" value={themeColors.headerText} onChange={e => setThemeColors({ ...themeColors, headerText: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
-                <span className="font-mono text-gray-500 text-sm">{themeColors.headerText}</span>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Alternating Row (Stripe)</label>
-              <div className="flex items-center gap-3">
-                <input type="color" value={themeColors.stripeBg} onChange={e => setThemeColors({ ...themeColors, stripeBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
-                <span className="font-mono text-gray-500 text-sm">{themeColors.stripeBg}</span>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Totals Box Background</label>
-              <div className="flex items-center gap-3">
-                <input type="color" value={themeColors.totalsBg} onChange={e => setThemeColors({ ...themeColors, totalsBg: e.target.value })} className="w-12 h-12 p-1 border border-gray-300 rounded cursor-pointer" />
-                <span className="font-mono text-gray-500 text-sm">{themeColors.totalsBg}</span>
-              </div>
-            </div>
-          </div>
-          <div className="mt-6 h-6">
-            {themeStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> Theme colors saved successfully</span>}
-            {themeStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save theme colors</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Default Document Terms & Conditions */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <FileText className="text-indigo-600" />
-            <div>
-              <h2 className="text-xl font-semibold text-gray-800">Default Quotation Terms & Conditions</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Configure default terms, notes, and bank details for new quotations</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleAutoTranslateTerms}
-              disabled={translatingTerms}
-              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-gray-100 text-gray-700 text-sm font-medium rounded-lg transition-colors border border-gray-300 disabled:opacity-50"
-              title="Auto-translate English text to Arabic"
-            >
-              <RefreshCw size={15} className={translatingTerms ? "animate-spin" : ""} />
-              {translatingTerms ? 'Translating...' : 'Translate to Arabic'}
-            </button>
-            <button
-              type="button"
-              onClick={handleResetDocumentTerms}
-              className="px-3 py-2 bg-white hover:bg-red-50 hover:text-red-600 text-gray-600 text-sm font-medium rounded-lg transition-colors border border-gray-300"
-              title="Clear all fields"
-            >
-              Clear Fields
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveDocumentTerms}
-              disabled={termsStatus === 'loading'}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 shadow-sm"
-            >
-              {termsStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-              Save Terms Defaults
-            </button>
-            {user.role === 'admin' && (
-              <button
-                type="button"
-                onClick={handleBulkUpdateAllQuotes}
-                disabled={bulkUpdatingQuotes}
-                className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
-                title="Update all existing quotes in the database with these terms"
-              >
-                {bulkUpdatingQuotes ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}
-                <span>{bulkUpdatingQuotes ? 'Updating DB...' : 'Update All Quotes in DB'}</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="p-6 space-y-6">
-          <p className="text-gray-600 text-sm">
-            These values serve as the standard template for every new quotation. Changes here automatically populate new quotes and when clicking "Clear Form".
-          </p>
-
-          {user.role === 'admin' && (
-            <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm text-amber-900 dark:text-amber-200">
-              <div className="flex items-start sm:items-center gap-2.5">
-                <Shield size={20} className="shrink-0 text-amber-600 mt-0.5 sm:mt-0" />
-                <div>
-                  <div className="font-semibold text-amber-900 dark:text-amber-100">Admin Database Sync:</div>
-                  <div className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
-                    Have older quotes saved in the database with outdated terms or notes? Click below to update notes, payment, warranty, duration, and bank details across all existing quotes in the database.
-                  </div>
-                  {bulkUpdateResult && (
-                    <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mt-1.5 flex items-center gap-1">
-                      <CheckCircle2 size={14} /> {bulkUpdateResult}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleBulkUpdateAllQuotes}
-                disabled={bulkUpdatingQuotes}
-                className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
-              >
-                {bulkUpdatingQuotes ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-                <span>{bulkUpdatingQuotes ? 'Updating All Quotes...' : 'Update All Quotes in DB'}</span>
-              </button>
-            </div>
-          )}
-
-          {user.role === 'admin' && (
-            <div className="flex items-center justify-between p-3.5 bg-gray-50 dark:bg-gray-800/60 rounded-xl border border-gray-200 dark:border-gray-700 text-xs">
-              <div>
-                <span className="font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
-                  <RefreshCw size={13} className="text-indigo-600" />
-                  Show &quot;Update Terms&quot; button in quote editor
-                </span>
-                <p className="text-gray-500 dark:text-gray-400 text-[11px] mt-0.5">
-                  When enabled, displays a button on quotes so users can quickly update notes and terms to these defaults.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleWorkflowToggle('updateTermsButton')}
-                className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ml-4 ${workflowVisibility.updateTermsButton ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}
-                title={workflowVisibility.updateTermsButton ? 'Click to hide Update Terms button on quotes' : 'Click to show Update Terms button on quotes'}
-              >
-                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${workflowVisibility.updateTermsButton ? 'translate-x-6' : 'translate-x-1'}`} />
-              </button>
-            </div>
-          )}
-
-          {/* 1. Note Header & Note */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-200 pb-2">
-              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                1. Notice / Remarks (NOTE:)
-              </span>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={documentTerms.showNote !== false}
-                    onChange={e => setDocumentTerms({ ...documentTerms, showNote: e.target.checked })}
-                    className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                  />
-                  Show by default
-                </label>
-                <div className="flex items-center gap-1.5">
-                  <label className="text-xs text-gray-500 font-medium">Header Label:</label>
-                  <input
-                    type="text"
-                    value={documentTerms.noteHeader}
-                    onChange={e => setDocumentTerms({ ...documentTerms, noteHeader: e.target.value })}
-                    placeholder="NOTE:"
-                    className="px-2.5 py-1 text-xs border border-gray-300 rounded font-bold uppercase focus:ring-1 focus:ring-indigo-500 bg-white"
-                  />
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English Note</label>
-                <textarea
-                  rows={3}
-                  value={documentTerms.note}
-                  onChange={e => setDocumentTerms({ ...documentTerms, note: e.target.value })}
-                  placeholder="Notice text in English..."
-                  className="w-full p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Note (ملاحظة بالعربية)</label>
-                <textarea
-                  rows={3}
-                  dir="rtl"
-                  value={documentTerms.noteAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, noteAr: e.target.value })}
-                  placeholder="نص الملاحظة بالعربية..."
-                  className="w-full p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 2. Payment */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
-              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                2. Payment Terms (PAYMENT:)
-              </span>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={documentTerms.showPayment !== false}
-                  onChange={e => setDocumentTerms({ ...documentTerms, showPayment: e.target.checked })}
-                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                />
-                Show by default
-              </label>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
-                <input
-                  type="text"
-                  value={documentTerms.payment}
-                  onChange={e => setDocumentTerms({ ...documentTerms, payment: e.target.value })}
-                  placeholder="e.g. Full Payment in ADVANCE"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white italic"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (شروط الدفع)</label>
-                <input
-                  type="text"
-                  dir="rtl"
-                  value={documentTerms.paymentAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, paymentAr: e.target.value })}
-                  placeholder="مثال: الدفع الكامل مقدما"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 3. Warranty */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
-              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                3. Warranty Terms (WARRANTY:)
-              </span>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={documentTerms.showWarranty !== false}
-                  onChange={e => setDocumentTerms({ ...documentTerms, showWarranty: e.target.checked })}
-                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                />
-                Show by default
-              </label>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
-                <input
-                  type="text"
-                  value={documentTerms.warranty}
-                  onChange={e => setDocumentTerms({ ...documentTerms, warranty: e.target.value })}
-                  placeholder="e.g. 2 YEARS limited warranty"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (الضمان)</label>
-                <input
-                  type="text"
-                  dir="rtl"
-                  value={documentTerms.warrantyAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, warrantyAr: e.target.value })}
-                  placeholder="مثال: ضمان محدود لمدة عامين"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 4. Manpower */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
-              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                4. Manpower (MANPOWER:)
-              </span>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={documentTerms.showManpower !== false}
-                  onChange={e => setDocumentTerms({ ...documentTerms, showManpower: e.target.checked })}
-                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                />
-                Show by default
-              </label>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
-                <input
-                  type="text"
-                  value={documentTerms.manpower}
-                  onChange={e => setDocumentTerms({ ...documentTerms, manpower: e.target.value })}
-                  placeholder="e.g. 2 Technicians, 1 Supervisor"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (القوى العاملة)</label>
-                <input
-                  type="text"
-                  dir="rtl"
-                  value={documentTerms.manpowerAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, manpowerAr: e.target.value })}
-                  placeholder="مثال: 2 فنيين، 1 مشرف"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 5. Mobilization */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
-              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                5. Mobilization (MOBILIZATION:)
-              </span>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={documentTerms.showMobilization !== false}
-                  onChange={e => setDocumentTerms({ ...documentTerms, showMobilization: e.target.checked })}
-                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                />
-                Show by default
-              </label>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
-                <input
-                  type="text"
-                  value={documentTerms.mobilization}
-                  onChange={e => setDocumentTerms({ ...documentTerms, mobilization: e.target.value })}
-                  placeholder="e.g. 3-4 days upon confirmation of payment"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (بدء العمل والجاهزية)</label>
-                <input
-                  type="text"
-                  dir="rtl"
-                  value={documentTerms.mobilizationAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, mobilizationAr: e.target.value })}
-                  placeholder="مثال: 3-4 أيام بعد تأكيد الدفع"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 6. Duration */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
-              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                6. Duration (DURATION:)
-              </span>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={documentTerms.showDuration !== false}
-                  onChange={e => setDocumentTerms({ ...documentTerms, showDuration: e.target.checked })}
-                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                />
-                Show by default
-              </label>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English</label>
-                <input
-                  type="text"
-                  value={documentTerms.duration}
-                  onChange={e => setDocumentTerms({ ...documentTerms, duration: e.target.value })}
-                  placeholder="e.g. 1-2 Working Days"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic (مدة التنفيذ)</label>
-                <input
-                  type="text"
-                  dir="rtl"
-                  value={documentTerms.durationAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, durationAr: e.target.value })}
-                  placeholder="مثال: 1-2 أيام عمل"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 7. Bank Details */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-200 pb-2">
-              <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                7. Bank Details (BANK DETAILS:)
-              </span>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={documentTerms.showBankDetails !== false}
-                  onChange={e => setDocumentTerms({ ...documentTerms, showBankDetails: e.target.checked })}
-                  className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                />
-                Show by default
-              </label>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English Bank Details (Multiline)</label>
-                <textarea
-                  rows={4}
-                  value={documentTerms.bankDetails}
-                  onChange={e => setDocumentTerms({ ...documentTerms, bankDetails: e.target.value })}
-                  placeholder="Bank name, Account number, IBAN, Company name..."
-                  className="w-full p-2.5 text-sm font-mono border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Bank Details (البيانات البنكية)</label>
-                <textarea
-                  rows={4}
-                  dir="rtl"
-                  value={documentTerms.bankDetailsAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, bankDetailsAr: e.target.value })}
-                  placeholder="اسم البنك، رقم الحساب، الآيبان، اسم الشركة..."
-                  className="w-full p-2.5 text-sm font-mono border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 8. Footer Message */}
-          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-            <span className="font-semibold text-gray-800 text-sm flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-              8. Document Footer Text (FOOTER:)
-            </span>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">English Closing Note</label>
-                <input
-                  type="text"
-                  value={documentTerms.footer}
-                  onChange={e => setDocumentTerms({ ...documentTerms, footer: e.target.value })}
-                  placeholder="e.g. Thank you for your business!"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1 text-right">Arabic Closing Note (عبارة الشكر الختامية)</label>
-                <input
-                  type="text"
-                  dir="rtl"
-                  value={documentTerms.footerAr}
-                  onChange={e => setDocumentTerms({ ...documentTerms, footerAr: e.target.value })}
-                  placeholder="مثال: شكرا لتعاملكم معنا!"
-                  className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-right font-medium"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Status feedback message */}
-          <div className="h-6">
-            {termsStatus === 'success' && (
-              <span className="text-emerald-600 text-sm font-medium flex items-center gap-1">
-                <CheckCircle2 size={16} /> Default Terms & Conditions saved successfully!
-              </span>
-            )}
-            {termsStatus === 'error' && (
-              <span className="text-red-600 text-sm font-medium flex items-center gap-1">
-                <XCircle size={16} /> Failed to save Terms & Conditions. Make sure you have administrator permissions.
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* SMTP Email Configuration */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold text-gray-800">SMTP Server settings</h2>
-          </div>
-          <button
-            onClick={handleSmtpSave}
-            disabled={smtpStatus === 'loading'}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
-          >
-            {smtpStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Config'}
-          </button>
-        </div>
-        <div className="p-6">
-          <p className="text-gray-600 mb-6 text-sm">
-            Configure your SMTP server here to allow sending Quotations and Invoices directly to clients via email.
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Host Server</label>
-              <input type="text" placeholder="smtp.gmail.com" value={smtpConfig.host} onChange={e => setSmtpConfig({ ...smtpConfig, host: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Port</label>
-              <input type="number" placeholder="465" value={smtpConfig.port} onChange={e => setSmtpConfig({ ...smtpConfig, port: parseInt(e.target.value, 10) })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Username / Email</label>
-              <input type="text" placeholder="user@company.com" value={smtpConfig.user} onChange={e => setSmtpConfig({ ...smtpConfig, user: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password / App Password</label>
-              <input type="password" placeholder="••••••••" value={smtpConfig.pass} onChange={e => setSmtpConfig({ ...smtpConfig, pass: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">From Name</label>
-              <input type="text" placeholder="AJ Network Solutions" value={smtpConfig.fromName} onChange={e => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })} className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500" />
-            </div>
-          </div>
-          <div className="mt-4 h-6">
-            {smtpStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> SMTP configuration saved</span>}
-            {smtpStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save SMTP details</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* System Logs (Admin Only) */}
-      {user.role === 'admin' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-6 border-b border-gray-200 bg-gray-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <div className="flex items-center gap-3">
-              <TerminalSquare className="text-gray-700" />
-              <h2 className="text-xl font-semibold text-gray-800">System Logs</h2>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-700">Expire:</span>
-                <div className="relative">
-                  <select
-                    value={logExpirationDays}
-                    onChange={(e) => handleSaveLogExpiration(parseInt(e.target.value, 10))}
-                    className="appearance-none pl-3 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                  >
-                    <option value="1">1 Day</option>
-                    <option value="2">2 Days</option>
-                    <option value="7">7 Days</option>
-                    <option value="14">14 Days</option>
-                    <option value="30">30 Days</option>
-                    <option value="0">Never</option>
-                  </select>
-                  <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
-                </div>
-              </div>
-              <button
-                onClick={fetchLogs}
-                disabled={logsStatus === 'loading'}
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors text-sm font-medium disabled:opacity-50"
-              >
-                <RefreshCw size={16} className={logsStatus === 'loading' ? 'animate-spin' : ''} /> Refresh
-              </button>
-              <button
-                onClick={handleClearLogs}
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors text-sm font-medium"
-              >
-                <Trash2 size={16} /> Clear Logs
-              </button>
-            </div>
-          </div>
           
-          <div className="p-6">
-            <p className="text-gray-600 mb-4 text-sm">
-              Displays backend errors, database execution failures, and AI exceptions for troubleshooting.
-              <span className="ml-2 text-indigo-600">
-                {logExpirationStatus === 'loading' && 'Saving expiration...'}
-                {logExpirationStatus === 'success' && 'Expiration saved!'}
-                {logExpirationStatus === 'error' && 'Failed to save expiration.'}
-              </span>
-            </p>
+                  <div className="p-6">
+                    <p className="text-gray-600 mb-4 text-sm">
+                      Displays backend errors, database execution failures, and AI exceptions for troubleshooting.
+                      <span className="ml-2 text-indigo-600">
+                        {logExpirationStatus === 'loading' && 'Saving expiration...'}
+                        {logExpirationStatus === 'success' && 'Expiration saved!'}
+                        {logExpirationStatus === 'error' && 'Failed to save expiration.'}
+                      </span>
+                    </p>
 
-            {logsStatus === 'loading' ? (
-              <div className="flex items-center gap-2 text-gray-500 justify-center py-8">
-                <Loader2 size={18} className="animate-spin" /> Loading logs...
-              </div>
-            ) : logs.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                No system errors logged.
-              </div>
-            ) : (
-              <div className="overflow-hidden border border-gray-200 rounded-lg">
-                <table className="w-full text-left text-sm whitespace-nowrap">
-                  <thead className="bg-gray-50 text-gray-600 border-b border-gray-200">
-                    <tr>
-                      <th className="p-3 font-medium">Timestamp</th>
-                      <th className="p-3 font-medium">Source</th>
-                      <th className="p-3 font-medium">Type</th>
-                      <th className="p-3 font-medium">Message</th>
-                      <th className="p-3 font-medium text-right">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {logs.map((log) => (
-                      <React.Fragment key={log.id}>
-                        <tr className="hover:bg-gray-50">
-                          <td className="p-3 text-gray-500">{new Date(log.timestamp).toLocaleString()}</td>
-                          <td className="p-3">
-                            <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-md text-xs font-medium">
-                              {log.source}
-                            </span>
-                          </td>
-                          <td className="p-3">
-                            <span className="px-2 py-1 bg-red-100 text-red-700 rounded-md text-xs font-semibold">
-                              {log.type}
-                            </span>
-                          </td>
-                          <td className="p-3 text-gray-800 truncate max-w-xs">{log.message}</td>
-                          <td className="p-3 text-right">
-                            {log.details && (
-                              <button
-                                onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
-                                className="text-indigo-600 hover:text-indigo-800 text-xs font-medium underline"
-                              >
-                                {expandedLogId === log.id ? 'Hide Details' : 'View Details'}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                        {expandedLogId === log.id && log.details && (
-                          <tr className="bg-gray-800">
-                            <td colSpan={5} className="p-0">
-                              <pre className="p-4 text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap font-mono m-0">
-                                {log.details}
-                              </pre>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MU Calculation Filters */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Filter className="text-indigo-600" />
-            <div>
-              <h2 className="text-xl font-semibold text-gray-800">MU Calculation Filters</h2>
-              <p className="text-sm text-gray-500 mt-0.5">Control which item types are included in the Markup Profit (MU) calculation</p>
-            </div>
-          </div>
-          <button
-            onClick={handleMuFilterSave}
-            disabled={muFilterStatus === 'loading'}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
-          >
-            {muFilterStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : 'Save Filters'}
-          </button>
-        </div>
-        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-
-          {/* Zero Markup List */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-1">Zero Markup Keywords</h3>
-            <p className="text-xs text-gray-500 mb-3">
-              Items whose description contains any of these words are included in MU but contribute <strong>zero profit</strong> (their base cost = their sale price).
-            </p>
-            <div className="flex gap-2 mb-3">
-              <input
-                type="text"
-                placeholder="e.g. Materials"
-                value={muFilterInput.zero}
-                onChange={e => setMuFilterInput(f => ({ ...f, zero: e.target.value }))}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && muFilterInput.zero.trim()) {
-                    const kw = muFilterInput.zero.trim();
-                    if (!zeroMarkupKeywords.includes(kw)) setZeroMarkupKeywords(prev => [...prev, kw]);
-                    setMuFilterInput(f => ({ ...f, zero: '' }));
-                  }
-                }}
-                className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              />
-              <button
-                onClick={() => {
-                  const kw = muFilterInput.zero.trim();
-                  if (kw && !zeroMarkupKeywords.includes(kw)) setZeroMarkupKeywords(prev => [...prev, kw]);
-                  setMuFilterInput(f => ({ ...f, zero: '' }));
-                }}
-                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
-              >
-                <Plus size={16} />
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {zeroMarkupKeywords.map(kw => (
-                <span key={kw} className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full text-sm font-medium">
-                  {kw}
-                  <button onClick={() => setZeroMarkupKeywords(prev => prev.filter(k => k !== kw))} className="hover:text-red-600 transition-colors">
-                    <X size={13} />
-                  </button>
-                </span>
-              ))}
-              {zeroMarkupKeywords.length === 0 && <span className="text-xs text-gray-400 italic">No keywords added</span>}
-            </div>
-          </div>
-
-          {/* Excluded List */}
-          <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-1">Excluded Keywords</h3>
-            <p className="text-xs text-gray-500 mb-3">
-              Items whose description contains any of these words are <strong>completely excluded</strong> from the MU calculation (neither profit nor cost).
-            </p>
-            <div className="flex gap-2 mb-3">
-              <input
-                type="text"
-                placeholder="e.g. Installation"
-                value={muFilterInput.excluded}
-                onChange={e => setMuFilterInput(f => ({ ...f, excluded: e.target.value }))}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && muFilterInput.excluded.trim()) {
-                    const kw = muFilterInput.excluded.trim();
-                    if (!excludedKeywords.includes(kw)) setExcludedKeywords(prev => [...prev, kw]);
-                    setMuFilterInput(f => ({ ...f, excluded: '' }));
-                  }
-                }}
-                className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              />
-              <button
-                onClick={() => {
-                  const kw = muFilterInput.excluded.trim();
-                  if (kw && !excludedKeywords.includes(kw)) setExcludedKeywords(prev => [...prev, kw]);
-                  setMuFilterInput(f => ({ ...f, excluded: '' }));
-                }}
-                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
-              >
-                <Plus size={16} />
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {excludedKeywords.map(kw => (
-                <span key={kw} className="flex items-center gap-1.5 px-3 py-1 bg-red-50 border border-red-200 text-red-800 rounded-full text-sm font-medium">
-                  {kw}
-                  <button onClick={() => setExcludedKeywords(prev => prev.filter(k => k !== kw))} className="hover:text-red-600 transition-colors">
-                    <X size={13} />
-                  </button>
-                </span>
-              ))}
-              {excludedKeywords.length === 0 && <span className="text-xs text-gray-400 italic">No keywords added</span>}
-            </div>
-          </div>
-
-        </div>
-        <div className="px-6 pb-4 h-6">
-          {muFilterStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={16} /> MU filters saved successfully</span>}
-          {muFilterStatus === 'error' && <span className="text-red-600 text-sm font-medium flex items-center gap-1"><XCircle size={16} /> Failed to save MU filters</span>}
-        </div>
-      </div>
-
-      {/* Quote ID Prefix */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700 font-mono font-bold text-sm">#</div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Quote ID Prefix</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Customize the prefix used when generating new quote numbers (e.g. AJ-10001, ACME-10001)</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center gap-4">
-          <div className="flex items-center gap-3 flex-1 max-w-xs">
-            <input
-              type="text"
-              value={quotePrefix}
-              maxLength={8}
-              onChange={e => setQuotePrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
-              className="w-32 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono font-bold text-center text-lg uppercase"
-              placeholder="AJ"
-            />
-            <span className="text-gray-400 font-mono text-lg">— 10001, 10002 …</span>
-          </div>
-          <button
-            onClick={async () => {
-              if (!quotePrefix.trim()) return;
-              setQuotePrefixStatus('loading');
-              try {
-                const res = await fetch('/api/settings', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-                  body: JSON.stringify({ key: 'quotePrefix', value: quotePrefix.trim() })
-                });
-                if (res.ok) { setQuotePrefixStatus('success'); setTimeout(() => setQuotePrefixStatus('idle'), 3000); }
-                else setQuotePrefixStatus('error');
-              } catch { setQuotePrefixStatus('error'); }
-            }}
-            disabled={quotePrefixStatus === 'loading'}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 text-sm font-medium"
-          >
-            {quotePrefixStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save Prefix'}
-          </button>
-          <div className="h-5">
-            {quotePrefixStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> Saved</span>}
-            {quotePrefixStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Access Control: Workflow Visibility */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
-            <Shield size={20} />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Access Control</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Toggle system-wide visibility for key workflow buttons</p>
-          </div>
-        </div>
-        <div className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { id: 'invoice', label: 'Invoice Button', desc: 'Convert Quote to Tax Invoice' },
-              { id: 'template', label: 'Save Template', desc: 'Save reusable term templates' },
-              { id: 'email', label: 'Email Button', desc: 'Send Quote via SMTP' },
-              { id: 'print', label: 'Print Button', desc: 'Open browser print dialog' },
-              { id: 'preparedBy', label: 'Prepared By', desc: 'Show "Prepared By" on documents' },
-              { id: 'shareWith', label: 'Share With', desc: 'Show "Share With" panel on quotes' },
-              { id: 'showFeatureAccess', label: 'Feature Access', desc: 'Show feature list in profile menu' },
-              { id: 'internalNotes', label: 'Internal Notes', desc: 'Enable private internal notes on quote items' },
-              { id: 'bottomNote', label: 'Bottom Note Section', desc: 'Show terms/conditions note section at page bottom' },
-              { id: 'updateTermsButton', label: 'Update Terms Button', desc: 'Show button on quote to update notes and terms to defaults' },
-            ].map((btn) => (
-              <div
-                key={btn.id}
-                onClick={() => handleWorkflowToggle(btn.id as any)}
-                className={`flex flex-col p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                  workflowVisibility[btn.id as keyof typeof workflowVisibility]
-                    ? 'border-indigo-500 bg-indigo-50'
-                    : 'border-gray-100 bg-white hover:border-gray-200'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-bold text-gray-800">{btn.label}</span>
-                  <div className={`w-10 h-5 rounded-full relative transition-colors ${workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'bg-indigo-600' : 'bg-gray-300'}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'left-5.5' : 'left-0.5'}`} style={{ transform: workflowVisibility[btn.id as keyof typeof workflowVisibility] ? 'translateX(20px)' : 'translateX(0)' }}></div>
-                  </div>
-                </div>
-                <p className="text-[10px] text-gray-500 leading-tight">{btn.desc}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 flex justify-end h-4">
-            {workflowStatus === 'loading' && <Loader2 size={16} className="animate-spin text-indigo-600" />}
-            {workflowStatus === 'success' && <span className="text-emerald-600 text-xs font-semibold flex items-center gap-1"><CheckCircle2 size={14} /> Workflow settings updated</span>}
-            {workflowStatus === 'error' && <span className="text-red-600 text-xs font-semibold flex items-center gap-1"><XCircle size={14} /> Failed to save settings</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* PDF Generation Engine */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
-            <FileText size={20} />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">PDF Generation Engine</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Select the PDF generator to use for exporting Quotations</p>
-          </div>
-        </div>
-        <div className="p-6">
-          <div className="max-w-md">
-            <div
-              onClick={() => handlePdfSystemToggle('client')}
-              className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                pdfSystem === 'client' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Monitor size={18} className={pdfSystem === 'client' ? 'text-indigo-600' : 'text-gray-400'} />
-                  <span className="font-semibold text-gray-800">Legacy Canvas (Client)</span>
-                </div>
-                {pdfSystem === 'client' && <CheckCircle2 size={18} className="text-indigo-600" />}
-              </div>
-              <p className="text-sm text-gray-500">
-                Uses the old html2canvas method. Prints exactly as it appears on screen but may be blurry and not selectable.
-              </p>
-            </div>
-          </div>
-          <div className="h-5 mt-3">
-            {pdfSystemStatus === 'success' && <span className="text-emerald-600 text-sm font-medium flex items-center gap-1"><CheckCircle2 size={14} /> System preference saved</span>}
-            {pdfSystemStatus === 'error' && <span className="text-red-600 text-sm font-medium">Failed to save preference</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Row Reorder Mode */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-lg">⠿</div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Row Reorder Mode</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Choose how items are reordered in the Quote Form</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between gap-8">
-          <div className="space-y-3 flex-1">
-            <div
-              onClick={() => handleRowReorderToggle('click')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                rowReorderMode === 'click' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                rowReorderMode === 'click' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {rowReorderMode === 'click' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">↑ ↓ Click Arrows</p>
-                <p className="text-sm text-gray-500 mt-0.5">Up and down arrow buttons appear beside each row. Click once per step to move rows.</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleRowReorderToggle('drag')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                rowReorderMode === 'drag' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                rowReorderMode === 'drag' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {rowReorderMode === 'drag' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">⠿ Drag &amp; Drop</p>
-                <p className="text-sm text-gray-500 mt-0.5">A grip handle replaces the arrows. Click and drag any row to reorder it instantly.</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            {rowReorderStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
-            {rowReorderStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Translation Mode */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
-            <Languages size={20} />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Translation Mode / وضع الترجمة</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Control whether Arabic translation happens automatically or only when clicking the Translate button</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between gap-8">
-          <div className="space-y-3 flex-1">
-            <div
-              onClick={() => handleTranslationModeToggle('manual')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                translationMode === 'manual' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                translationMode === 'manual' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {translationMode === 'manual' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Manual (Only when clicking "Translate")</p>
-                <p className="text-sm text-gray-500 mt-0.5">Translation will only run when you explicitly click the "Translate" button. No automatic translation occurs while typing or changing fields.</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleTranslationModeToggle('auto')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                translationMode === 'auto' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                translationMode === 'auto' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {translationMode === 'auto' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Auto (Translate on blur / typing)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Automatically translates descriptions, notes, and items when you finish typing or select products.</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            {translationModeStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
-            {translationModeStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Discount Calculation Mode */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
-            <Percent size={20} />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Discount Calculation Mode</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Select how discounts are entered and calculated in the Quotation form</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between gap-8">
-          <div className="space-y-3 flex-1">
-            <div
-              onClick={() => handleDiscountModeToggle('amount')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                discountMode === 'amount' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                discountMode === 'amount' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {discountMode === 'amount' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Direct Amount (SAR)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Discount is entered directly as a fixed currency amount in SAR (e.g. SAR 500.00).</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleDiscountModeToggle('percentage')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                discountMode === 'percentage' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                discountMode === 'percentage' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {discountMode === 'percentage' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Percentage (%)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Discount is entered as a percentage (e.g. 10%). The system automatically calculates the SAR reduction based on the Subtotal.</p>
-              </div>
-            </div>
-            <div
-              onClick={() => handleDiscountModeToggle('both')}
-              className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                discountMode === 'both' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className={`w-5 h-5 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
-                discountMode === 'both' ? 'border-indigo-500' : 'border-gray-300'
-              }`}>
-                {discountMode === 'both' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />}
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800">Both (Percentage &amp; Amount)</p>
-                <p className="text-sm text-gray-500 mt-0.5">Displays both the percentage (%) input and the direct SAR amount simultaneously. Editing either input automatically recalculates the other.</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            {discountModeStatus === 'success' && <span className="text-emerald-600 text-xs font-medium">Saved ✓</span>}
-            {discountModeStatus === 'error' && <span className="text-red-600 text-xs font-medium">Save failed</span>}
-          </div>
-        </div>
-      </div>
-
-      {/* Developer Mode */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center text-purple-700 font-mono font-bold text-sm">&lt;/&gt;</div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">Developer Mode</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Reveals formula audit information in the Analysis Sidebar — like Excel&apos;s formula view</p>
-          </div>
-        </div>
-        <div className="p-6 flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-sm text-gray-700">When <strong>ON</strong>, the Analysis Sidebar shows a <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold">RULE</span> column for each item:</p>
-            <ul className="text-xs text-gray-500 mt-2 space-y-1 ml-3">
-              <li><span className="inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold mr-1">EXCL</span> Item is excluded from MU entirely</li>
-              <li><span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-bold mr-1">ZM</span> Zero markup — base cost equals sale price</li>
-              <li><span className="inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-bold mr-1">MAN</span> Manual base cost override is active</li>
-              <li><span className="inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded font-bold mr-1">DB</span> Using original DB price as base cost</li>
-              <li><span className="inline-block px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded font-bold mr-1">--</span> No base price known</li>
-            </ul>
-            <p className="text-xs text-gray-400 mt-3">Toggle takes effect immediately. Turn off to hide formula details from regular users.</p>
-          </div>
-          <div className="flex flex-col items-center gap-2 ml-8">
-            <button
-              onClick={() => handleDevModeToggle(!developerMode)}
-              className={`relative inline-flex h-8 w-16 items-center rounded-full transition-colors focus:outline-none ${
-                developerMode ? 'bg-purple-600' : 'bg-gray-200'
-              }`}
-            >
-              <span className={`inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition-transform ${
-                developerMode ? 'translate-x-9' : 'translate-x-1'
-              }`} />
-            </button>
-            <span className={`text-xs font-semibold ${developerMode ? 'text-purple-700' : 'text-gray-400'}`}>
-              {developerMode ? 'ON' : 'OFF'}
-            </span>
-            {devModeStatus === 'success' && <span className="text-emerald-600 text-xs">Saved</span>}
-            {devModeStatus === 'error' && <span className="text-red-600 text-xs">Save failed</span>}
-          </div>
-        </div>
-
-        {/* Inspection Protection Toggle within Developer Section */}
-        <div className="px-6 py-4 bg-purple-50/50 border-t border-purple-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Shield size={18} className="text-purple-600" />
-            <div>
-              <p className="text-sm font-bold text-gray-800">Source Inspection Protection</p>
-              <p className="text-xs text-gray-500">Disable Right-Click and DevTools shortcuts (F12, Ctrl+Shift+I) for non-admins.</p>
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <button
-              onClick={() => handleWorkflowToggle('inspectionProtection' as any)}
-              className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none ${
-                workflowVisibility.inspectionProtection ? 'bg-purple-600' : 'bg-gray-200'
-              }`}
-            >
-              <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
-                workflowVisibility.inspectionProtection ? 'translate-x-8' : 'translate-x-1'
-              }`} />
-            </button>
-            <span className={`text-[10px] font-bold ${workflowVisibility.inspectionProtection ? 'text-purple-700' : 'text-gray-400'}`}>
-              {workflowVisibility.inspectionProtection ? 'ACTIVE' : 'DISABLED'}
-            </span>
-          </div>
-        </div>
-      </div>
-      
-      {/* System Update Section */}
-      {user.role === 'admin' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
-            <RefreshCw className={`text-indigo-600 ${checkUpdateStatus === 'loading' ? 'animate-spin' : ''}`} />
-            <h2 className="text-xl font-semibold text-gray-800">System Updates</h2>
-          </div>
-          <div className="p-6">
-            <div className="flex items-center justify-between">
-              <div className="flex-1 mr-8">
-                <p className="text-sm text-gray-600 mb-1">Check for the latest version of the AJ Quotation System from GitHub.</p>
-                <div className="flex items-center gap-2 text-xs font-mono text-gray-400 mb-4">
-                  <span>Current Revision:</span>
-                  <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{APP_VERSION}</span>
-                </div>
-                
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">GitHub Repository URL</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={remoteUrl}
-                      onChange={(e) => setRemoteUrl(e.target.value)}
-                      placeholder="https://github.com/user/repo.git"
-                      className="flex-1 px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-mono"
-                    />
-                    <button
-                      onClick={handleUpdateRemoteUrl}
-                      disabled={remoteUrlStatus === 'loading'}
-                      className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                    >
-                      {remoteUrlStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save URL'}
-                    </button>
-                  </div>
-                  {remoteUrlStatus === 'success' && <p className="text-[10px] text-emerald-600 font-bold">✓ Repository URL updated</p>}
-                  {remoteUrlStatus === 'error' && <p className="text-[10px] text-red-600 font-bold">✗ Failed to update URL</p>}
-                </div>
-              </div>
-              <button
-                onClick={handleCheckUpdate}
-                disabled={checkUpdateStatus === 'loading'}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 h-fit"
-              >
-                {checkUpdateStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                Check for Updates
-              </button>
-            </div>
-
-            {updateStatus && (
-              <div className="mt-6 p-4 rounded-lg bg-gray-50 border border-gray-200">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    {updateStatus.hasUpdate ? (
-                      <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                        <AlertTriangle size={20} />
+                    {logsStatus === 'loading' ? (
+                      <div className="flex items-center gap-2 text-gray-500 justify-center py-8">
+                        <Loader2 size={18} className="animate-spin" /> Loading logs...
+                      </div>
+                    ) : logs.length === 0 ? (
+                      <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                        No system errors logged.
                       </div>
                     ) : (
-                      <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
-                        <CheckCircle2 size={20} />
+                      <div className="overflow-hidden border border-gray-200 rounded-lg">
+                        <table className="w-full text-left text-sm whitespace-nowrap">
+                          <thead className="bg-gray-50 text-gray-600 border-b border-gray-200">
+                            <tr>
+                              <th className="p-3 font-medium">Timestamp</th>
+                              <th className="p-3 font-medium">Source</th>
+                              <th className="p-3 font-medium">Type</th>
+                              <th className="p-3 font-medium">Message</th>
+                              <th className="p-3 font-medium text-right">Details</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200">
+                            {logs.map((log) => (
+                              <React.Fragment key={log.id}>
+                                <tr className="hover:bg-gray-50">
+                                  <td className="p-3 text-gray-500">{new Date(log.timestamp).toLocaleString()}</td>
+                                  <td className="p-3">
+                                    <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-md text-xs font-medium">
+                                      {log.source}
+                                    </span>
+                                  </td>
+                                  <td className="p-3">
+                                    <span className="px-2 py-1 bg-red-100 text-red-700 rounded-md text-xs font-semibold">
+                                      {log.type}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-gray-800 truncate max-w-xs">{log.message}</td>
+                                  <td className="p-3 text-right">
+                                    {log.details && (
+                                      <button
+                                        onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                                        className="text-indigo-600 hover:text-indigo-800 text-xs font-medium underline"
+                                      >
+                                        {expandedLogId === log.id ? 'Hide Details' : 'View Details'}
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                                {expandedLogId === log.id && log.details && (
+                                  <tr className="bg-gray-800">
+                                    <td colSpan={5} className="p-0">
+                                      <pre className="p-4 text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap font-mono m-0">
+                                        {log.details}
+                                      </pre>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
-                    <div>
-                      <p className="font-bold text-gray-800">
-                        {updateStatus.hasUpdate ? 'Update Available!' : 'System Up to Date'}
-                      </p>
-                      <p className="text-xs text-gray-500 font-mono">
-                        Remote: {updateStatus.latest.substring(0, 7)} | Local: {updateStatus.current.substring(0, 7)}
-                      </p>
-                    </div>
                   </div>
+                </div>
+              )}
 
-                  {updateStatus.hasUpdate && (
+              {/* Developer Mode */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center text-purple-700 font-mono font-bold text-sm">&lt;/&gt;</div>
+                  <div>
+                    <h2 className="text-xl font-semibold text-gray-800">Developer Mode</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">Reveals formula audit information in the Analysis Sidebar — like Excel&apos;s formula view</p>
+                  </div>
+                </div>
+                <div className="p-6 flex items-center justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm text-gray-700">When <strong>ON</strong>, the Analysis Sidebar shows a <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold">RULE</span> column for each item:</p>
+                    <ul className="text-xs text-gray-500 mt-2 space-y-1 ml-3">
+                      <li><span className="inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold mr-1">EXCL</span> Item is excluded from MU entirely</li>
+                      <li><span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded font-bold mr-1">ZM</span> Zero markup — base cost equals sale price</li>
+                      <li><span className="inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-bold mr-1">MAN</span> Manual base cost override is active</li>
+                      <li><span className="inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded font-bold mr-1">DB</span> Using original DB price as base cost</li>
+                      <li><span className="inline-block px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded font-bold mr-1">--</span> No base price known</li>
+                    </ul>
+                    <p className="text-xs text-gray-400 mt-3">Toggle takes effect immediately. Turn off to hide formula details from regular users.</p>
+                  </div>
+                  <div className="flex flex-col items-center gap-2 ml-8">
                     <button
-                      onClick={handlePerformUpdate}
-                      disabled={performUpdateStatus === 'loading'}
-                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50"
+                      onClick={() => handleDevModeToggle(!developerMode)}
+                      className={`relative inline-flex h-8 w-16 items-center rounded-full transition-colors focus:outline-none ${
+                        developerMode ? 'bg-purple-600' : 'bg-gray-200'
+                      }`}
                     >
-                      {performUpdateStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                      Update Now
+                      <span className={`inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition-transform ${
+                        developerMode ? 'translate-x-9' : 'translate-x-1'
+                      }`} />
                     </button>
-                  )}
+                    <span className={`text-xs font-semibold ${developerMode ? 'text-purple-700' : 'text-gray-400'}`}>
+                      {developerMode ? 'ON' : 'OFF'}
+                    </span>
+                    {devModeStatus === 'success' && <span className="text-emerald-600 text-xs">Saved</span>}
+                    {devModeStatus === 'error' && <span className="text-red-600 text-xs">Save failed</span>}
+                  </div>
                 </div>
 
-                {updateError && (
-                  <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-2 text-sm font-medium">
-                    <XCircle className="shrink-0 mt-0.5" size={16} />
-                    <div className="flex-1">
-                      <p className="font-bold text-red-800">Update Failed</p>
-                      <p className="text-xs font-mono mt-1 whitespace-pre-wrap text-red-600 leading-relaxed bg-red-100/50 p-2 rounded border border-red-200">{updateError}</p>
-                    </div>
-                  </div>
-                )}
-
-                {updateStatus.hasUpdate && updateStatus.changelog && (
-                  <div className="space-y-2">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">What's New:</p>
-                    <div className="bg-gray-100 p-3 rounded border border-gray-200 text-xs font-mono text-gray-700 whitespace-pre-wrap">
-                      {updateStatus.changelog}
-                    </div>
-                  </div>
-                )}
               </div>
-            )}
-          </div>
-        </div>
-      )}
 
-      {/* App Version Footer */}
-      <div className="pt-8 pb-12 text-center">
-        <div className="inline-flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-xs font-mono border border-gray-200">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          AJ Quotation System v{APP_VERSION}
+              {/* System Update Section */}
+              {user.role === 'admin' && (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="p-6 border-b border-gray-200 bg-gray-50 flex items-center gap-3">
+                    <RefreshCw className={`text-indigo-600 ${checkUpdateStatus === 'loading' ? 'animate-spin' : ''}`} />
+                    <h2 className="text-xl font-semibold text-gray-800">System Updates</h2>
+                  </div>
+                  <div className="p-6">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 mr-8">
+                        <p className="text-sm text-gray-600 mb-1">Check for the latest version of the AJ Quotation System from GitHub.</p>
+                        <div className="flex items-center gap-2 text-xs font-mono text-gray-400 mb-4">
+                          <span>Current Revision:</span>
+                          <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{APP_VERSION}</span>
+                        </div>
+                
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">GitHub Repository URL</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={remoteUrl}
+                              onChange={(e) => setRemoteUrl(e.target.value)}
+                              placeholder="https://github.com/user/repo.git"
+                              className="flex-1 px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-mono"
+                            />
+                            <button
+                              onClick={handleUpdateRemoteUrl}
+                              disabled={remoteUrlStatus === 'loading'}
+                              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                            >
+                              {remoteUrlStatus === 'loading' ? <Loader2 size={16} className="animate-spin" /> : 'Save URL'}
+                            </button>
+                          </div>
+                          {remoteUrlStatus === 'success' && <p className="text-[10px] text-emerald-600 font-bold">✓ Repository URL updated</p>}
+                          {remoteUrlStatus === 'error' && <p className="text-[10px] text-red-600 font-bold">✗ Failed to update URL</p>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleCheckUpdate}
+                        disabled={checkUpdateStatus === 'loading'}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 h-fit"
+                      >
+                        {checkUpdateStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                        Check for Updates
+                      </button>
+                    </div>
+
+                    {updateStatus && (
+                      <div className="mt-6 p-4 rounded-lg bg-gray-50 border border-gray-200">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            {updateStatus.hasUpdate ? (
+                              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                                <AlertTriangle size={20} />
+                              </div>
+                            ) : (
+                              <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                                <CheckCircle2 size={20} />
+                              </div>
+                            )}
+                            <div>
+                              <p className="font-bold text-gray-800">
+                                {updateStatus.hasUpdate ? 'Update Available!' : 'System Up to Date'}
+                              </p>
+                              <p className="text-xs text-gray-500 font-mono">
+                                Remote: {updateStatus.latest.substring(0, 7)} | Local: {updateStatus.current.substring(0, 7)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {updateStatus.hasUpdate && (
+                            <button
+                              onClick={handlePerformUpdate}
+                              disabled={performUpdateStatus === 'loading'}
+                              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50"
+                            >
+                              {performUpdateStatus === 'loading' ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                              Update Now
+                            </button>
+                          )}
+                        </div>
+
+                        {updateError && (
+                          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-2 text-sm font-medium">
+                            <XCircle className="shrink-0 mt-0.5" size={16} />
+                            <div className="flex-1">
+                              <p className="font-bold text-red-800">Update Failed</p>
+                              <p className="text-xs font-mono mt-1 whitespace-pre-wrap text-red-600 leading-relaxed bg-red-100/50 p-2 rounded border border-red-200">{updateError}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {updateStatus.hasUpdate && updateStatus.changelog && (
+                          <div className="space-y-2">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">What's New:</p>
+                            <div className="bg-gray-100 p-3 rounded border border-gray-200 text-xs font-mono text-gray-700 whitespace-pre-wrap">
+                              {updateStatus.changelog}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+          </>
+        )}
+
+        {/* App Version Footer */}
+        <div className="pt-8 pb-12 text-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-xs font-mono border border-gray-200">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            AJ Quotation System v{APP_VERSION}
+          </div>
+          <p className="text-[10px] text-gray-400 mt-2 uppercase tracking-widest">Powered by AJ Network Solutions</p>
         </div>
-        <p className="text-[10px] text-gray-400 mt-2 uppercase tracking-widest">Powered by AJ Network Solutions</p>
       </div>
     </div>
   );

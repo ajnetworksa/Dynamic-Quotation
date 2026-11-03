@@ -1,11 +1,29 @@
 import React from "react";
 import { Document, Page, Text, View, StyleSheet, Image, Font, Svg, Defs, LinearGradient, Stop, Rect } from "@react-pdf/renderer";
 
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { round2 } from "../lib/money";
+
+// Fonts are bundled in assets/fonts so PDF generation works offline (the old CDN URLs are only a fallback).
+// Resolved relative to this file (src/pdf -> ../../assets/fonts), so it works from any working directory.
+const FONT_DIRS = [
+  fileURLToPath(new URL("../../assets/fonts/", import.meta.url)),
+  path.resolve(process.cwd(), "assets", "fonts"),
+];
+const localFont = (file: string, cdn: string) => {
+  for (const dir of FONT_DIRS) {
+    const p = path.join(dir, file);
+    if (fs.existsSync(p)) return p;
+  }
+  return cdn;
+};
 Font.register({
   family: "Tajawal",
   fonts: [
-    { src: "https://cdn.jsdelivr.net/gh/googlefonts/tajawal@main/fonts/ttf/Tajawal-Regular.ttf", fontWeight: "normal" },
-    { src: "https://cdn.jsdelivr.net/gh/googlefonts/tajawal@main/fonts/ttf/Tajawal-Bold.ttf", fontWeight: "bold" },
+    { src: localFont("Tajawal-Regular.ttf", "https://cdn.jsdelivr.net/gh/googlefonts/tajawal@main/fonts/ttf/Tajawal-Regular.ttf"), fontWeight: "normal" },
+    { src: localFont("Tajawal-Bold.ttf", "https://cdn.jsdelivr.net/gh/googlefonts/tajawal@main/fonts/ttf/Tajawal-Bold.ttf"), fontWeight: "bold" },
   ],
 });
 
@@ -114,7 +132,8 @@ export type PdfQuote = {
 };
 
 export function lineNetPrice(line: PdfLine): number {
-  return line.quantity * line.unitPrice * (1 - (line.discount || 0) / 100);
+  // Rounded exactly like the quote form (src/lib/money.ts) so PDF rows match the totals.
+  return round2(line.quantity * line.unitPrice * (1 - (line.discount || 0) / 100));
 }
 
 // ── BILINGUAL TRANSLATION HELPERS ──────────────────────────────────────────────
@@ -379,6 +398,10 @@ const styles = StyleSheet.create({
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
+// Local calendar date (toISOString is UTC and shifted dates by a day for users east of UTC).
+function localYmd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function fmtDate(d: Date | string | null | undefined) {
   if (!d) return "—";
   try {
@@ -388,10 +411,10 @@ function fmtDate(d: Date | string | null | undefined) {
       if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
       const dt = new Date(s);
       if (isNaN(dt.getTime())) return s;
-      return dt.toISOString().slice(0, 10);
+      return localYmd(dt);
     }
     if (d instanceof Date && !isNaN(d.getTime())) {
-      return d.toISOString().slice(0, 10);
+      return localYmd(d);
     }
     return "—";
   } catch {
@@ -421,8 +444,10 @@ export function QuotePdfDocument({
   // Ensure brand color is never so dark it appears black in the PDF
   const ensureVisibleColor = (hex: string): string => {
     // Strip alpha channel from 8-char hex (e.g. "#039737a6" → "#039737")
-    let h = hex.replace("#", "");
+    let h = String(hex || "").replace("#", "").trim();
+    if (h.length === 3 || h.length === 4) h = h.split("").slice(0, 3).map((c) => c + c).join("");
     if (h.length === 8) h = h.substring(0, 6);
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return "#039737"; // invalid colour -> default brand green
     const r = parseInt(h.substring(0, 2), 16);
     const g = parseInt(h.substring(2, 4), 16);
     const b = parseInt(h.substring(4, 6), 16);
@@ -703,7 +728,7 @@ export function QuotePdfDocument({
               {termsRows.map((row) => {
                 const rowFontSize = getTermFontSize(row.label);
                 return (
-                  <View key={row.label} style={styles.termRow}>
+                  <View key={`${row.label}-${row.en.slice(0, 20)}`} style={styles.termRow}>
                     <Text style={[styles.termLabel, { fontSize: rowFontSize }]}>{row.label}:</Text>
                     <View style={styles.termEnContainer}>
                       <Text style={[styles.termEnText, { fontSize: rowFontSize }]}>{row.en}</Text>
@@ -786,7 +811,11 @@ export function QuotePdfDocument({
         {/* ── DYNAMIC FOOTER ───────────────────────────────────────── */}
         <View fixed style={styles.footerRow}>
           <Text style={styles.footerText}>
-            {settings.companyName || "AJ Network Solutions"} | Tel: +966 920002087 | info@ajnetworksa.com
+            {[
+              settings.companyName || "AJ Network Solutions",
+              `Tel: ${settings.phone || "+966 920002087"}`,
+              settings.email || "info@ajnetworksa.com",
+            ].join(" | ")}
           </Text>
           <Text style={styles.footerText} render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
         </View>

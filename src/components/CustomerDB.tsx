@@ -1,7 +1,10 @@
 import { getStoredUser } from '../lib/storage';
+import { toast, confirmAsync } from '../lib/notify';
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import CsvImportModal from './CsvImportModal';
+import { customerKeys } from '../lib/importDedupe';
 
 interface Customer {
   id: number;
@@ -22,6 +25,9 @@ export default function CustomerDB() {
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [stats, setStats] = useState<Record<number, { total_won: number, quote_count: number }>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [showImport, setShowImport] = useState(false);
   const user = getStoredUser();
   const navigate = useNavigate();
 
@@ -32,12 +38,16 @@ export default function CustomerDB() {
 
   const fetchCustomers = async () => {
     try {
+      setLoadError('');
       const res = await fetch('/api/customers');
-      if (!res.ok) return;
+      if (!res.ok) { setLoadError('Could not load customers. Please try again.'); return; }
       const data = await res.json();
       if (Array.isArray(data)) setCustomers(data);
     } catch (e) {
       console.error('Failed to fetch customers', e);
+      setLoadError('Network error: could not load customers.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -61,14 +71,14 @@ export default function CustomerDB() {
       });
       if (!res.ok) {
         const data = await res.json();
-        alert('Failed to add customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
+        toast('Failed to add customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
         return;
       }
       setIsAdding(false);
       setEditForm({});
       fetchCustomers();
     } catch (e) {
-      alert('Network error occurred while adding.');
+      toast('Network error occurred while adding.');
     }
   };
 
@@ -81,19 +91,19 @@ export default function CustomerDB() {
       });
       if (!res.ok) {
         const data = await res.json();
-        alert('Failed to update customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
+        toast('Failed to update customer: ' + (data.details ? data.details.join(', ') : data.error || 'Unknown error'));
         return;
       }
       setIsEditing(null);
       setEditForm({});
       fetchCustomers();
     } catch (e) {
-      alert('Network error occurred while updating.');
+      toast('Network error occurred while updating.');
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this customer?')) return;
+    if (!await confirmAsync('Are you sure you want to delete this customer?')) return;
     await fetch(`/api/customers/${id}`, { method: 'DELETE' });
     fetchCustomers();
   };
@@ -111,9 +121,22 @@ export default function CustomerDB() {
     else setSelectedIds(new Set(currentItems.map(c => c.id)));
   };
   const handleBulkDelete = async () => {
-    if (!confirm(`Delete ${selectedIds.size} selected customer(s)? This cannot be undone.`)) return;
-    for (const id of selectedIds) {
-      await fetch(`/api/customers/${id}`, { method: 'DELETE' });
+    if (!await confirmAsync(`Delete ${selectedIds.size} selected customer(s)? This cannot be undone.`)) return;
+    // One request / one transaction (the old loop sent a DELETE per row and could stop half-way silently).
+    try {
+      const res = await fetch('/api/customers/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast(body.error || 'Bulk delete failed. Nothing was deleted.');
+        return;
+      }
+    } catch {
+      toast('Network error. Nothing was deleted.');
+      return;
     }
     setSelectedIds(new Set());
     fetchCustomers();
@@ -164,6 +187,26 @@ export default function CustomerDB() {
           )}
         </div>
       )}
+      {showImport && (
+        <CsvImportModal
+          title="Import customers from CSV"
+          templateName="customers-template.csv"
+          columns={[
+            { key: 'name', label: 'Name', required: true, aliases: ['company', 'customer', 'customer name', 'company name', 'الاسم'] },
+            { key: 'address', label: 'Address', aliases: ['location', 'العنوان'] },
+            { key: 'contact', label: 'Contact', aliases: ['contact person', 'contact name', 'person'] },
+            { key: 'mobile', label: 'Mobile', aliases: ['phone', 'tel', 'telephone', 'cell', 'mobile number', 'الجوال'] },
+            { key: 'email', label: 'Email', aliases: ['e-mail', 'mail', 'email address'] },
+          ]}
+          sample={[['Acme Trading Co', 'Riyadh', 'Ahmed Ali', '0501234567', 'ahmed@acme.example']]}
+          existingKeys={new Set(customers.flatMap(c => customerKeys(c)))}
+          keysOf={r => customerKeys(r)}
+          toPayload={r => ({ name: r.name, address: r.address, contact: r.contact, mobile: r.mobile, email: r.email })}
+          endpoint="/api/customers/import"
+          onDone={fetchCustomers}
+          onClose={() => setShowImport(false)}
+        />
+      )}
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
@@ -189,6 +232,12 @@ export default function CustomerDB() {
                 </button>
               )}
             </div>
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap"
+            >
+              <Upload size={18} /> Import CSV
+            </button>
             <button
               onClick={() => { setIsAdding(true); setEditForm({}); }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap"
@@ -262,7 +311,7 @@ export default function CustomerDB() {
             {filtered.length === 0 && !isAdding && (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-gray-400">
-                  {search ? `No customers match "${search}"` : 'No customers found. Add one to get started.'}
+                  {loading ? 'Loading customers…' : loadError ? loadError : search ? `No customers match "${search}"` : 'No customers found. Add one to get started.'}
                 </td>
               </tr>
             )}
@@ -313,7 +362,7 @@ export default function CustomerDB() {
 
       {/* Modal for Add / Edit Customer */}
       {(isAdding || isEditing !== null) && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
             <div className="bg-emerald-600 px-4 py-3 flex items-center justify-between text-white">
               <div className="flex items-center gap-2 font-medium">
