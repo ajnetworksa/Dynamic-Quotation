@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import KanbanBoard from './components/KanbanBoard';
 import { RecycleBin } from './components/RecycleBin';
+import { usePasswordMinLength } from './lib/passwordPolicy';
 import AuditLog from './components/AuditLog';
 import SecurityModal from './components/SecurityModal';
 import ApprovalPage from './components/ApprovalPage';
@@ -211,6 +212,7 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
 
 // ── Change Password Modal ─────────────────────────────────────────────────────
 function ChangePasswordModal({ onClose }: { onClose: () => void }) {
+  const minPw = usePasswordMinLength();
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -237,7 +239,7 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     setError('');
     if (newPw !== confirm) { setError('New passwords do not match.'); return; }
-    if (newPw.length < 10) { setError('New password must be at least 10 characters.'); return; }
+    if (newPw.length < minPw) { setError(`New password must be at least ${minPw} characters.`); return; }
     setLoading(true);
     try {
       const res = await fetch('/api/me/change-password', {

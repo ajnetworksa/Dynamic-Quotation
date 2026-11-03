@@ -1687,7 +1687,7 @@ export default function Tracking() {
                           <button
                             onClick={async (e) => {
                               e.stopPropagation();
-                              if (!await confirmAsync('Are you sure you want to undo this action and restore the previous state?')) return;
+                              if (!await confirmAsync('Roll this quote back to how it was before this change? The current version stays in the history, so it can be rolled forward again.')) return;
                               try {
                                 const res = await fetch(`/api/quotes/${timelineQuoteId}/undo/${log.id}`, { method: 'POST' });
                                 if (res.ok) {
@@ -1704,7 +1704,7 @@ export default function Tracking() {
                             }}
                             className="ml-auto flex items-center gap-1 px-2 py-0.5 bg-red-50 hover:bg-red-100 text-red-600 rounded text-[10px] font-bold uppercase transition-colors"
                           >
-                            Undo Action
+                            Roll back to before this
                           </button>
                         )}
                       </div>

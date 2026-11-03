@@ -132,4 +132,10 @@ get-gemini.js
 get-models.js
 test-api.ts
 test-*.js
-test-*.tse2e/shots/
+test-*.ts
+
+# Screenshots written by the browser test (e2e/smoke.cjs)
+e2e/shots/
+
+# Local safety copies made before switching branches
+_pre_merge_backup/

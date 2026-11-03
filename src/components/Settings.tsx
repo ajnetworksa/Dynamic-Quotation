@@ -4,6 +4,8 @@ import CompanyProfileSettings from './CompanyProfileSettings';
 import EncryptedBackupPanel from './EncryptedBackupPanel';
 import ChoiceSettingCard from './settings/ChoiceSettingCard';
 import RecycleBinSettings from './settings/RecycleBinSettings';
+import PasswordPolicySettings from './settings/PasswordPolicySettings';
+import SystemRollbackPanel from './settings/SystemRollbackPanel';
 import { SettingsNav, SectionHeader, parseSettingsSection, SettingsSectionId } from './settings/SettingsNav';
 import { useLocation, useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
@@ -2944,6 +2946,8 @@ export default function Settings() {
 
         {showSection('system') && (
           <>
+              {/* Password length rule (default off = 4+ characters, as before) */}
+              <PasswordPolicySettings />
               {/* System Logs (Admin Only) */}
               {user.role === 'admin' && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -3104,6 +3108,9 @@ export default function Settings() {
                 </div>
 
               </div>
+
+              {/* Roll back the last self-update (admins) */}
+              {user.role === 'admin' && <SystemRollbackPanel />}
 
               {/* System Update Section */}
               {user.role === 'admin' && (

@@ -9,7 +9,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSectionId; label: string; descript
   { id: 'quotes', label: 'Quote Behaviour', description: 'Row reordering, translation, discount mode and workflow visibility.', icon: SlidersHorizontal },
   { id: 'email', label: 'Email', description: 'SMTP server used to send quotations.', icon: Mail },
   { id: 'data', label: 'Data & Backups', description: 'Export, import, backups, restore and the Recycle Bin.', icon: Database },
-  { id: 'system', label: 'System', description: 'Logs, developer mode and updates.', icon: Server },
+  { id: 'system', label: 'System', description: 'Password rules, logs, developer mode, updates and rollback.', icon: Server },
   { id: 'all', label: 'Show everything', description: 'Every setting on one page.', icon: LayoutGrid },
 ];
 

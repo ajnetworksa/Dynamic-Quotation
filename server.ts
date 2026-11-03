@@ -863,18 +863,33 @@ const ProductSchema = z.object({
 const UserCreateSchema = z.object({
   username: z.string().min(1).max(128),
   name: z.string().max(128).optional(),
-  password: z.string().min(10, "Password must be at least 10 characters").max(128),
+  password: z.string().min(1).max(128), // length rule: passwordProblem() (Settings → strongPasswords)
   role: z.enum(['admin', 'user', 'editor']).default('user'),
   permissions: z.record(z.string(), z.any()).optional().default({}),
 });
 
 const UserUpdateSchema = UserCreateSchema.extend({
-  password: z.string().min(10, "Password must be at least 10 characters").max(128).optional().or(z.literal('')), // optional on update or left blank
+  password: z.string().min(1).max(128).optional().or(z.literal('')), // optional on update or left blank
 });
+
+// ── Password length policy ────────────────────────────────────────────────────
+// Settings → "Require strong passwords (10+ characters)" (key strongPasswords). OFF by default: the old
+// rule (4+ characters) applies, so nobody has to choose a new password. Existing passwords always keep working.
+const passwordMinLength = (): number => {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'strongPasswords'").get() as { value: string } | undefined;
+    return row?.value === 'true' ? 10 : 4;
+  } catch { return 4; }
+};
+const passwordProblem = (pw: unknown): string | null => {
+  const min = passwordMinLength();
+  if (typeof pw !== 'string' || pw.length < min) return `Password must be at least ${min} characters.`;
+  return null;
+};
 
 const ChangePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
-  newPassword: z.string().min(10, "Password must be at least 10 characters").max(128),
+  newPassword: z.string().min(1).max(128),
 });
 
 const PermissionGroupSchema = z.object({
@@ -1205,6 +1220,8 @@ app.post('/api/me/change-password', requireAuth, requirePermission('canChangePas
 
     const match = await bcrypt.compare(currentPassword, row.password);
     if (!match) return res.status(400).json({ error: 'Current password is incorrect.' });
+    const pwProblem = passwordProblem(newPassword);
+    if (pwProblem) return res.status(400).json({ error: pwProblem });
 
     const hashed = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashed, currentUser.id);
@@ -1263,6 +1280,8 @@ app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validat
   const { username, name, password, role, permissions } = req.body;
   if (blockAdminEscalation(req, res)) return;
   if (blockAdminPermissionChange(req, res, {})) return;
+  const pwProblem = passwordProblem(password);
+  if (pwProblem) return res.status(400).json({ error: pwProblem });
 
   try {
     const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -1297,6 +1316,8 @@ app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), vali
       if (typeof password !== 'string' || password.length > 128) {
         return res.status(400).json({ error: 'Invalid password.' });
       }
+      const pwProblem = passwordProblem(password);
+      if (pwProblem) return res.status(400).json({ error: pwProblem });
       const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
       db.prepare('UPDATE users SET username = ?, name = ?, password = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), name || null, hashed, role, permStr, req.params.id);
       // An admin reset forces the user to log in again everywhere.
@@ -3298,7 +3319,7 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
       return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
     }
 
-    const logEntry = db.prepare('SELECT previous_state FROM activity_log WHERE id = ? AND quote_id = ?').get(log_id, quote_id) as any;
+    const logEntry = db.prepare('SELECT previous_state, timestamp, actor FROM activity_log WHERE id = ? AND quote_id = ?').get(log_id, quote_id) as any;
     if (!logEntry || !logEntry.previous_state) {
       return res.status(400).json({ error: 'No previous state found for this log entry.' });
     }
@@ -3310,15 +3331,23 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
     if (!oldQuote) return res.status(400).json({ error: 'Invalid previous state structure.' });
 
     db.transaction(() => {
+      // Snapshot of the CURRENT state, stored on the new log entry → the rollback itself can be rolled back.
+      const currentQuote = db.prepare('SELECT * FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+      const currentItems = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(quote_id);
+      const currentState = JSON.stringify({ quote: currentQuote, items: currentItems });
+
       // Restore main quote
       // Only restore real columns (snapshot keys are never trusted as SQL identifiers);
-      // keep current soft-delete flags untouched.
+      // keep current soft-delete flags untouched. version / updated_at move FORWARD (a rollback is a new save),
+      // so editors that still have the newer version open get the normal "changed by someone else" warning.
       const realQuoteCols = new Set((db.pragma('table_info(quotes)') as any[]).map(c => c.name));
-      const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id' && k !== 'quote_id' && realQuoteCols.has(k) && !['deleted_at', 'deleted_by', 'retain_forever'].includes(k));
+      const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id' && k !== 'quote_id' && realQuoteCols.has(k) && !['deleted_at', 'deleted_by', 'retain_forever', 'version', 'updated_at', 'draft_data'].includes(k));
       const setClause = quoteCols.map(c => `${c} = ?`).join(', ');
       const values = quoteCols.map(c => oldQuote[c]);
+      const newVersion = (Number(currentQuote?.version) || 1) + 1;
+      const now = new Date().toISOString();
 
-      db.prepare(`UPDATE quotes SET ${setClause} WHERE quote_id = ?`).run(...values, quote_id);
+      db.prepare(`UPDATE quotes SET ${setClause}${setClause ? ', ' : ''}version = ?, updated_at = ?, draft_data = NULL WHERE quote_id = ?`).run(...values, newVersion, now, quote_id);
 
       // Restore items
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
@@ -3334,9 +3363,11 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
         }
       }
 
-      const updated_at = new Date().toISOString();
-      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(
-        quote_id, 'Restored from previous version', actor, updated_at, null
+      const when = logEntry.timestamp ? new Date(logEntry.timestamp).toISOString().replace('T', ' ').slice(0, 16) : '';
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details, previous_state) VALUES (?, ?, ?, ?, ?, ?)').run(
+        quote_id,
+        `Rolled back to v${oldQuote.version ?? '?'} (the version before the change by ${logEntry.actor || 'someone'} on ${when} UTC)`,
+        actor, now, null, currentState
       );
     })();
 
@@ -4031,6 +4062,10 @@ app.get('/api/settings', requireAuth, (req, res) => {
 
 // SECURITY: every setting now requires a login (nothing is needed before sign-in), and sensitive keys
 // additionally require the canManageSettings permission. The SMTP password is never sent back to the browser.
+app.get('/api/password-policy', requireAuth, (req, res) => {
+  res.json({ minLength: passwordMinLength(), strong: passwordMinLength() >= 10 });
+});
+
 app.get('/api/settings/:key', requireAuth, (req, res) => {
   const sensitiveKeys = ['smtpConfig', 'logExpirationDays'];
   const key = req.params.key;
@@ -4716,6 +4751,13 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
   try {
     console.log('🚀 Starting system update...');
 
+    // 0. Remember where we are + a database copy, so an admin can roll this update back (Settings → System)
+    const { stdout: fromHashRaw } = await execAsync('git rev-parse HEAD');
+    const fromHash = fromHashRaw.trim();
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const preUpdateDb = path.join(BACKUP_DIR, `pre_update_${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
+    await db.backup(preUpdateDb);
+
     // 1. Fetch latest changes from remote
     console.log('Fetching latest commits from remote origin/main...');
     await execAsync('git fetch origin main');
@@ -4740,6 +4782,9 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
     console.log('🛠 Building frontend...');
     await execAsync('npm run build');
 
+    const { stdout: toHashRaw } = await execAsync('git rev-parse HEAD');
+    recordSystemUpdate({ from: fromHash, to: toHashRaw.trim(), at: new Date().toISOString(), by: (req as any).user?.username || 'admin', dbBackup: path.basename(preUpdateDb) });
+
     res.json({
       success: true,
       message: 'System updated and rebuilt successfully. Restarting now...'
@@ -4754,6 +4799,79 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
   } catch (error: any) {
     console.error('Update failed:', error);
     res.status(500).json({ error: `Update failed: ${error.message}` });
+  }
+});
+
+// ── SYSTEM UPDATE ROLLBACK ─────────────────────────────────────────────────────
+// Every self-update is recorded in backups/system_updates.json (outside the database, so it survives a
+// database restore): previous code version, new code version and a database copy taken just before.
+// Rollback = put the previous code back (+ npm install / build) and, only if the admin ticks it, the database copy.
+const UPDATE_LOG_FILE = path.join(BACKUP_DIR, 'system_updates.json');
+type SystemUpdateRecord = { from: string; to: string; at: string; by: string; dbBackup: string; rolledBackAt?: string; rolledBackBy?: string; restoredDatabase?: boolean };
+function readSystemUpdates(): SystemUpdateRecord[] {
+  try { const v = JSON.parse(fs.readFileSync(UPDATE_LOG_FILE, 'utf8')); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function writeSystemUpdates(list: SystemUpdateRecord[]) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  fs.writeFileSync(UPDATE_LOG_FILE, JSON.stringify(list.slice(-20), null, 2));
+}
+function recordSystemUpdate(r: SystemUpdateRecord) { writeSystemUpdates([...readSystemUpdates(), r]); }
+const GIT_HASH = /^[0-9a-f]{40}$/;
+
+app.get('/api/system/rollback-info', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const list = readSystemUpdates();
+    const last = [...list].reverse().find(u => !u.rolledBackAt) || null;
+    let current = '';
+    try { current = (await execFileAsync('git', ['rev-parse', 'HEAD'])).stdout.trim(); } catch { /* not a git checkout */ }
+    const dbBackupExists = !!last && fs.existsSync(path.join(BACKUP_DIR, last.dbBackup));
+    res.json({
+      enabled: process.env.ALLOW_SELF_UPDATE === 'true',
+      current,
+      last,
+      // a rollback only makes sense while the code is still the version that update installed
+      canRollback: !!last && current === last.to && GIT_HASH.test(last.from),
+      dbBackupExists,
+      history: list.slice(-10).reverse(),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: publicError(error) });
+  }
+});
+
+app.post('/api/system/rollback', requireAuth, requireAdmin, async (req, res) => {
+  if (process.env.ALLOW_SELF_UPDATE !== 'true') {
+    return res.status(403).json({ error: 'Rollback uses the same mechanism as self-update. Set ALLOW_SELF_UPDATE=true in .env to enable it.' });
+  }
+  const restoreDatabase = req.body?.restoreDatabase === true;
+  try {
+    const list = readSystemUpdates();
+    const idx = list.map(u => !u.rolledBackAt).lastIndexOf(true);
+    const last = idx >= 0 ? list[idx] : null;
+    if (!last || !GIT_HASH.test(last.from)) return res.status(400).json({ error: 'There is no update to roll back.' });
+    const { stdout: cur } = await execFileAsync('git', ['rev-parse', 'HEAD']);
+    if (cur.trim() !== last.to) return res.status(409).json({ error: 'The code changed since that update (it is no longer the updated version). Roll back manually.' });
+    const dbFile = path.join(BACKUP_DIR, path.basename(last.dbBackup));
+    if (restoreDatabase && !fs.existsSync(dbFile)) return res.status(400).json({ error: 'The database copy from before the update was not found.' });
+
+    console.log(`⏪ Rolling back ${last.to.slice(0, 7)} → ${last.from.slice(0, 7)}${restoreDatabase ? ' (with database)' : ''}`);
+    const { stdout: changed } = await execFileAsync('git', ['diff', '--name-only', last.from, last.to]);
+    await execFileAsync('git', ['reset', '--hard', last.from]);
+    if (changed.split('\n').some(f => f.trim() === 'package.json' || f.trim() === 'package-lock.json')) {
+      await execAsync('npm install');
+    }
+    await execAsync('npm run build');
+
+    // Record first: the update log lives outside the database
+    list[idx] = { ...last, rolledBackAt: new Date().toISOString(), rolledBackBy: (req as any).user?.username || 'admin', restoredDatabase: restoreDatabase };
+    writeSystemUpdates(list);
+    if (restoreDatabase) await swapInDatabase(dbFile); // takes its own safety copy of the current database first
+
+    res.json({ success: true, message: 'Rolled back to the previous version. The server is restarting…' });
+    setTimeout(() => { console.log('👋 Restarting server after rollback...'); process.exit(0); }, 2000);
+  } catch (error: any) {
+    console.error('Rollback failed:', error);
+    res.status(500).json({ error: `Rollback failed: ${error.message}` });
   }
 });
 

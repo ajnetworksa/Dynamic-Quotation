@@ -23,11 +23,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import AddProductModal from './quote/AddProductModal';
 import AddCustomerModal from './quote/AddCustomerModal';
 import ExportRecordModal from './quote/ExportRecordModal';
+import RollbackDialog from './quote/RollbackDialog';
 import TotalsPanel from './quote/TotalsPanel';
 import { OverwriteModal, ConflictModal, SaveTemplateModal } from './quote/QuoteDialogs';
 import { round2, lineTotal, computeTotals, discountFromRate, rateFromDiscount, clampPercent, marginPercent } from '../lib/money';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, RefreshCw, RotateCcw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { localDate, localDatePlusDays, normalizeDate } from '../lib/dates';
 import { getItemRule as sharedGetItemRule, analyzeItem, analyzeItems, refreshItemCost, canSeeCost, clearCostColumns } from '../lib/pricing';
@@ -448,6 +449,7 @@ export default function QuoteForm() {
   //   quote_draft:<userId>                → the NEW (not yet opened from the database) quote being typed
   //   quote_edit_draft:<userId>:<quoteId> → unsaved changes to an EXISTING quote opened from Tracking/Dashboard
   const DRAFT_KEY = `quote_draft:${user?.id ?? 'anon'}`;
+  const [showRollback, setShowRollback] = useState(false);
   const editDraftKey = (qid: string) => `quote_edit_draft:${user?.id ?? 'anon'}:${qid}`;
   const legacyDraftMigratedRef = useRef(false);
   if (!legacyDraftMigratedRef.current) {
@@ -3361,6 +3363,11 @@ export default function QuoteForm() {
               <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID" aria-label="Clone exact form into new Revision ID">
                 Create Revision
               </button>
+              {isRecorded && (user.role === 'admin' || user.permissions?.canUndoQuote) && (
+                <button onClick={() => setShowRollback(true)} className="flex items-center gap-2 px-4 py-2 text-amber-800 bg-amber-100 hover:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-200 dark:hover:bg-amber-900/60 rounded-lg transition-colors" title="Go back to an earlier saved version of this quote" aria-label="Roll back to an earlier version">
+                  <RotateCcw size={18} /> Roll back
+                </button>
+              )}
               {type !== 'Tax Invoice' && (user.role === 'admin' || user.permissions?.canConvertInvoice) && workflowVisibility.invoice && (
                 <button onClick={handleConvertToInvoice} className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors" title="Switch type to Tax Invoice" aria-label="Switch type to Tax Invoice">
                   To Invoice
@@ -4705,6 +4712,18 @@ export default function QuoteForm() {
             setSelectedCustomerId(newCust.id);
             setSelectedCustomer(newCust);
             setCustomerSearch(newCust.name);
+          }}
+        />
+      )}
+
+      {showRollback && recallQuoteId && (
+        <RollbackDialog
+          quoteId={recallQuoteId}
+          onClose={() => setShowRollback(false)}
+          onRolledBack={() => {
+            // unsaved local changes of the old version must not come back on top of the restored one
+            try { localStorage.removeItem(editDraftKey(recallQuoteId)); } catch { }
+            window.location.reload();
           }}
         />
       )}

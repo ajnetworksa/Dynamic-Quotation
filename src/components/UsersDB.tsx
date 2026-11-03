@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { confirmAsync } from '../lib/notify';
 import { getStoredUser } from '../lib/storage';
+import { usePasswordMinLength } from '../lib/passwordPolicy';
 import { Plus, Trash2, Edit2, Save, X, Shield, User, Bot, FileSearch, Settings as SettingsIcon, Database, Users, Eye, UserCheck, Layers, FileText, Bookmark, Send, Printer, History, KeyRound, Search, ChevronDown, ChevronUp, Crown, PenLine, Check } from 'lucide-react';
 
 interface Permissions {
@@ -328,6 +329,7 @@ function UserFormPanel({
   const otherUsers = allUsers.filter(u => u.id !== isEditing);
   const isAdmin = editForm.role === 'admin';
   const pwd = editForm.password || '';
+  const minPw = usePasswordMinLength();
 
   const setVisibility = (mode: 'own' | 'all' | 'specific') => {
     setSpecificModeSelected(mode === 'specific');
@@ -381,14 +383,14 @@ function UserFormPanel({
             <input
               type="password"
               className={`${inputCls} mt-1`}
-              placeholder={isEditing ? 'New password (min 10 chars, blank = keep)' : 'Password (min 10 characters)'}
+              placeholder={isEditing ? `New password (min ${minPw} chars, blank = keep)` : `Password (min ${minPw} characters)`}
               autoComplete="new-password"
-              minLength={isEditing ? undefined : 10}
+              minLength={isEditing ? undefined : minPw}
               value={pwd}
               onChange={e => setEditForm(prev => ({ ...prev, password: e.target.value }))}
             />
-            <span className={`text-[11px] mt-1 block ${pwd && pwd.length < 10 ? 'text-amber-600' : 'text-gray-400'}`}>
-              {pwd ? (pwd.length < 10 ? `${10 - pwd.length} more character${10 - pwd.length === 1 ? '' : 's'} needed` : <span className="inline-flex items-center gap-1 text-emerald-600"><Check size={12} /> Long enough</span>) : 'At least 10 characters.'}
+            <span className={`text-[11px] mt-1 block ${pwd && pwd.length < minPw ? 'text-amber-600' : 'text-gray-400'}`}>
+              {pwd ? (pwd.length < minPw ? `${minPw - pwd.length} more character${minPw - pwd.length === 1 ? '' : 's'} needed` : <span className="inline-flex items-center gap-1 text-emerald-600"><Check size={12} /> Long enough</span>) : `At least ${minPw} characters.`}
             </span>
           </label>
         </div>
@@ -520,6 +522,7 @@ function UserFormPanel({
 // ── Users Tab ─────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 function UsersTab({ groups }: { groups: PermissionGroup[] }) {
+  const minPw = usePasswordMinLength();
   const [users, setUsers] = useState<AppUser[]>([]);
   const [isEditing, setIsEditing] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Partial<AppUser & { password?: string }>>({});
@@ -547,8 +550,8 @@ function UsersTab({ groups }: { groups: PermissionGroup[] }) {
       setError('Username, password and role are required.');
       return;
     }
-    if (editForm.password.length < 10) {
-      setError('Password must be at least 10 characters.');
+    if (editForm.password.length < minPw) {
+      setError(`Password must be at least ${minPw} characters.`);
       return;
     }
     setError('');
