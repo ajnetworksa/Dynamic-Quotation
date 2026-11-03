@@ -132,4 +132,4 @@ get-gemini.js
 get-models.js
 test-api.ts
 test-*.js
-test-*.tse2e/shots/
+test-*.ts

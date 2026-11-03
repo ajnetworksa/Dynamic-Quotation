@@ -14,25 +14,17 @@
 import React from 'react';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { QuotePdfDocument } from './src/pdf/quote-document.tsx';
-import { computeTotals, round2 } from './src/lib/money.ts';
-import { checkAiSql, runAiQuery } from './src/lib/aiQuery.ts';
-import { STATUSES, isStatus } from './src/lib/status.ts';
-import { generateSecret, verifyTotp, otpauthUrl } from './src/lib/totp.ts';
-import { customerKeys, productKey } from './src/lib/importDedupe.ts';
-import { encryptBackup, decryptBackup } from './src/lib/backupCrypto.ts';
-import { nextRunDate, dueRunDates, FREQUENCIES, Frequency } from './src/lib/recurrence.ts';
-import { parseRecycleBinDays, recycleBinCutoff } from './src/lib/recycleBin.ts';
-import QRCode from 'qrcode';
+import { latestRevisions, isWon } from './src/lib/quoteStats.ts';
+import { normalizeDate } from './src/lib/dates.ts';
 import express from 'express';
 import http from 'http';
 import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import nodemailer from 'nodemailer';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import crypto from 'crypto';
 import 'dotenv/config';
 import multer from 'multer';
@@ -87,40 +79,22 @@ const openai = new OpenAI({
 });
 
 // Setup multer for memory storage
-// SECURITY: cap upload size so a single request cannot exhaust memory.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 5 } });
+// 100 MB cap per uploaded file (price lists, RFQs, ZIP restores) — prevents memory-exhaustion uploads
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 // ── SECURITY: HTTP headers ────────────────────────────────────────────────────
-// helmet() sets a suite of security headers (nosniff, frame protection, no X-Powered-By ...).
-// Content-Security-Policy is ENFORCED in production (browsers refuse inline/third-party scripts, which blocks XSS payloads).
-// The single inline script in index.html (theme before first paint) is allowed by its SHA-256 hash, computed at startup,
-// so editing that script needs no config change. In development (Vite HMR needs inline scripts) the policy is report-only.
-const inlineScriptHashes: string[] = (() => {
-  try {
-    const distIndex = [fileURLToPath(new URL('./dist/index.html', import.meta.url)), path.resolve(process.cwd(), 'dist', 'index.html')].find(f => fs.existsSync(f));
-    if (!distIndex) return [];
-    const html = fs.readFileSync(distIndex, 'utf8');
-    return [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)]
-      .filter(m => m[1].trim().length > 0)
-      .map(m => `'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`);
-  } catch { return []; }
-})();
-const enforceCsp = process.env.NODE_ENV === 'production' && process.env.CSP_REPORT_ONLY !== 'true';
+// helmet() automatically sets a suite of security headers, including:
+//   • X-Content-Type-Options: nosniff   (prevents MIME-sniffing attacks)
+//   • X-Frame-Options: SAMEORIGIN       (prevents clickjacking)
+//   • X-XSS-Protection                  (legacy XSS filter for older browsers)
+//   • Removes the "X-Powered-By: Express" header that leaks tech info
+//
+// To allow iframing from a specific origin, remove helmet() and configure manually.
 app.use(helmet({
-  contentSecurityPolicy: {
-    reportOnly: !enforceCsp,
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", ...inlineScriptHashes],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", 'data:', 'blob:'],
-      fontSrc: ["'self'", 'data:'],
-      connectSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      frameAncestors: ["'self'"],
-      upgradeInsecureRequests: null, // would force https on plain-http LAN installs
-    },
-  },
+  // Content-Security-Policy is disabled here because html2canvas & jsPDF
+  // load fonts and images from data: URLs which a strict CSP would block.
+  // If you are not using the PDF export in the browser, you can enable this.
+  contentSecurityPolicy: false,
 }));
 
 // ── SECURITY: Body size limit ─────────────────────────────────────────────────
@@ -155,7 +129,7 @@ app.use((req, res, next) => {
 //   • max        → max requests allowed in that window (10 = 10 attempts)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15-minute window
-  max: Number(process.env.LOGIN_RATE_LIMIT_MAX) || 10, // max login attempts per IP per window (env override is for automated tests)
+  max: 10,                   // max 10 login attempts per IP per window
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
@@ -167,10 +141,18 @@ const loginLimiter = rateLimit({
 // automated scraping/DoS without affecting real users.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.API_RATE_LIMIT_MAX) || 5000, // requests per IP per 15 min (generous for multi-tab use; lower it with API_RATE_LIMIT_MAX)
+  max: 5000, // Further increased to avoid 429 during active multi-tab usage
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.path === '/api/login', // login has its own limiter
+  // Count per logged-in session instead of per IP: a whole office usually shares ONE public IP,
+  // so a per-IP bucket let one busy user exhaust the limit for everybody (all calls then failed with 429).
+  keyGenerator: (req) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    // Only a REAL session gets its own bucket (forged tokens fall back to the IP bucket)
+    const valid = token && token.length <= 128 && db.prepare('SELECT 1 FROM sessions WHERE token = ?').get(token);
+    return valid ? 'tok:' + crypto.createHash('sha256').update(token).digest('hex').slice(0, 32) : 'ip:' + ipKeyGenerator(req.ip || '');
+  },
   message: { error: 'Too many requests. Please slow down.' },
 });
 
@@ -181,9 +163,7 @@ const apiLimiter = rateLimit({
 const BCRYPT_ROUNDS = 12;
 
 // Initialize SQLite Database
-// DB_PATH lets Docker keep the database in a mounted directory (default: ./quotes.db, unchanged for existing installs).
-const DB_FILE = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.resolve(process.cwd(), 'quotes.db');
-let db = new Database(DB_FILE);
+let db = new Database('quotes.db');
 db.pragma('journal_mode = WAL'); // Enable Write-Ahead Logging for better concurrency with multiple tabs
 
 
@@ -343,20 +323,6 @@ addColumnIfNotExists('quotes', 'manpower_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'mobilization_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'duration_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'bank_details_ar', 'TEXT');
-// `footer` was never created for fresh databases, so saving any quote failed with "no column named footer".
-addColumnIfNotExists('quotes', 'footer', 'TEXT');
-// Soft delete / recycle bin
-addColumnIfNotExists('quotes', 'currency', "TEXT DEFAULT 'SAR'");
-addColumnIfNotExists('quotes', 'lost_reason', 'TEXT');
-// Two-factor authentication + session metadata (for the 'active sessions' list)
-addColumnIfNotExists('users', 'totp_secret', 'TEXT');
-addColumnIfNotExists('users', 'totp_enabled', 'INTEGER DEFAULT 0');
-addColumnIfNotExists('sessions', 'created_at', 'TEXT');
-addColumnIfNotExists('sessions', 'user_agent', 'TEXT');
-addColumnIfNotExists('sessions', 'ip', 'TEXT');
-addColumnIfNotExists('quotes', 'deleted_at', 'TEXT');
-addColumnIfNotExists('quotes', 'deleted_by', 'TEXT');
-addColumnIfNotExists('quotes', 'retain_forever', 'INTEGER DEFAULT 0');
 addColumnIfNotExists('quotes', 'footer_ar', 'TEXT');
 addColumnIfNotExists('quotes', 'custom_field_header', 'TEXT');
 addColumnIfNotExists('quotes', 'custom_field', 'TEXT');
@@ -392,108 +358,13 @@ addColumnIfNotExists('quotes', 'show_mobilization', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'show_duration', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'show_bank_details', 'INTEGER DEFAULT 1');
 addColumnIfNotExists('quotes', 'show_custom_field', 'INTEGER DEFAULT 0');
+// ── Soft delete / Recycle Bin (restored 2026-11-02; columns already exist in production DB) ──
+addColumnIfNotExists('quotes', 'deleted_at', 'TEXT');
+addColumnIfNotExists('quotes', 'deleted_by', 'TEXT');
+addColumnIfNotExists('quotes', 'retain_forever', 'INTEGER DEFAULT 0');
 // Migrate existing sessions: add expires_at if column is missing.
 // Existing rows get a 7-day grace window so active users aren't suddenly logged out.
 addColumnIfNotExists('sessions', 'expires_at', 'TEXT DEFAULT "' + new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() + '"');
-
-// ── Quote-ID reservations (see /api/quotes/next-id) and performance indexes ──
-db.exec(`CREATE TABLE IF NOT EXISTS id_reservations (
-  quote_id TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL,
-  expires_at TEXT NOT NULL
-)`);
-for (const sql of [
-  'CREATE INDEX IF NOT EXISTS idx_quotes_author ON quotes(author_id)',
-  'CREATE INDEX IF NOT EXISTS idx_quotes_customer ON quotes(customer_id)',
-  'CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status)',
-  'CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quote_items(quote_id)',
-  'CREATE INDEX IF NOT EXISTS idx_activity_quote ON activity_log(quote_id)',
-  'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
-  'CREATE INDEX IF NOT EXISTS idx_products_supplier ON products(supplier_name)',
-]) {
-  try { db.exec(sql); } catch (e) { console.error('Index creation failed:', sql, e); }
-}
-
-// ── Payments received against a quote / invoice ──────────────────────────────
-db.exec(`CREATE TABLE IF NOT EXISTS quote_payments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  quote_id TEXT NOT NULL,
-  amount REAL NOT NULL,
-  paid_on TEXT NOT NULL,
-  method TEXT,
-  note TEXT,
-  created_by TEXT,
-  created_at TEXT NOT NULL
-)`);
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_payments_quote ON quote_payments(quote_id)'); } catch { }
-
-// ── Recurring documents: a schedule that creates a fresh Draft copy of an invoice/quote every period ──
-db.exec(`CREATE TABLE IF NOT EXISTS recurring_schedules (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  source_quote_id TEXT NOT NULL,
-  frequency TEXT NOT NULL,
-  anchor_day INTEGER,
-  next_run TEXT NOT NULL,
-  end_date TEXT,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_by TEXT,
-  created_at TEXT NOT NULL,
-  last_run_at TEXT,
-  last_created_id TEXT,
-  runs INTEGER NOT NULL DEFAULT 0
-)`);
-
-// ── Client approval links (public, token-based) ────────────────────────────────
-db.exec(`CREATE TABLE IF NOT EXISTS quote_shares (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  token_hash TEXT NOT NULL UNIQUE,
-  quote_id TEXT NOT NULL,
-  created_by TEXT,
-  created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  revoked INTEGER NOT NULL DEFAULT 0,
-  first_viewed_at TEXT,
-  last_viewed_at TEXT,
-  view_count INTEGER NOT NULL DEFAULT 0,
-  decision TEXT,
-  responded_at TEXT,
-  signer_name TEXT,
-  decision_reason TEXT,
-  responder_ip TEXT
-)`);
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_shares_quote ON quote_shares(quote_id)'); } catch { }
-
-// ── Audit log: who did what (logins, user/permission changes, exports, restores, deletes ...) ──
-db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts TEXT NOT NULL,
-  actor TEXT,
-  actor_id INTEGER,
-  ip TEXT,
-  action TEXT NOT NULL,
-  target TEXT,
-  details TEXT,
-  status INTEGER
-)`);
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)'); } catch { }
-
-// ── One-time migration: "Edit customers / products / suppliers" became a permission. Existing users keep the access they
-// have today (set to true once); users created afterwards start without it until an admin ticks it. ──
-try {
-  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'catalogPermMigrated'").get()) {
-    const users = db.prepare('SELECT id, role, permissions FROM users').all() as any[];
-    const upd = db.prepare('UPDATE users SET permissions = ? WHERE id = ?');
-    db.transaction(() => {
-      for (const u of users) {
-        if (u.role === 'admin') continue;
-        let perms: any = {};
-        try { perms = JSON.parse(u.permissions || '{}'); } catch { }
-        if (perms.canEditCatalog === undefined) { perms.canEditCatalog = true; upd.run(JSON.stringify(perms), u.id); }
-      }
-      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('catalogPermMigrated', '1')").run();
-    })();
-  }
-} catch (e) { console.error('Catalog permission migration failed:', e); }
 
 // ── SECURITY: Default admin account ──────────────────────────────────────────
 // On first boot, if no admin exists, one is created with a hashed password.
@@ -506,19 +377,9 @@ try {
 const adminRow = db.prepare('SELECT id, password FROM users WHERE username = ?').get('admin') as { id: number; password: string } | undefined;
 if (!adminRow) {
   // Fresh install — create the default admin with a hashed password
-  // SECURITY: no well-known default password. Use ADMIN_INITIAL_PASSWORD from .env if set,
-  // otherwise generate a random one and print it ONCE in the server log.
-  const initialAdminPassword = (process.env.ADMIN_INITIAL_PASSWORD && process.env.ADMIN_INITIAL_PASSWORD.length >= 10)
-    ? process.env.ADMIN_INITIAL_PASSWORD
-    : crypto.randomBytes(12).toString('base64url');
-  const hashedDefault = bcrypt.hashSync(initialAdminPassword, BCRYPT_ROUNDS);
+  const hashedDefault = bcrypt.hashSync('admin123', BCRYPT_ROUNDS);
   db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run('admin', hashedDefault, 'admin');
-  if (process.env.ADMIN_INITIAL_PASSWORD && process.env.ADMIN_INITIAL_PASSWORD.length >= 10) {
-    console.log('✅ Default admin created with the password from ADMIN_INITIAL_PASSWORD. Change it after first login.');
-  } else {
-    console.log('✅ Default admin created.  username: admin   initial password: ' + initialAdminPassword);
-    console.log('   (shown once - log in and change it on the Users page)');
-  }
+  console.log('✅ Default admin created. Change the password via the Users page!');
 } else if (!adminRow.password.startsWith('$2')) {
   // Migration: existing admin has a plaintext password — hash it now
   const rehashed = bcrypt.hashSync(adminRow.password, BCRYPT_ROUNDS);
@@ -562,6 +423,79 @@ if (!existingTerms) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('documentTerms', JSON.stringify(blankTerms));
 }
 
+// ── ONE-TIME DATA REPAIR (2026-11-03) ─────────────────────────────────────────
+// Runs once (flag in settings). A copy of the database is written to backups/ first.
+//  1. Dates imported from Excel as serial numbers ("45418.0") → YYYY-MM-DD (date, expiry, follow-up, draft).
+//  2. Stale SUBTOTAL / VAT left by the old autosave (it only updated the total) → recalculated from the
+//     items, but ONLY when the stored TOTAL already matches the items (otherwise left alone + logged).
+//  3. Money columns rounded to 2 decimals (VAT was stored as e.g. 1,847.625).
+// Every changed quote gets an activity_log entry "System: data repair" with the old → new values.
+(() => {
+  const FLAG = 'migration_20261103_totals_dates';
+  try {
+    if (db.prepare('SELECT 1 FROM settings WHERE key = ?').get(FLAG)) return;
+    const quotes = db.prepare('SELECT quote_id, date, expiry_date, followup_date, subtotal, discount, tax, grand_total, vat_rate, draft_data FROM quotes').all() as any[];
+    const r2 = (n: any) => Math.round((Number(n) || 0) * 100) / 100;
+    const isSerial = (v: any) => v !== null && v !== undefined && /^\d{5}(\.\d+)?$/.test(String(v).trim());
+    const changes: { id: string; set: Record<string, any>; note: string[] }[] = [];
+    const skipped: string[] = [];
+    for (const q of quotes) {
+      const set: Record<string, any> = {}; const note: string[] = [];
+      for (const col of ['date', 'expiry_date', 'followup_date']) {
+        if (isSerial(q[col])) { set[col] = normalizeDate(q[col]); note.push(`${col}: ${q[col]} → ${set[col]}`); }
+      }
+      let draft: any = null;
+      try { draft = q.draft_data ? JSON.parse(q.draft_data) : null; } catch { draft = null; }
+      if (draft) {
+        let dChanged = false;
+        for (const k of ['date', 'expiryDate']) if (isSerial(draft[k])) { draft[k] = normalizeDate(draft[k]); dChanged = true; }
+        if (dChanged) { set.draft_data = JSON.stringify(draft); note.push('draft dates converted'); }
+      }
+      const items = (draft?.items?.length ? draft.items : db.prepare('SELECT net_price FROM quote_items WHERE quote_id = ?').all(q.quote_id)) as any[];
+      if (items.length && q.grand_total !== null && q.grand_total !== undefined) {
+        const sub = r2(items.reduce((s: number, it: any) => s + (Number(it.net_price ?? it.netPrice) || 0), 0));
+        const disc = r2(draft?.discount ?? q.discount ?? 0);
+        const vat = draft?.vatRate ?? q.vat_rate ?? 15;
+        if (typeof draft?.vatRate === 'number' && draft.vatRate !== q.vat_rate) { set.vat_rate = draft.vatRate; note.push(`VAT rate: ${q.vat_rate}% → ${draft.vatRate}% (as in the editor)`); }
+        const tax = r2((sub - disc) * vat / 100);
+        const grand = r2(sub - disc + tax);
+        if (Math.abs(grand - q.grand_total) <= 0.05) {
+          if (q.subtotal === null || Math.abs(sub - q.subtotal) > 1e-9) { set.subtotal = sub; note.push(`subtotal: ${q.subtotal} → ${sub}`); }
+          if (q.tax === null || Math.abs(tax - q.tax) > 1e-9) { set.tax = tax; note.push(`VAT: ${q.tax} → ${tax}`); }
+          if (Math.abs(grand - q.grand_total) > 0.0001) { set.grand_total = grand; note.push(`total: ${q.grand_total} → ${grand}`); }
+        } else {
+          skipped.push(`${q.quote_id} (stored total ${q.grand_total}, items give ${grand})`);
+        }
+      } else {
+        for (const col of ['subtotal', 'tax', 'grand_total']) {
+          if (q[col] !== null && q[col] !== undefined && Math.abs(r2(q[col]) - q[col]) > 1e-9) { set[col] = r2(q[col]); note.push(`${col} rounded`); }
+        }
+      }
+      if (Object.keys(set).length) changes.push({ id: q.quote_id, set, note });
+    }
+    if (changes.length) {
+      // backup before touching anything
+      const dir = path.resolve(process.cwd(), 'backups');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      fs.copyFileSync(path.resolve(process.cwd(), 'quotes.db'), path.join(dir, `pre_repair_20261103_${Date.now()}.db`));
+    }
+    const ts = new Date().toISOString();
+    db.transaction(() => {
+      for (const c of changes) {
+        const cols = Object.keys(c.set);
+        db.prepare(`UPDATE quotes SET ${cols.map(k => `${k} = ?`).join(', ')} WHERE quote_id = ?`).run(...cols.map(k => c.set[k]), c.id);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)')
+          .run(c.id, 'System: data repair', 'system', ts, JSON.stringify(c.note.map(n => ({ field: 'repair', from: '', to: n }))));
+      }
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(FLAG, JSON.stringify({ at: ts, changed: changes.length, skipped }));
+    })();
+    console.log(`🛠  Data repair: ${changes.length} quote(s) fixed, ${skipped.length} left unchanged${skipped.length ? ': ' + skipped.join('; ') : ''}`);
+  } catch (e) {
+    console.error('Data repair (20261103) failed — nothing changed:', e);
+  }
+})();
+
 // ── SYSTEM LOGGING & GLOBAL ERROR HANDLING ────────────────────────────────────
 const logSystemError = (source: string, type: string, message: string, details: string | null = null) => {
   try {
@@ -590,6 +524,36 @@ const cleanupLogs = () => {
 // Run cleanup on startup
 cleanupLogs();
 
+// ── RECYCLE BIN AUTO-PURGE ────────────────────────────────────────────────────
+// Opt-in: only purges when the 'recycleBinDays' setting exists and is > 0.
+// Pinned quotes (retain_forever = 1) are never purged. activity_log rows are
+// kept on purpose so purged quote IDs are never re-issued by /api/quotes/next-id.
+const cleanupRecycleBin = () => {
+  try {
+    const settingRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('recycleBinDays') as { value: string } | undefined;
+    const days = settingRow ? parseInt(settingRow.value, 10) : 0;
+    if (!days || days <= 0) return;
+    const expirationDate = new Date();
+    expirationDate.setDate(expirationDate.getDate() - days);
+    const toDelete = db.prepare('SELECT quote_id FROM quotes WHERE deleted_at IS NOT NULL AND deleted_at < ? AND COALESCE(retain_forever, 0) = 0').all(expirationDate.toISOString()) as { quote_id: string }[];
+    if (toDelete.length > 0) {
+      const ts = new Date().toISOString();
+      db.transaction(() => {
+        for (const row of toDelete) {
+          db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(row.quote_id);
+          db.prepare('DELETE FROM quotes WHERE quote_id = ?').run(row.quote_id);
+          db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(row.quote_id, 'Permanently deleted (Recycle Bin auto-purge)', 'system', ts);
+        }
+      })();
+      console.log(`🗑️  Purged ${toDelete.length} expired quote(s) from the recycle bin.`);
+    }
+  } catch (e) {
+    console.error('Failed to cleanup recycle bin:', e);
+  }
+};
+cleanupRecycleBin();
+setInterval(cleanupRecycleBin, 24 * 60 * 60 * 1000);
+
 // ── SESSION CLEANUP: remove expired sessions every hour ──────────────────────
 // Prevents the sessions table from growing unbounded. Runs on startup and
 // then every 60 minutes. SQLite handles this fine synchronously on the same
@@ -617,50 +581,12 @@ process.on('unhandledRejection', (reason: any) => {
   logSystemError('Process', 'UnhandledRejection', reason?.message || String(reason), reason?.stack || null);
 });
 
-// ── SECURITY: session tokens are stored hashed ───────────────────────────────
-// The browser holds the random token; the database only holds its SHA-256, so a leaked
-// database/backup cannot be replayed as logins.
-const hashToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
-
-// One-time migration of existing raw tokens (flag prevents double hashing on restart).
-try {
-  const migrated = db.prepare("SELECT value FROM settings WHERE key = 'sessionsHashed'").get();
-  if (!migrated) {
-    const rows = db.prepare('SELECT token FROM sessions').all() as { token: string }[];
-    const upd = db.prepare('UPDATE sessions SET token = ? WHERE token = ?');
-    db.transaction(() => { for (const r of rows) upd.run(hashToken(r.token), r.token); })();
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('sessionsHashed', '1')").run();
-  }
-} catch (e) {
-  console.error('Session token hashing migration failed:', e);
-}
-
-// ── SECURITY: per-username login lockout (in addition to the per-IP rate limiter) ─
-const LOGIN_MAX_FAILS = 8;
-const LOGIN_LOCK_MS = 15 * 60 * 1000;
-const loginFailures = new Map<string, { count: number; first: number; lockedUntil: number }>();
-const isLockedOut = (username: string) => {
-  const f = loginFailures.get(username.toLowerCase());
-  return !!f && f.lockedUntil > Date.now();
-};
-const recordLoginFailure = (username: string) => {
-  const key = username.toLowerCase();
-  const now = Date.now();
-  let f = loginFailures.get(key);
-  if (!f || now - f.first > LOGIN_LOCK_MS) f = { count: 0, first: now, lockedUntil: 0 };
-  f.count++;
-  if (f.count >= LOGIN_MAX_FAILS) f.lockedUntil = now + LOGIN_LOCK_MS;
-  loginFailures.set(key, f);
-};
-const clearLoginFailures = (username: string) => loginFailures.delete(username.toLowerCase());
-
 // ── Auth Middleware ───────────────────────────────────────────────────────────
 // Validates the Bearer token in the Authorization header against the sessions table.
 // Attaches the user object to req for downstream use.
 const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const rawToken = req.headers.authorization?.split(' ')[1];
-  if (!rawToken) return res.status(401).json({ error: 'Unauthorized' });
-  const token = hashToken(rawToken);
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
   const session = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token = ?').get(token) as { user_id: number; expires_at: string } | undefined;
   if (!session) return res.status(401).json({ error: 'Unauthorized' });
@@ -672,7 +598,7 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
     return res.status(401).json({ error: 'Session expired. Please log in again.' });
   }
 
-  const user = db.prepare('SELECT id, username, name, role, permissions, totp_enabled FROM users WHERE id = ?').get(session.user_id);
+  const user = db.prepare('SELECT id, username, name, role, permissions FROM users WHERE id = ?').get(session.user_id);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
   // Parse permissions JSON safely
@@ -746,18 +672,18 @@ const ProductSchema = z.object({
 const UserCreateSchema = z.object({
   username: z.string().min(1).max(128),
   name: z.string().max(128).optional(),
-  password: z.string().min(10, "Password must be at least 10 characters").max(128),
+  password: z.string().min(4).max(128),
   role: z.enum(['admin', 'user', 'editor']).default('user'),
   permissions: z.record(z.string(), z.any()).optional().default({}),
 });
 
 const UserUpdateSchema = UserCreateSchema.extend({
-  password: z.string().min(10, "Password must be at least 10 characters").max(128).optional().or(z.literal('')), // optional on update or left blank
+  password: z.string().min(4).max(128).optional().or(z.literal('')), // optional on update or left blank
 });
 
 const ChangePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
-  newPassword: z.string().min(10, "Password must be at least 10 characters").max(128),
+  newPassword: z.string().min(4).max(128),
 });
 
 const PermissionGroupSchema = z.object({
@@ -770,13 +696,14 @@ const PermissionGroupSchema = z.object({
 const QuoteItemSchema = z.object({
   product_id: z.number().int().nullable().optional(),
   description: z.string().max(1000).optional().default(''),
-  description_ar: z.string().max(1000).optional(),
+  description_ar: z.string().max(1000).nullable().optional(), // null from older/imported rows must not block saving
   qty: z.number().nonnegative().default(1),
-  unit: z.string().max(50).optional(),
-  unit_price: z.number().nonnegative().default(0),
-  net_price: z.number().nonnegative().default(0),
-  original_price: z.number().nonnegative().nullable().optional(),
-  manual_price: z.number().nonnegative().nullable().optional(),
+  unit: z.string().max(50).nullable().optional(),
+  // negative prices allowed: deduction / credit lines (e.g. "Deduction of completed work -2,000")
+  unit_price: z.number().default(0),
+  net_price: z.number().default(0),
+  original_price: z.number().nullable().optional(),
+  manual_price: z.number().nullable().optional(),
   internal_note: z.string().max(2000).nullable().optional(),
   item_code: z.string().max(100).nullable().optional(),
   supplier_name: z.string().max(200).nullable().optional(),
@@ -795,11 +722,11 @@ const QuoteSchema = z.object({
   discount: z.number().nonnegative().optional().default(0),
   discount_rate: z.number().min(0).max(100).optional().default(0),
   discount_type: z.enum(['amount', 'percentage', 'both']).optional().default('amount'),
-  subtotal: z.number().nonnegative(),
-  tax: z.number().nonnegative(),
-  grand_total: z.number().nonnegative(),
+  // client totals are only a hint — the server recomputes them from the items (recomputeQuoteTotals)
+  subtotal: z.number(),
+  tax: z.number(),
+  grand_total: z.number(),
   vat_rate: z.number().min(0).max(100).optional().default(15),
-  currency: z.string().regex(/^[A-Z]{3}$/).optional(),
   markup: z.number().min(0).max(500).optional().default(8),
   expiry_date: z.string().nullable().optional(),
   status: z.enum(['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled']).optional().default('Draft'),
@@ -849,8 +776,7 @@ const QuoteSchema = z.object({
 
 const BulkStatusSchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(500),
-  status: z.enum(STATUSES),
-  reason: z.string().max(500).optional(),
+  status: z.enum(['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled']),
 });
 
 const FollowupSchema = z.object({
@@ -862,72 +788,6 @@ const SettingSchema = z.object({
   key: z.string().min(1).max(100),
   // Express body limits protect against abuse; allow large base64 strings
   value: z.string().max(15000000),
-});
-
-// Sum of payments for the PDF "Amount paid / Balance due" lines.
-const paidAmounts = (quoteId: string, total: number) => {
-  const paid = round2((db.prepare('SELECT COALESCE(SUM(amount), 0) AS s FROM quote_payments WHERE quote_id = ?').get(quoteId) as any).s);
-  return { amountPaid: paid, amountDue: round2(Math.max(0, (Number(total) || 0) - paid)) };
-};
-
-// Error text that is safe to show to a client: database errors (which expose table/column names) are logged in full
-// and replaced by a generic message; everything else keeps its (short) message.
-const publicError = (e: any): string => {
-  const msg = String(e?.message ?? '');
-  if (String(e?.code ?? '').startsWith('SQLITE') || /SQLITE_|no such (table|column)|constraint failed|syntax error near/i.test(msg)) {
-    console.error('Database error (hidden from client):', msg);
-    return 'A database error occurred. Please try again, or contact your administrator if it keeps happening.';
-  }
-  return msg.slice(0, 300);
-};
-
-// ── Audit helper ─────────────────────────────────────────────────────────────
-const auditLog = (entry: { actor?: string | null; actorId?: number | null; ip?: string | null; action: string; target?: string | null; details?: string | null; status?: number | null }) => {
-  try {
-    db.prepare('INSERT INTO audit_log (ts, actor, actor_id, ip, action, target, details, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(new Date().toISOString(), entry.actor ?? null, entry.actorId ?? null, entry.ip ?? null, entry.action, entry.target ?? null, (entry.details ?? '').slice(0, 1000) || null, entry.status ?? null);
-  } catch (e) {
-    console.error('Audit log write failed:', e);
-  }
-};
-
-// Request id + structured (JSON) request log. Errors and slow requests are always logged; set LOG_REQUESTS=true for all.
-app.use('/api', (req, res, next) => {
-  const id = crypto.randomUUID();
-  (req as any).requestId = id;
-  res.setHeader('X-Request-Id', id);
-  const started = Date.now();
-  res.on('finish', () => {
-    const ms = Date.now() - started;
-    const user = (req as any).user;
-    if (process.env.LOG_REQUESTS === 'true' || res.statusCode >= 400 || ms > 1500) {
-      console.log(JSON.stringify({ t: new Date().toISOString(), id, method: req.method, path: req.originalUrl.split('?')[0], status: res.statusCode, ms, user: user?.username }));
-    }
-    // Automatic audit trail for every successful state-changing call (except high-volume / low-value ones),
-    // plus reads of sensitive exports. Login events are written explicitly in the login handler.
-    const noisy = /^\/api\/(translate|ai\/chat|quotes\/[^/]+\/autosave|login|logout|quotes\/next-id)/.test(req.originalUrl);
-    const isMutation = req.method !== 'GET' && req.method !== 'HEAD' && res.statusCode < 400;
-    const sensitiveRead = req.method === 'GET' && res.statusCode < 400 && /^\/api\/(db\/export|admin\/backup)/.test(req.originalUrl);
-    if (user && !noisy && (isMutation || sensitiveRead)) {
-      auditLog({
-        actor: user.username, actorId: user.id, ip: req.ip,
-        action: `${req.method} ${(req.route?.path as string) || req.originalUrl.split('?')[0]}`,
-        target: Object.values(req.params || {}).join(', ') || null,
-        status: res.statusCode,
-      });
-    }
-  });
-  next();
-});
-
-// Liveness/readiness probe for Docker, load balancers and uptime monitors (no auth, no data).
-app.get('/api/health', (req, res) => {
-  try {
-    db.prepare('SELECT 1').get();
-    res.json({ status: 'ok', uptime: Math.round(process.uptime()) });
-  } catch {
-    res.status(503).json({ status: 'error' });
-  }
 });
 
 // ── API Routes ────────────────────────────────────────────────────────────────
@@ -943,7 +803,7 @@ app.use('/api/', apiLimiter);
 // credentials regardless of whether the username or password was wrong.
 // This prevents user-enumeration (knowing which usernames exist).
 app.post('/api/login', loginLimiter, async (req, res) => {
-  const { username, password, rememberMe, totp } = req.body;
+  const { username, password, rememberMe } = req.body;
 
   // ── Input validation ──────────────────────────────────────────────────────
   // Reject blanks, non-strings, or anything suspiciously long (>128 chars).
@@ -955,43 +815,21 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Invalid credentials' });
   }
 
-  // Per-account lockout after repeated failures (same generic message, no user enumeration).
-  if (isLockedOut(username.trim())) {
-    auditLog({ actor: username.trim(), ip: req.ip, action: 'LOGIN locked out', status: 429 });
-    return res.status(429).json({ error: 'Too many failed attempts for this account. Try again in 15 minutes.' });
-  }
-
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username.trim()) as any;
 
   // bcrypt.compare returns false for wrong passwords without timing leaks.
   // We also handle the case where user is null safely to avoid timing differences.
   const passwordMatch = user ? await bcrypt.compare(password, user.password) : false;
 
-  if (user && passwordMatch && user.totp_enabled) {
-    // Password was right but the account has two-factor on: a valid 6-digit code is also required.
-    if (!totp) return res.status(401).json({ error: 'Enter the 6-digit code from your authenticator app.', twoFactorRequired: true });
-    if (!verifyTotp(user.totp_secret, String(totp))) {
-      recordLoginFailure(username.trim());
-      auditLog({ actor: user.username, actorId: user.id, ip: req.ip, action: 'LOGIN failed (2FA code)', status: 401 });
-      return res.status(401).json({ error: 'Invalid authentication code.', twoFactorRequired: true });
-    }
-  }
-
   if (user && passwordMatch) {
-    clearLoginFailures(username.trim());
-    auditLog({ actor: user.username, actorId: user.id, ip: req.ip, action: 'LOGIN success', status: 200 });
     const token = crypto.randomBytes(32).toString('hex');
     // Sessions expire after 30 days if rememberMe is true, otherwise 12 hours (0.5 days).
     const days = rememberMe ? 30 : 0.5;
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-    // Only the hash is stored; the raw token goes to the browser once.
-    db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at, user_agent, ip) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(hashToken(token), user.id, expiresAt, new Date().toISOString(), String(req.headers['user-agent'] || '').slice(0, 300), req.ip || null);
+    db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, user.id, expiresAt);
     const permissions = (() => { try { return JSON.parse(user.permissions || '{}'); } catch { return {}; } })();
     res.json({ token, user: { id: user.id, username: user.username, name: user.name, role: user.role, permissions } });
   } else {
-    recordLoginFailure(username.trim());
-    auditLog({ actor: username.trim(), ip: req.ip, action: 'LOGIN failed', status: 401 });
     res.status(401).json({ error: 'Invalid credentials' });
   }
 });
@@ -999,65 +837,13 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 app.post('/api/logout', requireAuth, (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (token) {
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(hashToken(token));
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
   }
   res.json({ success: true });
 });
 
 app.get('/api/me', requireAuth, (req, res) => {
-  const u = (req as any).user;
-  const { totp_enabled, ...rest } = u;
-  res.json({ ...rest, twoFactorEnabled: !!totp_enabled });
-});
-
-// ── Active sessions (see and sign out your own devices) ──────────────────────
-app.get('/api/me/sessions', requireAuth, (req, res) => {
-  const current = hashToken(req.headers.authorization!.split(' ')[1]);
-  const rows = db.prepare('SELECT rowid AS id, token, created_at, expires_at, user_agent, ip FROM sessions WHERE user_id = ? ORDER BY COALESCE(created_at, expires_at) DESC').all((req as any).user.id) as any[];
-  res.json(rows.map(r => ({ id: r.id, created_at: r.created_at, expires_at: r.expires_at, user_agent: r.user_agent, ip: r.ip, current: r.token === current })));
-});
-app.delete('/api/me/sessions/:id', requireAuth, (req, res) => {
-  const info = db.prepare('DELETE FROM sessions WHERE rowid = ? AND user_id = ?').run(Number(req.params.id), (req as any).user.id);
-  res.json({ success: info.changes > 0 });
-});
-app.post('/api/me/sessions/revoke-others', requireAuth, (req, res) => {
-  const current = hashToken(req.headers.authorization!.split(' ')[1]);
-  const info = db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run((req as any).user.id, current);
-  res.json({ success: true, revoked: info.changes });
-});
-
-// ── Two-factor authentication (TOTP) ─────────────────────────────────────────
-// setup -> user scans the QR / types the key into an authenticator app -> enable with a valid code.
-app.post('/api/me/2fa/setup', requireAuth, async (req, res) => {
-  const u = (req as any).user;
-  if (u.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already on. Turn it off first to set it up again.' });
-  const secret = generateSecret();
-  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?').run(secret, u.id);
-  const url = otpauthUrl(secret, u.username);
-  res.json({ secret, otpauthUrl: url, qrDataUrl: await QRCode.toDataURL(url, { margin: 1, width: 220 }) });
-});
-app.post('/api/me/2fa/enable', requireAuth, (req, res) => {
-  const u = (req as any).user;
-  const row = db.prepare('SELECT totp_secret FROM users WHERE id = ?').get(u.id) as { totp_secret: string | null };
-  if (!row?.totp_secret) return res.status(400).json({ error: 'Start the setup first.' });
-  if (!verifyTotp(row.totp_secret, String(req.body?.code || ''))) return res.status(400).json({ error: 'That code is not valid. Check the time on your phone and try again.' });
-  db.prepare('UPDATE users SET totp_enabled = 1 WHERE id = ?').run(u.id);
-  res.json({ success: true });
-});
-app.post('/api/me/2fa/disable', requireAuth, async (req, res) => {
-  const u = (req as any).user;
-  const row = db.prepare('SELECT password, totp_secret, totp_enabled FROM users WHERE id = ?').get(u.id) as any;
-  if (!row?.totp_enabled) return res.json({ success: true });
-  const pwOk = await bcrypt.compare(String(req.body?.password || ''), row.password);
-  if (!pwOk || !verifyTotp(row.totp_secret, String(req.body?.code || ''))) return res.status(400).json({ error: 'Password or code is incorrect.' });
-  db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?').run(u.id);
-  res.json({ success: true });
-});
-// An admin can switch off a locked-out user's 2FA (they must then set it up again).
-app.post('/api/users/:id/2fa-reset', requireAuth, requirePermission('canManageUsers'), (req, res) => {
-  db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?').run(req.params.id);
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
-  res.json({ success: true });
+  res.json((req as any).user);
 });
 
 // Update current user's profile (name)
@@ -1076,7 +862,7 @@ app.post('/api/me/profile', requireAuth, async (req, res) => {
 // ── Self-service: Change own password ─────────────────────────────────────────
 // Any authenticated user can change their OWN password by proving they know
 // the current one. No admin privilege required.
-app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema), async (req, res) => {
+app.post('/api/me/change-password', requireAuth, requirePermission('canChangePassword'), validate(ChangePasswordSchema), async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const currentUser = (req as any).user;
 
@@ -1089,9 +875,6 @@ app.post('/api/me/change-password', requireAuth, validate(ChangePasswordSchema),
 
     const hashed = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashed, currentUser.id);
-    // Sign out every OTHER device/session of this user (a stolen session must not survive a password change).
-    const currentHash = hashToken(req.headers.authorization!.split(' ')[1]);
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(currentUser.id, currentHash);
     res.json({ message: 'Password changed successfully' });
   } catch (err: any) {
     console.error('Change password error:', err);
@@ -1114,8 +897,36 @@ app.get('/api/users', requireAuth, (req, res) => {
   res.json(parsed);
 });
 
+// Non-admin user managers may not create, modify or delete admin accounts, nor grant the admin role.
+// Administration permissions — only a real administrator may grant or remove these
+// (before: a user with "Manage Users" could give himself / others Settings + DB Maintenance)
+const ADMIN_LEVEL_PERMISSIONS = ['canManageUsers', 'canManageSettings', 'canDatabaseMaintenance'];
+const blockAdminPermissionChange = (req: express.Request, res: express.Response, currentPerms: any): boolean => {
+  const actor = (req as any).user;
+  if (actor.role === 'admin') return false;
+  const wanted = req.body?.permissions && typeof req.body.permissions === 'object' ? req.body.permissions : {};
+  const changed = ADMIN_LEVEL_PERMISSIONS.filter((k) => !!wanted[k] !== !!currentPerms?.[k]);
+  if (changed.length) {
+    res.status(403).json({ error: 'Only an administrator can grant or remove: Manage Users, Manage Settings, DB Maintenance.' });
+    return true;
+  }
+  return false;
+};
+
+const blockAdminEscalation = (req: express.Request, res: express.Response, targetRole?: string | null): boolean => {
+  const actor = (req as any).user;
+  if (actor.role === 'admin') return false;
+  if (req.body?.role === 'admin' || targetRole === 'admin') {
+    res.status(403).json({ error: 'Only an administrator can create, modify or delete administrator accounts.' });
+    return true;
+  }
+  return false;
+};
+
 app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validate(UserCreateSchema), async (req, res) => {
   const { username, name, password, role, permissions } = req.body;
+  if (blockAdminEscalation(req, res)) return;
+  if (blockAdminPermissionChange(req, res, {})) return;
 
   try {
     const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -1129,25 +940,27 @@ app.post('/api/users', requireAuth, requirePermission('canManageUsers'), validat
 
 app.put('/api/users/:id', requireAuth, requirePermission('canManageUsers'), validate(UserUpdateSchema), async (req, res) => {
   const { username, name, password, role, permissions } = req.body;
+  const target = db.prepare('SELECT role, permissions FROM users WHERE id = ?').get(req.params.id) as { role: string; permissions: string | null } | undefined;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (blockAdminEscalation(req, res, target.role)) return;
+  let targetPerms: any = {};
+  try { targetPerms = JSON.parse(target.permissions || '{}') || {}; } catch { }
+  if (blockAdminPermissionChange(req, res, targetPerms)) return;
+  // Never demote the last remaining admin
+  if (target.role === 'admin' && role !== 'admin') {
+    const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as { count: number };
+    if (adminCount.count <= 1) return res.status(400).json({ error: 'Cannot change the role of the last admin' });
+  }
 
   const permStr = JSON.stringify(permissions && typeof permissions === 'object' ? permissions : {});
 
   try {
-    // Never demote the last remaining admin (DELETE already had this guard).
-    const target = db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id) as { role: string } | undefined;
-    if (!target) return res.status(404).json({ error: 'User not found' });
-    if (target.role === 'admin' && role !== 'admin') {
-      const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as { count: number };
-      if (adminCount.count <= 1) return res.status(400).json({ error: 'Cannot demote the last admin' });
-    }
     if (password) {
       if (typeof password !== 'string' || password.length > 128) {
         return res.status(400).json({ error: 'Invalid password.' });
       }
       const hashed = await bcrypt.hash(password, BCRYPT_ROUNDS);
       db.prepare('UPDATE users SET username = ?, name = ?, password = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), name || null, hashed, role, permStr, req.params.id);
-      // An admin reset forces the user to log in again everywhere.
-      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
     } else {
       db.prepare('UPDATE users SET username = ?, name = ?, role = ?, permissions = ? WHERE id = ?').run(username.trim(), name || null, role, permStr, req.params.id);
     }
@@ -1162,6 +975,7 @@ app.delete('/api/users/:id', requireAuth, requirePermission('canManageUsers'), (
   const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as { count: number };
   const userToDelete = db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id) as { role: string } | undefined;
   if (!userToDelete) return res.status(404).json({ error: 'User not found' });
+  if (blockAdminEscalation(req, res, userToDelete.role)) return;
 
   if (userToDelete.role === 'admin' && adminCount.count <= 1) {
     return res.status(400).json({ error: 'Cannot delete the last admin' });
@@ -1222,28 +1036,12 @@ app.delete('/api/permission-groups/:id', requireAuth, requirePermission('canMana
 });
 
 // ── Customers ─────────────────────────────────────────────────────────────────
-// Optional server-side search + pagination for big tables. Without ?page= the full list is returned
-// exactly as before (existing screens keep working); with ?page=&limit=&q= it returns { items, total, page, limit }.
-function listWithPaging(table: string, searchCols: string[], req: express.Request, res: express.Response, orderBy = 'id') {
-  if (req.query.page === undefined) {
-    return res.json(db.prepare(`SELECT * FROM ${table}`).all());
-  }
-  const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
-  const limit = Math.min(500, Math.max(1, parseInt(String(req.query.limit), 10) || 50));
-  const q = String(req.query.q || '').trim();
-  const where = q ? `WHERE ${searchCols.map(c => `${c} LIKE ? ESCAPE '\\'`).join(' OR ')}` : '';
-  const like = `%${q.replace(/[\\%_]/g, m => '\\' + m)}%`;
-  const params = q ? searchCols.map(() => like) : [];
-  const total = (db.prepare(`SELECT COUNT(*) AS c FROM ${table} ${where}`).get(...params) as any).c;
-  const items = db.prepare(`SELECT * FROM ${table} ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`).all(...params, limit, (page - 1) * limit);
-  res.json({ items, total, page, limit });
-}
-
 app.get('/api/customers', requireAuth, (req, res) => {
-  return listWithPaging('customers', ['name', 'contact', 'mobile', 'email', 'address'], req, res);
+  const customers = db.prepare('SELECT * FROM customers').all();
+  res.json(customers);
 });
 
-app.post('/api/customers', requireAuth, requirePermission('canEditCatalog'), validate(CustomerSchema), (req, res) => {
+app.post('/api/customers', requireAuth, validate(CustomerSchema), (req, res) => {
   try {
     const { name, address, contact, mobile, email } = req.body;
     const stmt = db.prepare('INSERT INTO customers (name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?)');
@@ -1251,11 +1049,11 @@ app.post('/api/customers', requireAuth, requirePermission('canEditCatalog'), val
     res.json({ id: info.lastInsertRowid });
   } catch (error: any) {
     console.error('Add customer error:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.put('/api/customers/:id', requireAuth, requirePermission('canEditCatalog'), validate(CustomerSchema), (req, res) => {
+app.put('/api/customers/:id', requireAuth, validate(CustomerSchema), (req, res) => {
   const { name, address, contact, mobile, email } = req.body;
   const stmt = db.prepare('UPDATE customers SET name = ?, address = ?, contact = ?, mobile = ?, email = ? WHERE id = ?');
   stmt.run(name, address ?? null, contact ?? null, mobile ?? null, email ?? null, req.params.id);
@@ -1263,9 +1061,28 @@ app.put('/api/customers/:id', requireAuth, requirePermission('canEditCatalog'), 
 });
 
 app.delete('/api/customers/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
-  const stmt = db.prepare('DELETE FROM customers WHERE id = ?');
-  stmt.run(req.params.id);
-  res.json({ success: true });
+  try {
+    const customer = db.prepare('SELECT id, name FROM customers WHERE id = ?').get(req.params.id) as { id: number; name: string } | undefined;
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    // better-sqlite3 enforces FOREIGN KEYs: a customer used by any quotation (incl. Recycle Bin) cannot be removed.
+    // Previously this threw "FOREIGN KEY constraint failed" → 500, and the page silently ignored it.
+    const used = db.prepare('SELECT quote_id, deleted_at FROM quotes WHERE customer_id = ? ORDER BY id DESC').all(customer.id) as { quote_id: string; deleted_at: string | null }[];
+    if (used.length > 0) {
+      const inBin = used.filter(q => q.deleted_at).length;
+      const sample = used.slice(0, 5).map(q => q.quote_id).join(', ') + (used.length > 5 ? ', …' : '');
+      return res.status(409).json({
+        error: `"${customer.name}" cannot be deleted because ${used.length} quotation(s) use this customer (${sample})` +
+          (inBin ? `, ${inBin} of them in the Recycle Bin` : '') +
+          '. Delete those quotations permanently or change their customer first.',
+        quotes: used.map(q => q.quote_id),
+      });
+    }
+    db.prepare('DELETE FROM customers WHERE id = ?').run(customer.id);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Delete customer error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ── Suppliers ─────────────────────────────────────────────────────────────────
@@ -1274,7 +1091,7 @@ app.get('/api/suppliers', requireAuth, (req, res) => {
   res.json(suppliers);
 });
 
-app.post('/api/suppliers', requireAuth, requirePermission('canEditCatalog'), validate(SupplierSchema), (req, res) => {
+app.post('/api/suppliers', requireAuth, validate(SupplierSchema), (req, res) => {
   try {
     const { name } = req.body;
     const stmt = db.prepare('INSERT INTO suppliers (name) VALUES (?)');
@@ -1285,11 +1102,11 @@ app.post('/api/suppliers', requireAuth, requirePermission('canEditCatalog'), val
     if (error.message.includes('UNIQUE constraint failed')) {
       return res.status(409).json({ error: 'Supplier already exists' });
     }
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.put('/api/suppliers/:id', requireAuth, requirePermission('canEditCatalog'), validate(SupplierSchema), (req, res) => {
+app.put('/api/suppliers/:id', requireAuth, validate(SupplierSchema), (req, res) => {
   try {
     const { name } = req.body;
     const stmt = db.prepare('UPDATE suppliers SET name = ? WHERE id = ?');
@@ -1297,7 +1114,7 @@ app.put('/api/suppliers/:id', requireAuth, requirePermission('canEditCatalog'), 
     res.json({ success: true });
   } catch (error: any) {
     console.error('Update supplier error:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1309,17 +1126,18 @@ app.delete('/api/suppliers/:id', requireAuth, requirePermission('canDeleteData')
 
 // ── Products ──────────────────────────────────────────────────────────────────
 app.get('/api/products', requireAuth, (req, res) => {
-  return listWithPaging('products', ['description', 'description_ar', 'item_code', 'supplier_name'], req, res);
+  const products = db.prepare('SELECT * FROM products').all();
+  res.json(products);
 });
 
-app.post('/api/products', requireAuth, requirePermission('canEditCatalog'), validate(ProductSchema), (req, res) => {
+app.post('/api/products', requireAuth, validate(ProductSchema), (req, res) => {
   const { description, description_ar, unit, unit_price, item_code, supplier_name } = req.body;
   const stmt = db.prepare('INSERT INTO products (description, description_ar, unit, unit_price, item_code, supplier_name) VALUES (?, ?, ?, ?, ?, ?)');
   const info = stmt.run(description, description_ar ?? null, unit ?? null, unit_price, item_code ?? null, supplier_name ?? null);
   res.json({ id: info.lastInsertRowid });
 });
 
-app.put('/api/products/:id', requireAuth, requirePermission('canEditCatalog'), validate(ProductSchema), (req, res) => {
+app.put('/api/products/:id', requireAuth, validate(ProductSchema), (req, res) => {
   try {
     const { description, description_ar, unit, unit_price, item_code, supplier_name } = req.body;
     const stmt = db.prepare('UPDATE products SET description = ?, description_ar = ?, unit = ?, unit_price = ?, item_code = ?, supplier_name = ? WHERE id = ?');
@@ -1327,84 +1145,8 @@ app.put('/api/products/:id', requireAuth, requirePermission('canEditCatalog'), v
     res.json({ success: true });
   } catch (error: any) {
     console.error('Update product error:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
-});
-
-// One request, one transaction (the UI used to send one DELETE per row and could stop half-way).
-const BulkIdsSchema = z.object({ ids: z.array(z.number().int()).min(1).max(5000) });
-app.post('/api/products/bulk-delete', requireAuth, requirePermission('canDeleteData'), validate(BulkIdsSchema), (req, res) => {
-  const stmt = db.prepare('DELETE FROM products WHERE id = ?');
-  const n = db.transaction((ids: number[]) => ids.reduce((c, id) => c + stmt.run(id).changes, 0))(req.body.ids);
-  res.json({ success: true, deleted: n });
-});
-app.post('/api/customers/bulk-delete', requireAuth, requirePermission('canDeleteData'), validate(BulkIdsSchema), (req, res) => {
-  const stmt = db.prepare('DELETE FROM customers WHERE id = ?');
-  const n = db.transaction((ids: number[]) => ids.reduce((c, id) => c + stmt.run(id).changes, 0))(req.body.ids);
-  res.json({ success: true, deleted: n });
-});
-
-// ── CSV import (the browser parses the file and shows a preview; the server re-checks duplicates and inserts in ONE transaction) ──
-const CustomerImportSchema = z.object({
-  rows: z.array(z.object({
-    name: z.string().trim().min(1).max(200),
-    address: z.string().max(500).optional().default(''),
-    contact: z.string().max(200).optional().default(''),
-    mobile: z.string().max(60).optional().default(''),
-    email: z.string().max(200).optional().default(''),
-  })).min(1).max(5000),
-  skipDuplicates: z.boolean().optional().default(true),
-});
-app.post('/api/customers/import', requireAuth, requirePermission('canEditCatalog'), validate(CustomerImportSchema), (req, res) => {
-  const { rows, skipDuplicates } = req.body as z.infer<typeof CustomerImportSchema>;
-  const existing = new Set<string>();
-  for (const c of db.prepare('SELECT name, mobile, email FROM customers').all() as any[]) customerKeys(c).forEach(k => existing.add(k));
-  const insert = db.prepare('INSERT INTO customers (name, address, contact, mobile, email) VALUES (?, ?, ?, ?, ?)');
-  let created = 0, skipped = 0;
-  db.transaction(() => {
-    for (const r of rows) {
-      const keys = customerKeys(r);
-      if (skipDuplicates && keys.some(k => existing.has(k))) { skipped++; continue; }
-      insert.run(r.name, r.address || null, r.contact || null, r.mobile || null, r.email || null);
-      keys.forEach(k => existing.add(k));
-      created++;
-    }
-  })();
-  res.json({ success: true, created, skipped });
-});
-
-const ProductImportSchema = z.object({
-  rows: z.array(z.object({
-    description: z.string().trim().min(1).max(500),
-    description_ar: z.string().max(500).optional().default(''),
-    unit: z.string().max(50).optional().default(''),
-    unit_price: z.number().finite().min(0).max(1e9),
-    item_code: z.string().max(100).optional().default(''),
-    supplier_name: z.string().max(200).optional().default(''),
-  })).min(1).max(5000),
-  onDuplicate: z.enum(['skip', 'update']).optional().default('skip'),
-});
-app.post('/api/products/import', requireAuth, requirePermission('canEditCatalog'), validate(ProductImportSchema), (req, res) => {
-  const { rows, onDuplicate } = req.body as z.infer<typeof ProductImportSchema>;
-  const byKey = new Map<string, number>();
-  for (const p of db.prepare('SELECT id, description, item_code FROM products').all() as any[]) byKey.set(productKey(p), p.id);
-  const insert = db.prepare('INSERT INTO products (description, description_ar, unit, unit_price, item_code, supplier_name) VALUES (?, ?, ?, ?, ?, ?)');
-  const update = db.prepare('UPDATE products SET unit_price = ?, description_ar = COALESCE(NULLIF(?, \'\'), description_ar), unit = COALESCE(NULLIF(?, \'\'), unit), supplier_name = COALESCE(NULLIF(?, \'\'), supplier_name) WHERE id = ?');
-  let created = 0, updated = 0, skipped = 0;
-  db.transaction(() => {
-    for (const r of rows) {
-      const key = productKey(r);
-      const id = byKey.get(key);
-      if (id !== undefined) {
-        if (onDuplicate === 'update') { update.run(round2(r.unit_price), r.description_ar, r.unit, r.supplier_name, id); updated++; } else skipped++;
-        continue;
-      }
-      const info = insert.run(r.description, r.description_ar || null, r.unit || null, round2(r.unit_price), r.item_code || null, r.supplier_name || null);
-      byKey.set(key, Number(info.lastInsertRowid));
-      created++;
-    }
-  })();
-  res.json({ success: true, created, updated, skipped });
 });
 
 app.delete('/api/products/:id', requireAuth, requirePermission('canDeleteData'), (req, res) => {
@@ -1448,32 +1190,11 @@ app.get('/api/quotes/next-id', requireAuth, (req, res) => {
       }
     } catch { }
 
-    // RACE FIX: two users asking at the same moment used to get the same number. Reserve the number
-    // for 15 minutes; a user who asks again keeps their reservation, others skip reserved numbers.
-    const userId = (req as any).user.id;
-    const nowIso = new Date().toISOString();
-    const result = db.transaction(() => {
-      db.prepare('DELETE FROM id_reservations WHERE expires_at < ?').run(nowIso);
-      const mine = db.prepare('SELECT quote_id FROM id_reservations WHERE user_id = ? AND quote_id LIKE ?').get(userId, `${prefix}-%`) as { quote_id: string } | undefined;
-      if (mine && !db.prepare('SELECT 1 FROM quotes WHERE quote_id = ?').get(mine.quote_id)) {
-        db.prepare('UPDATE id_reservations SET expires_at = ? WHERE quote_id = ?').run(new Date(Date.now() + 15 * 60 * 1000).toISOString(), mine.quote_id);
-        return mine.quote_id;
-      }
-      let reservedMax = 0;
-      for (const r of db.prepare('SELECT quote_id FROM id_reservations').all() as { quote_id: string }[]) {
-        const m = r.quote_id.match(regex);
-        if (m) reservedMax = Math.max(reservedMax, parseInt(m[1], 10));
-      }
-      const base = Math.max(maxNum, reservedMax);
-      const nextNum = base > 0 ? base + 1 : 10001;
-      const id = `${prefix}-${nextNum.toString().padStart(5, '0')}`;
-      db.prepare('DELETE FROM id_reservations WHERE user_id = ?').run(userId);
-      db.prepare('INSERT INTO id_reservations (quote_id, user_id, expires_at) VALUES (?, ?, ?)').run(id, userId, new Date(Date.now() + 15 * 60 * 1000).toISOString());
-      return id;
-    })();
-    res.json({ nextId: result });
+    const nextNum = maxNum > 0 ? maxNum + 1 : 10001;
+    const nextId = `${prefix}-${nextNum.toString().padStart(5, '0')}`;
+    res.json({ nextId });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1506,26 +1227,44 @@ function isQuoteVisibleToUser(quote: { author_id: number; shared_with?: string |
   return false;
 }
 
-// Edit rights (stricter than visibility): a "view only" share can look at a quote but not change it.
-// Mirrors the rules used when SAVING a quote: owner, "view all" users/admins, people the quote was shared with
-// edit rights, or users with "Edit Shared Quotes" for an author they are allowed to see.
-function canEditQuote(quote: { author_id: number; shared_with?: string | null }, user: any): boolean {
-  if (user.role === 'admin' || !!user.permissions?.canViewAllQuotes) return true;
-  if (quote.author_id === user.id) return true;
-  const allowedAuthors: number[] = Array.isArray(user.permissions?.canViewQuotesFrom)
-    ? user.permissions.canViewQuotesFrom.filter((id: any) => typeof id === 'number') : [];
-  if (allowedAuthors.includes(quote.author_id) && user.permissions?.canEditSharedQuote) return true;
+// Helper: is the user a member of any of these permission groups?
+function isUserInGroups(groupIds: any, userId: number): boolean {
+  if (!Array.isArray(groupIds) || groupIds.length === 0) return false;
+  const ids = groupIds.filter((g: any) => typeof g === 'number');
+  if (ids.length === 0) return false;
+  const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + ids.map(() => '?').join(',') + ')').all(...ids) as any[];
+  for (const g of groups) {
+    try { if (JSON.parse(g.members || '[]').includes(userId)) return true; } catch { }
+  }
+  return false;
+}
+
+// Helper: may currentUser MODIFY this quote? Mirrors the rules used by POST /api/quotes
+// (admin / canViewAllQuotes / author / canViewQuotesFrom + canEditSharedQuote / per-quote edit share).
+function canEditQuote(quote: { author_id: number; shared_with?: string | null }, currentUser: any): boolean {
+  if (currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes) return true;
+  if (quote.author_id === currentUser.id) return true;
+  const allowedAuthors: number[] = Array.isArray(currentUser.permissions?.canViewQuotesFrom)
+    ? currentUser.permissions.canViewQuotesFrom.filter((id: any) => typeof id === 'number')
+    : [];
+  if (allowedAuthors.includes(quote.author_id) && currentUser.permissions?.canEditSharedQuote) return true;
   try {
     const sw = JSON.parse(quote.shared_with || '{}');
-    if (Array.isArray(sw.canEditUsers) && sw.canEditUsers.includes(user.id)) return true;
-    if (user.permissions?.canEditSharedQuote && Array.isArray(sw.users) && sw.users.includes(user.id)) return true;
-    if (Array.isArray(sw.canEditGroups) && sw.canEditGroups.length > 0) {
-      const groups = db.prepare('SELECT members FROM permission_groups WHERE id IN (' + sw.canEditGroups.map(() => '?').join(',') + ')').all(...sw.canEditGroups) as any[];
-      for (const g of groups) { try { if (JSON.parse(g.members || '[]').includes(user.id)) return true; } catch { } }
-    }
+    if (Array.isArray(sw.canEditUsers) && sw.canEditUsers.includes(currentUser.id)) return true;
+    if (currentUser.permissions?.canEditSharedQuote && Array.isArray(sw.users) && sw.users.includes(currentUser.id)) return true;
+    if (isUserInGroups(sw.canEditGroups, currentUser.id)) return true;
   } catch { }
   return false;
 }
+
+// Helper: did this user originally create the quote? (first Created / autosave entry in activity_log)
+// Used so that creators keep delete rights after "Prepared By" is reassigned to someone else.
+function isQuoteCreator(quoteId: string, currentUser: any): boolean {
+  const row = db.prepare("SELECT actor FROM activity_log WHERE quote_id = ? AND action IN ('Created', 'Draft Created (Autosave)') ORDER BY id ASC LIMIT 1").get(quoteId) as { actor: string } | undefined;
+  return !!row && row.actor === currentUser.username;
+}
+
+const QUOTE_STATUSES = ['Draft', 'Sent', 'Accepted', 'Rejected', 'Invoiced', 'Cancelled'];
 
 app.get('/api/quotes', requireAuth, (req, res) => {
   try {
@@ -1561,8 +1300,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 
     const quotes = canSeeAll
       ? db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
-                 (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
+          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
           LEFT JOIN users u ON q.author_id = u.id
@@ -1574,23 +1312,21 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           const placeholders = visibleAuthorIds.map(() => '?').join(',');
 
           const owned = db.prepare(`
-              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
-                     (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
               FROM quotes q 
               LEFT JOIN customers c ON q.customer_id = c.id
               LEFT JOIN users u ON q.author_id = u.id
-              WHERE q.deleted_at IS NULL AND q.author_id IN (${placeholders})
+              WHERE q.author_id IN (${placeholders}) AND q.deleted_at IS NULL
               ORDER BY q.id DESC
             `).all(...visibleAuthorIds) as any[];
 
           // Also fetch quotes shared with this user
           const all = db.prepare(`
-              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
-                     (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
               FROM quotes q 
               LEFT JOIN customers c ON q.customer_id = c.id
               LEFT JOIN users u ON q.author_id = u.id
-              WHERE q.deleted_at IS NULL AND q.author_id NOT IN (${placeholders}) AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '')
+              WHERE q.author_id NOT IN (${placeholders}) AND q.deleted_at IS NULL AND (q.shared_with IS NOT NULL AND q.shared_with != '{}' AND q.shared_with != '')
               ORDER BY q.id DESC
             `).all(...visibleAuthorIds) as any[];
 
@@ -1607,7 +1343,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
     res.json(quotes);
   } catch (error: any) {
     console.error('Fetch quotes error:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1615,10 +1351,9 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 app.get('/api/quotes/:quote_id/lock', requireAuth, (req, res) => {
   try {
     const currentUser = (req as any).user;
-    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    const row = db.prepare('SELECT version, author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as { version: number; author_id: number } | undefined;
+    const row = db.prepare('SELECT version, author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as { version: number; author_id: number; shared_with: string | null } | undefined;
     if (!row) return res.status(404).json({ error: 'Quote not found' });
-    if (!canSeeAll && row.author_id !== currentUser.id) return res.status(403).json({ error: 'Access denied' });
+    if (!isQuoteVisibleToUser(row, currentUser)) return res.status(403).json({ error: 'Access denied' });
     res.json({ version: row.version ?? 1 });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch lock' });
@@ -1647,7 +1382,7 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
   res.json({ ...quote, items });
 });
 
-const quotePdfHandler = async (req: express.Request, res: express.Response) => {
+app.get('/api/quotes/:quote_id/pdf', requireAuth, async (req, res) => {
   const currentUser = (req as any).user;
 
   try {
@@ -1657,7 +1392,7 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       LEFT JOIN users u ON q.author_id = u.id
-      WHERE q.quote_id = ?
+      WHERE q.quote_id = ? AND q.deleted_at IS NULL
     `).get(req.params.quote_id) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
@@ -1737,7 +1472,7 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
       number: quote.quote_id,
       createdAt: createdAtSafe,
       validUntil: validUntilSafe,
-      currency: quote.currency || "SAR",
+      currency: "SAR", // standard for legacy app
       subject: (draftData?.subject !== undefined ? draftData.subject : quote.subject) || "",
       subjectAr: (draftData?.subjectAr !== undefined ? draftData.subjectAr : quote.subject_ar) || "",
       noteHeader: (draftData?.noteHeader !== undefined ? draftData.noteHeader : quote.note_header) || "NOTE:",
@@ -1802,11 +1537,9 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
     const showStamp = req.query.stamp === 'true';
 
     const pdfSettings = {
-      companyName: settingsMap.companyName || "AJ Network Solutions", // default fallback
-      phone: settingsMap.companyPhone || null,
-      email: settingsMap.companyEmail || null,
+      companyName: "AJ Network Solutions", // default fallback
       brandColor,
-      taxLabel: `VAT ${quote.vat_rate || 15}%`,
+      taxLabel: `VAT ${quote.vat_rate ?? 15}%`,
       logoUrl: settingsMap.logo || null,
       logoSize: settingsMap.logoSize ? parseInt(settingsMap.logoSize, 10) : 24,
       termsFontSize: settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14,
@@ -1845,8 +1578,7 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
         showStamp,
-        ...(isInvoice ? paidAmounts(quote.quote_id, quote.grand_total) : {}),
-      }) as any
+      })
     );
 
     res.contentType("application/pdf");
@@ -1854,10 +1586,9 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
     res.send(buffer);
   } catch (error: any) {
     console.error('PDF Generation Error:', error);
-    res.status(500).json({ error: publicError(error) || 'Failed to generate PDF' });
+    res.status(500).json({ error: error.message || 'Failed to generate PDF' });
   }
-};
-app.get('/api/quotes/:quote_id/pdf', requireAuth, quotePdfHandler);
+});
 
 // ── In-Memory / Unrecorded Quote PDF Render ──────────────────────────────────
 app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
@@ -1889,7 +1620,7 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
       number: quote.quote_id || "DRAFT",
       createdAt: quote.date || new Date().toISOString().slice(0, 10),
       validUntil: quote.expiry_date || "",
-      currency: quote.currency || "SAR",
+      currency: "SAR",
       subject: quote.subject || "",
       subjectAr: quote.subject_ar || "",
       noteHeader: quote.note_header || "NOTE:",
@@ -1951,11 +1682,9 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
     const isInvoice = (quote.type || '').toLowerCase().includes('invoice');
 
     const pdfSettings = {
-      companyName: settingsMap.companyName || "AJ Network Solutions",
-      phone: settingsMap.companyPhone || null,
-      email: settingsMap.companyEmail || null,
+      companyName: "AJ Network Solutions",
       brandColor,
-      taxLabel: `VAT ${quote.vat_rate || 15}%`,
+      taxLabel: `VAT ${quote.vat_rate ?? 15}%`,
       logoUrl: settingsMap.logo || null,
       logoSize: settingsMap.logoSize ? parseInt(settingsMap.logoSize, 10) : 24,
       termsFontSize: settingsMap.termsFontSize ? parseInt(settingsMap.termsFontSize, 10) : 14,
@@ -1993,8 +1722,7 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
         settings: pdfSettings,
         type: isInvoice ? 'invoice' : 'quotation',
         showStamp: Boolean(showStamp),
-        ...(isInvoice && quote.quote_id ? paidAmounts(quote.quote_id, quote.grand_total ?? quote.total) : {}),
-      }) as any
+      })
     );
 
     res.contentType("application/pdf");
@@ -2002,35 +1730,34 @@ app.post('/api/quotes/render-pdf', requireAuth, async (req, res) => {
     res.send(buffer);
   } catch (error: any) {
     console.error('PDF Render Error:', error);
-    res.status(500).json({ error: publicError(error) || 'Failed to render PDF' });
+    res.status(500).json({ error: error.message || 'Failed to render PDF' });
   }
 });
 
 app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
   const quoteId = req.params.quote_id;
   const currentUser = (req as any).user;
-  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-
-  // Get base ID: 'AJ-12345-R2' -> 'AJ-12345'
-  const baseIdMatch = quoteId.match(/^([A-Za-z0-9]+-\d+)/); // prefix is configurable, not always 'AJ'
+  // Get base ID for any prefix: 'AJ-12345-R2' -> 'AJ-12345', 'QT-10001' -> 'QT-10001'
+  // (previously hard-coded to 'AJ-' which broke history when the ID prefix was changed)
+  const baseIdMatch = quoteId.match(/^([A-Za-z0-9]+-\d+)/);
   if (!baseIdMatch) return res.status(400).json({ error: 'Invalid Quote ID format' });
   const baseId = baseIdMatch[1];
 
-  // Ownership check — verify access using the base (original) quote
-  if (!canSeeAll) {
-    const base = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?').get(baseId) as { author_id: number; shared_with: string | null } | undefined;
-    if (!base) return res.status(404).json({ error: 'Quote not found' });
-    if (!isQuoteVisibleToUser(base, currentUser)) return res.status(403).json({ error: 'Access denied' });
-  }
+  // Visibility check — verify access using the base (original) quote, or the requested one
+  const base = (db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(baseId)
+    || db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quoteId)) as { author_id: number; shared_with: string | null } | undefined;
+  if (!base) return res.status(404).json({ error: 'Quote not found' });
+  if (!isQuoteVisibleToUser(base, currentUser)) return res.status(403).json({ error: 'Access denied' });
 
-  // Fetch all quotes starting with this base ID
+  // Fetch the base quote and its revisions (-R1, -R2 …). Escape LIKE wildcards.
+  const likeBase = baseId.replace(/[\\%_]/g, (m: string) => '\\' + m);
   const history = db.prepare(`
     SELECT q.*, c.name as customer_name 
     FROM quotes q 
     LEFT JOIN customers c ON q.customer_id = c.id
-    WHERE (q.quote_id = ? OR q.quote_id LIKE ?) AND q.deleted_at IS NULL
+    WHERE (q.quote_id = ? OR q.quote_id LIKE ? ESCAPE '\\') AND q.deleted_at IS NULL
     ORDER BY q.quote_id ASC
-  `).all(baseId, `${baseId}-R%`) as any[]; // exact base or its -R<n> revisions (the old LIKE 'AJ-123%' also matched AJ-1234)
+  `).all(baseId, `${likeBase}-%`) as any[];
 
   // Fetch items for all of them
   for (const q of history) {
@@ -2040,27 +1767,18 @@ app.get('/api/quotes/:quote_id/versions', requireAuth, (req, res) => {
   res.json(history);
 });
 
-app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
+app.post('/api/quotes/:quote_id/send', requireAuth, requirePermission('canEmailQuote'), async (req, res) => {
   const { to, subject, body, pdfHtml } = req.body;
   const quote_id = req.params.quote_id;
 
   // Ownership check
   const currentUser = (req as any).user;
-  const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-  const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+  const quote = db.prepare('SELECT author_id, shared_with, status FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quote_id) as any;
   if (!quote) return res.status(404).json({ error: 'Quote not found' });
-  if (!canSeeAll && quote.author_id !== currentUser.id) {
+  if (!canEditQuote(quote, currentUser)) {
     return res.status(403).json({ error: 'Access denied' });
   }
-
-  // Validate recipients (was: any string, any number of addresses) and escape the body before putting it in HTML.
-  const recipients = String(to || '').split(/[,;\s]+/).filter(Boolean);
-  const emailRe = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
-  if (recipients.length === 0 || recipients.length > 10 || !recipients.every(r => emailRe.test(r))) {
-    return res.status(400).json({ error: 'Enter between 1 and 10 valid email addresses.' });
-  }
-  const textBody = String(body ?? '').slice(0, 20000);
-  const escapeHtml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  if (typeof to !== 'string' || !to.trim()) return res.status(400).json({ error: 'Recipient (to) is required' });
 
   try {
     const configRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('smtpConfig') as { value: string };
@@ -2078,17 +1796,22 @@ app.post('/api/quotes/:quote_id/send', requireAuth, async (req, res) => {
 
     await transporter.sendMail({
       from: `"${smtp.fromName}" <${smtp.user}>`,
-      to: recipients.join(', '),
-      subject: String(subject || `Document ${quote_id}`).slice(0, 250).replace(/[\r\n]+/g, ' '),
-      text: textBody,
-      html: `<p>${escapeHtml(textBody).replace(/\r?\n/g, '<br/>')}</p>`
+      to,
+      subject: subject || `Document ${quote_id}`,
+      text: body,
+      // Escape user text before embedding it in HTML (prevents HTML/script injection into the email)
+      html: `<p>${String(body || '').replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as any)[c]).replace(/\\n|\n/g, '<br/>')}</p>`
     });
 
-    db.prepare('UPDATE quotes SET status = \'Sent\' WHERE quote_id = ?').run(quote_id);
+    // NOTE: string literal must use single quotes — better-sqlite3 v12 treats "Sent" as a column name
+    // (this UPDATE previously threw after the email had already been sent, returning a false error).
+    const ts = new Date().toISOString();
+    db.prepare("UPDATE quotes SET status = 'Sent', updated_at = ? WHERE quote_id = ?").run(ts, quote_id);
+    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote_id, 'Status changed to Sent', currentUser.username, ts);
     res.json({ success: true });
   } catch (err: any) {
     console.error('Email send error:', err);
-    res.status(500).json({ error: publicError(err) });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -2103,7 +1826,10 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
     const timestamp = new Date().toISOString();
 
     // Check if the quote exists
-    const existing = db.prepare('SELECT id, author_id, status FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    const existing = db.prepare('SELECT id, author_id, status, deleted_at FROM quotes WHERE quote_id = ?').get(quote_id) as any;
+    if (existing?.deleted_at) {
+      return res.status(409).json({ error: 'QUOTE_DELETED' });
+    }
 
     // Ownership check — block autosave to someone else's quote
     if (existing) {
@@ -2314,53 +2040,64 @@ app.post('/api/quotes/autosave', requireAuth, (req, res) => {
   }
 });
 
+// ── Money is calculated by the server, not trusted from the browser ───────────
+// Same formula as the editor: net = qty × unit price; subtotal = Σ net; discount (amount) ≤ subtotal;
+// VAT = (subtotal − discount) × rate; total = subtotal − discount + VAT. Everything rounded to 2 decimals
+// (VAT was stored un-rounded, e.g. 1,847.625; an old autosave left 31 quotes with stale subtotal/VAT).
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+function recomputeQuoteTotals(body: any) {
+  const items = Array.isArray(body.items) ? body.items : [];
+  for (const it of items) {
+    it.net_price = round2((Number(it.qty) || 0) * (Number(it.unit_price) || 0));
+  }
+  const subtotal = round2(items.reduce((s: number, it: any) => s + it.net_price, 0));
+  let discount = round2(body.discount || 0);
+  if (discount < 0) discount = 0;
+  if (subtotal >= 0 && discount > subtotal) discount = subtotal;
+  const vatRate = body.vat_rate ?? 15;
+  const tax = round2((subtotal - discount) * vatRate / 100);
+  const grand = round2(subtotal - discount + tax);
+  if (Math.abs(grand - (Number(body.grand_total) || 0)) > 0.02) {
+    console.warn(`[totals] ${body.quote_id}: client total ${body.grand_total} replaced by server total ${grand}`);
+  }
+  body.subtotal = subtotal; body.discount = discount; body.tax = tax; body.grand_total = grand;
+}
+
 app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
-  let {
+  recomputeQuoteTotals(req.body);
+  const {
     quote_id, date, customer_id, subject, subject_ar, discount, discount_rate, discount_type, subtotal, tax, grand_total, items,
     note_header, note, note_ar, payment, payment_ar, warranty, warranty_ar, manpower, manpower_ar,
     mobilization, mobilization_ar, duration, duration_ar, bank_details, bank_details_ar, footer, footer_ar,
     custom_field_header, custom_field, custom_field_ar, status, type, revision_of, vat_rate, expiry_date, markup,
-    author_name, author_id, shared_with, version, force, is_new, currency,
+    author_name, author_id, shared_with, version, force, is_new,
     show_note, show_payment, show_warranty, show_manpower, show_mobilization, show_duration, show_bank_details, show_custom_field
   } = req.body;
-  const shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
+  let shared_with_str = shared_with ? JSON.stringify(shared_with) : null;
   const updated_at = new Date().toISOString();
   const currentUser = (req as any).user;
   const actor = currentUser?.username || 'system';
-
-  // SECURITY / INTEGRITY: never trust client-supplied money. Rebuild subtotal, discount, tax and total
-  // from the line items with the same shared math the form uses (src/lib/money.ts).
-  if (Array.isArray(items)) {
-    const t = computeTotals({ lineNets: items.map((i: any) => Number(i.net_price) || 0), discount: Number(discount) || 0, vatRate: vat_rate ?? 15 });
-    if (Math.abs(t.grandTotal - Number(grand_total)) > 0.01) {
-      console.warn(`[quotes] total mismatch on ${quote_id}: client ${grand_total} vs server ${t.grandTotal} (server value stored)`);
-    }
-    subtotal = t.subtotal; discount = t.discount; tax = t.tax; grand_total = t.grandTotal;
-  }
-  // SECURITY: only admins / users with canChangeAuthor may set the author; everyone else always saves as themselves
-  // (for existing quotes the stored author is kept, see below).
-  const mayChangeAuthor = currentUser.role === 'admin' || !!currentUser.permissions?.canChangeAuthor;
 
   try {
     // Fetch full old state (including customer name) for diff comparison
     const existing = db.prepare(`
       SELECT q.id, q.version, q.status, q.type, q.subject, q.grand_total,
              q.discount, q.date, q.expiry_date, q.note, q.payment, q.warranty,
-             q.customer_id, q.author_id, c.name as customer_name
+             q.customer_id, q.author_id, q.deleted_at, q.shared_with, c.name as customer_name
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
       WHERE q.quote_id = ?
     `).get(quote_id) as any;
 
-    if (!mayChangeAuthor) {
-      author_id = existing ? existing.author_id : currentUser.id;
-      author_name = existing
-        ? ((db.prepare('SELECT author_name FROM quotes WHERE quote_id = ?').get(quote_id) as any)?.author_name ?? null)
-        : (currentUser.name || currentUser.username);
+    // Quote is in the Recycle Bin → never silently overwrite / resurrect it
+    if (existing && existing.deleted_at) {
+      return res.status(409).json({ error: 'This quote is in the Recycle Bin. Restore it first, or click New to create a new quote.' });
     }
 
-    // Concurrency collision protection: if client is creating a new quote but this ID already belongs to an established quote
-    if (is_new && existing && existing.status !== 'Draft' && existing.author_id !== currentUser.id) {
+    // Concurrency collision protection: client is creating a NEW quote but another user already owns this ID.
+    // (Previously Draft quotes were excluded, so two users saving at the same time either got "Access denied"
+    //  or — if the second user could edit all quotes — silently overwrote the first user's new quote.)
+    if (is_new && existing && existing.author_id !== currentUser.id) {
       return res.status(409).json({ error: 'ID_TAKEN' });
     }
 
@@ -2413,7 +2150,27 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       }
     }
 
+    // ── Permission enforcement (2026-11-03) — mirrors what the UI already hides ──
+    // Source quote of a revision (its type / sharing are inherited by the new revision)
+    const revSource = !existing && revision_of
+      ? db.prepare('SELECT type, shared_with FROM quotes WHERE quote_id = ?').get(revision_of) as any
+      : null;
+    // Convert to Invoice: only users with canConvertInvoice may turn a Quotation into a Tax Invoice
+    if (type === 'Tax Invoice' && !hasPermission(currentUser, 'canConvertInvoice')
+        && existing?.type !== 'Tax Invoice' && revSource?.type !== 'Tax Invoice') {
+      return res.status(403).json({ error: 'You do not have the "Convert to Invoice" permission.' });
+    }
+    // Sharing: users without Share / Edit Shared permission cannot change who a quote is shared with
+    // (the existing sharing is kept unchanged instead of failing the save)
+    if (!hasPermission(currentUser, 'canShareQuote') && !hasPermission(currentUser, 'canEditSharedQuote')) {
+      shared_with_str = existing ? (existing.shared_with ?? null) : (revSource?.shared_with ?? null);
+    }
+
     let finalVersion = 1;
+
+    // Only admins / users with canChangeAuthor may reassign the owner ("Prepared By") of a quote.
+    // Mirrors the UI, which only shows the Prepared By selector to those users.
+    const canChangeAuthor = currentUser.role === 'admin' || !!currentUser.permissions?.canChangeAuthor;
 
     // Build a human-readable diff before the transaction mutates the DB
     let logDetails: string | null = null;
@@ -2521,8 +2278,8 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate || 15, expiry_date || null, markup ?? 8,
-          author_name || null, author_id || existing.author_id, shared_with_str, finalVersion,
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, vat_rate ?? 15, expiry_date || null, markup ?? 8,
+          author_name || null, (canChangeAuthor ? (author_id || existing.author_id) : existing.author_id), shared_with_str, finalVersion,
           show_note !== undefined ? show_note : 1,
           show_payment !== undefined ? show_payment : 1,
           show_warranty !== undefined ? show_warranty : 1,
@@ -2554,7 +2311,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
           note_header || 'NOTE:', note, note_ar, payment, payment_ar, warranty, warranty_ar,
           manpower, manpower_ar, mobilization, mobilization_ar, duration, duration_ar,
           bank_details, bank_details_ar, footer, footer_ar,
-          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, author_id || (req as any).user.id, vat_rate || 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1,
+          custom_field_header || 'CUSTOM:', custom_field, custom_field_ar, status || 'Draft', type || 'Quotation', revision_of || null, (canChangeAuthor ? (author_id || (req as any).user.id) : (req as any).user.id), vat_rate ?? 15, expiry_date || null, markup ?? 8, author_name || null, shared_with_str, 1,
           show_note !== undefined ? show_note : 1,
           show_payment !== undefined ? show_payment : 1,
           show_warranty !== undefined ? show_warranty : 1,
@@ -2572,8 +2329,6 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
         insertItem.run(quote_id, item.product_id, item.description, item.description_ar, item.qty, item.unit, item.unit_price, item.net_price, item.original_price ?? null, item.manual_price ?? null, item.internal_note ?? null, item.item_code ?? null, item.supplier_name ?? null);
       }
     })();
-    try { db.prepare('DELETE FROM id_reservations WHERE quote_id = ?').run(quote_id); } catch { }
-    if (currency) { try { db.prepare('UPDATE quotes SET currency = ? WHERE quote_id = ?').run(currency, quote_id); } catch { } }
     res.json({ success: true, version: finalVersion });
   } catch (error: any) {
     if (error.message === 'VERSION_CONFLICT') {
@@ -2583,7 +2338,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
       return res.status(409).json({ error: 'ID_TAKEN' });
     }
     console.error('Save quote error:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -2591,380 +2346,88 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
   try {
     const currentUser = (req as any).user;
     const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
+    const quote = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
-    if (!canSeeAll && quote.author_id !== currentUser.id) {
-      return res.status(403).json({ error: 'Access denied' });
+    // Owner, the original creator (even after "Prepared By" was reassigned), or users who can see all quotes.
+    if (!canSeeAll && quote.author_id !== currentUser.id && !isQuoteCreator(req.params.quote_id, currentUser)) {
+      return res.status(403).json({ error: 'Access denied: only the owner/creator of this quote (or a user with "View All Quotes") can delete it.' });
     }
-    // SOFT delete: the quote (and its items and history) moves to the Recycle Bin and can be restored.
-    // It is purged for good after `recycleBinDays` (Settings) unless pinned, or by an explicit permanent delete.
-    const now = new Date().toISOString();
+    // SOFT DELETE: move to Recycle Bin. Rows and history are kept, so the quote can be restored
+    // and its ID is never re-issued by /api/quotes/next-id.
+    const actor = currentUser.name || currentUser.username;
+    const ts = new Date().toISOString();
     db.transaction(() => {
-      db.prepare('UPDATE quotes SET deleted_at = ?, deleted_by = ? WHERE quote_id = ?').run(now, currentUser.username, req.params.quote_id);
-      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(req.params.quote_id, 'Moved to Recycle Bin', currentUser.username, now);
+      db.prepare('UPDATE quotes SET deleted_at = ?, deleted_by = ? WHERE quote_id = ?').run(ts, actor, req.params.quote_id);
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(req.params.quote_id, 'Sent to Recycle Bin', currentUser.username, ts, null);
     })();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// ── Approval links API ───────────────────────────────────────────────────────
-const publicLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Please try again later.' } });
-const respondLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please try again later.' } });
-
-const baseUrlFor = (req: express.Request) => {
-  const configured = (process.env.APP_URL || '').trim();
-  if (/^https?:\/\//i.test(configured)) return configured.replace(/\/+$/, '');
-  return `${req.protocol}://${req.get('host')}`;
-};
-
-const canShareWithClient = (user: any, quote: { author_id: number }) =>
-  user.role === 'admin' || quote.author_id === user.id || !!user.permissions?.canEmailQuote || !!user.permissions?.canShareQuote;
-
-const ShareLinkSchema = z.object({ days: z.number().int().min(1).max(365).optional().default(30) });
-
-app.post('/api/quotes/:quote_id/share-link', requireAuth, validate(ShareLinkSchema), (req, res) => {
-  const user = (req as any).user;
-  const quote = db.prepare('SELECT quote_id, author_id, shared_with, status FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
-  if (!quote) return res.status(404).json({ error: 'Quote not found' });
-  if (!isQuoteVisibleToUser(quote, user) || !canShareWithClient(user, quote)) return res.status(403).json({ error: 'Access denied.' });
-  const token = crypto.randomBytes(32).toString('base64url');
-  const expiresAt = new Date(Date.now() + req.body.days * 86400000).toISOString();
-  db.prepare('INSERT INTO quote_shares (token_hash, quote_id, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
-    .run(hashToken(token), quote.quote_id, user.username, new Date().toISOString(), expiresAt);
-  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote.quote_id, 'Client approval link created', user.username, new Date().toISOString());
-  // The raw token is shown ONCE here; only its hash is stored.
-  res.json({ url: `${baseUrlFor(req)}/approve/${token}`, expires_at: expiresAt });
-});
-
-app.get('/api/quotes/:quote_id/share-links', requireAuth, (req, res) => {
-  const user = (req as any).user;
-  const quote = db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
-  if (!quote) return res.status(404).json({ error: 'Quote not found' });
-  if (!isQuoteVisibleToUser(quote, user)) return res.status(403).json({ error: 'Access denied.' });
-  res.json(db.prepare('SELECT id, created_by, created_at, expires_at, revoked, first_viewed_at, last_viewed_at, view_count, decision, responded_at, signer_name, decision_reason FROM quote_shares WHERE quote_id = ? ORDER BY id DESC').all(quote.quote_id));
-});
-
-app.delete('/api/share-links/:id', requireAuth, (req, res) => {
-  const user = (req as any).user;
-  const link = db.prepare('SELECT s.id, q.author_id, q.shared_with FROM quote_shares s JOIN quotes q ON q.quote_id = s.quote_id WHERE s.id = ?').get(Number(req.params.id)) as any;
-  if (!link) return res.status(404).json({ error: 'Link not found' });
-  if (!isQuoteVisibleToUser(link, user) || !canShareWithClient(user, link)) return res.status(403).json({ error: 'Access denied.' });
-  db.prepare('UPDATE quote_shares SET revoked = 1 WHERE id = ?').run(link.id);
-  res.json({ success: true });
-});
-
-// Look up an active link by its raw token. Returns the share row + quote, or an error status/message.
-const resolveShare = (rawToken: string): { share: any; quote: any } | { status: number; error: string } => {
-  if (!/^[A-Za-z0-9_-]{20,100}$/.test(rawToken)) return { status: 404, error: 'This link is not valid.' };
-  const share = db.prepare('SELECT * FROM quote_shares WHERE token_hash = ?').get(hashToken(rawToken)) as any;
-  if (!share) return { status: 404, error: 'This link is not valid.' };
-  if (share.revoked) return { status: 410, error: 'This link has been withdrawn. Please contact the sender for a new one.' };
-  if (new Date(share.expires_at) < new Date()) return { status: 410, error: 'This link has expired. Please contact the sender for a new one.' };
-  const quote = db.prepare(`
-    SELECT q.*, c.name AS customer_name FROM quotes q LEFT JOIN customers c ON q.customer_id = c.id
-    WHERE q.quote_id = ? AND q.deleted_at IS NULL`).get(share.quote_id) as any;
-  if (!quote) return { status: 404, error: 'This document is no longer available.' };
-  return { share, quote };
-};
-
-// PUBLIC (no login): what the client sees. Costs, markup, author and internal notes are never included.
-app.get('/api/public/quotes/:token', publicLimiter, (req, res) => {
-  const r = resolveShare(req.params.token);
-  if ('error' in r) return res.status(r.status).json({ error: r.error });
-  const { share, quote } = r;
-  const now = new Date().toISOString();
-  db.prepare('UPDATE quote_shares SET last_viewed_at = ?, first_viewed_at = COALESCE(first_viewed_at, ?), view_count = view_count + 1 WHERE id = ?').run(now, now, share.id);
-  if (!share.first_viewed_at) {
-    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(quote.quote_id, 'Viewed by client (approval link)', 'client', now);
-  }
-  const items = (db.prepare('SELECT description, description_ar, qty, unit, unit_price, net_price FROM quote_items WHERE quote_id = ?').all(quote.quote_id) as any[]);
-  const settings: Record<string, string> = {};
-  for (const row of db.prepare("SELECT key, value FROM settings WHERE key IN ('companyName', 'logo')").all() as any[]) settings[row.key] = row.value;
-  const termDefs: Array<[string, string, string]> = [['Payment terms', 'payment', 'show_payment'], ['Warranty', 'warranty', 'show_warranty'], ['Duration', 'duration', 'show_duration'], ['Notes', 'note', 'show_note']];
-  const terms = termDefs.filter(([, f, flag]) => (quote[f] || '').trim() && quote[flag] !== 0).map(([label, f]) => ({ label, text: quote[f] }));
-  const today = new Date().toISOString().slice(0, 10);
-  res.json({
-    company: { name: settings.companyName || 'AJ Network Solutions', logo: settings.logo || null },
-    quote: {
-      quote_id: quote.quote_id, type: quote.type || 'Quotation', date: quote.date, expiry_date: quote.expiry_date, subject: quote.subject,
-      customer_name: quote.customer_name, currency: quote.currency || 'SAR', vat_rate: quote.vat_rate,
-      subtotal: quote.subtotal, discount: quote.discount, tax: quote.tax, grand_total: quote.grand_total, status: quote.status,
-    },
-    items, terms,
-    expired: !!(quote.expiry_date && String(quote.expiry_date).slice(0, 10) < today),
-    canRespond: ['Draft', 'Sent'].includes(quote.status || 'Draft') && !share.decision,
-    decision: share.decision ? { decision: share.decision, signer_name: share.signer_name, responded_at: share.responded_at } : (quote.status === 'Accepted' || quote.status === 'Invoiced' ? { decision: 'accepted', signer_name: null, responded_at: null } : null),
-  });
-});
-
-// PUBLIC: PDF of the document, reusing the normal PDF generator.
-app.get('/api/public/quotes/:token/pdf', publicLimiter, async (req, res) => {
-  const r = resolveShare(req.params.token);
-  if ('error' in r) return res.status(r.status).json({ error: r.error });
-  const systemUser = { id: -1, role: 'admin', permissions: {} };
-  const proxy: any = { params: { quote_id: r.quote.quote_id }, query: { stamp: 'true' }, user: systemUser, headers: req.headers };
-  await quotePdfHandler(proxy, res);
-});
-
-const RespondSchema = z.object({
-  decision: z.enum(['accept', 'reject']),
-  name: z.string().trim().min(2, 'Please type your full name').max(120),
-  reason: z.string().max(500).optional().default(''),
-  consent: z.literal(true, { message: 'Please confirm to continue' }),
-});
-app.post('/api/public/quotes/:token/respond', respondLimiter, validate(RespondSchema), (req, res) => {
-  const r = resolveShare(req.params.token);
-  if ('error' in r) return res.status(r.status).json({ error: r.error });
-  const { share, quote } = r;
-  if (share.decision || !['Draft', 'Sent'].includes(quote.status || 'Draft')) {
-    return res.status(409).json({ error: 'A decision has already been recorded for this document.' });
-  }
-  const { decision, name, reason } = req.body;
-  const today = new Date().toISOString().slice(0, 10);
-  if (decision === 'accept' && quote.expiry_date && String(quote.expiry_date).slice(0, 10) < today) {
-    return res.status(410).json({ error: 'This offer has expired. Please contact us to renew it.' });
-  }
-  const now = new Date().toISOString();
-  const newStatus = decision === 'accept' ? 'Accepted' : 'Rejected';
-  const lost = decision === 'reject' && reason.trim() ? reason.trim() : null;
-  db.transaction(() => {
-    db.prepare('UPDATE quotes SET status = ?, updated_at = ?, lost_reason = ? WHERE quote_id = ?').run(newStatus, now, lost, quote.quote_id);
-    db.prepare('UPDATE quote_shares SET decision = ?, responded_at = ?, signer_name = ?, decision_reason = ?, responder_ip = ? WHERE id = ?')
-      .run(decision === 'accept' ? 'accepted' : 'rejected', now, name, lost, req.ip || null, share.id);
-    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)')
-      .run(quote.quote_id, `${decision === 'accept' ? 'Accepted' : 'Rejected'} online by ${name}${lost ? ` (reason: ${lost})` : ''}`, 'client', now);
-  })();
-  auditLog({ actor: `client:${name}`, ip: req.ip, action: `PUBLIC ${decision} via approval link`, target: quote.quote_id, status: 200 });
-  res.json({ success: true, status: newStatus });
-});
-
-// ── Recurring documents API + daily generator ────────────────────────────────
-// Next free quote number, exactly like /api/quotes/next-id but for the system (no user reservation).
-const nextQuoteIdForSystem = (): string => {
-  const prefix = (((db.prepare("SELECT value FROM settings WHERE key = 'quotePrefix'").get() as any)?.value) || 'AJ').trim().replace(/[^A-Z0-9]/gi, '') || 'AJ';
-  const re = new RegExp(`^${prefix}-(\\d+)`);
-  let max = 0;
-  for (const table of ['quotes', 'activity_log', 'id_reservations']) {
-    for (const r of db.prepare(`SELECT quote_id FROM ${table}`).all() as { quote_id: string }[]) {
-      const m = r.quote_id?.match(re);
-      if (m) max = Math.max(max, parseInt(m[1], 10));
-    }
-  }
-  return `${prefix}-${String(max > 0 ? max + 1 : 10001).padStart(5, '0')}`;
-};
-
-// Copies a quote (header, items) into a NEW Draft dated `runDate`. Payments, approval links, notes and history are not copied.
-const cloneQuoteAsDraft = (sourceId: string, runDate: string, actor: string): string | null => {
-  const src = db.prepare('SELECT * FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(sourceId) as any;
-  if (!src) return null;
-  const newId = nextQuoteIdForSystem();
-  const skip = new Set(['id', 'quote_id', 'draft_data', 'deleted_at', 'deleted_by', 'retain_forever', 'followup_date', 'followup_note', 'quote_note', 'lost_reason', 'revision_of', 'created_at']);
-  const cols = (db.prepare('PRAGMA table_info(quotes)').all() as any[]).map(c => c.name).filter(n => !skip.has(n));
-  const row: any = { ...src };
-  // keep the same validity window
-  if (src.expiry_date && src.date) {
-    const days = Math.round((new Date(String(src.expiry_date).slice(0, 10)).getTime() - new Date(String(src.date).slice(0, 10)).getTime()) / 86400000);
-    row.expiry_date = Number.isFinite(days) && days >= 0 ? new Date(new Date(runDate).getTime() + days * 86400000).toISOString().slice(0, 10) : null;
-  }
-  row.date = runDate; row.status = 'Draft'; row.version = 1; row.updated_at = new Date().toISOString();
-  db.transaction(() => {
-    const allCols = ['quote_id', ...cols];
-    db.prepare(`INSERT INTO quotes (${allCols.join(', ')}) VALUES (${allCols.map(() => '?').join(', ')})`).run(newId, ...cols.map(c => row[c] ?? null));
-    const itemCols = (db.prepare('PRAGMA table_info(quote_items)').all() as any[]).map(c => c.name).filter(n => n !== 'id' && n !== 'quote_id');
-    const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(sourceId) as any[];
-    const ins = db.prepare(`INSERT INTO quote_items (quote_id, ${itemCols.join(', ')}) VALUES (?, ${itemCols.map(() => '?').join(', ')})`);
-    for (const it of items) ins.run(newId, ...itemCols.map(c => it[c] ?? null));
-    db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(newId, `Created automatically from ${sourceId} (recurring)`, actor, new Date().toISOString());
-  })();
-  return newId;
-};
-
-const runRecurringSchedules = (today = new Date().toISOString().slice(0, 10)): number => {
-  let created = 0;
-  const due = db.prepare('SELECT * FROM recurring_schedules WHERE active = 1 AND next_run <= ?').all(today) as any[];
-  for (const sch of due) {
-    try {
-      const dates = dueRunDates(sch.next_run, sch.frequency as Frequency, today, sch.anchor_day || undefined)
-        .filter(d => !sch.end_date || d <= sch.end_date);
-      let last: string | null = sch.last_created_id;
-      for (const d of dates) { const id = cloneQuoteAsDraft(sch.source_quote_id, d, 'recurring'); if (id) { last = id; created++; } }
-      const next = (dates.length ? nextRunDate(dates[dates.length - 1], sch.frequency as Frequency, sch.anchor_day || undefined) : sch.next_run);
-      const finished = (sch.end_date && next > sch.end_date) || !db.prepare('SELECT 1 FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(sch.source_quote_id);
-      db.prepare('UPDATE recurring_schedules SET next_run = ?, last_run_at = ?, last_created_id = ?, runs = runs + ?, active = ? WHERE id = ?')
-        .run(next, dates.length ? new Date().toISOString() : sch.last_run_at, last, dates.length, finished ? 0 : 1, sch.id);
-    } catch (e) { console.error('Recurring schedule failed:', sch.id, e); }
-  }
-  if (created) console.log(`🔁 Recurring: created ${created} draft document(s)`);
-  return created;
-};
-runRecurringSchedules();
-setInterval(() => runRecurringSchedules(), 6 * 60 * 60 * 1000); // every 6 hours; each schedule only fires once per due date
-
-const RecurringSchema = z.object({
-  frequency: z.enum(FREQUENCIES as [Frequency, ...Frequency[]]),
-  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-});
-app.get('/api/quotes/:quote_id/recurring', requireAuth, (req, res) => {
-  const q = db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
-  if (!q) return res.status(404).json({ error: 'Quote not found' });
-  if (!isQuoteVisibleToUser(q, (req as any).user)) return res.status(403).json({ error: 'Access denied.' });
-  res.json(db.prepare('SELECT * FROM recurring_schedules WHERE source_quote_id = ? ORDER BY id DESC').all(q.quote_id));
-});
-app.post('/api/quotes/:quote_id/recurring', requireAuth, validate(RecurringSchema), (req, res) => {
-  const q = db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
-  if (!q) return res.status(404).json({ error: 'Quote not found' });
-  if (!canEditQuote(q, (req as any).user)) return res.status(403).json({ error: 'You do not have permission to change this quote.' });
-  const { frequency, start_date, end_date } = req.body;
-  if (end_date && end_date < start_date) return res.status(400).json({ error: 'The end date is before the start date.' });
-  const info = db.prepare('INSERT INTO recurring_schedules (source_quote_id, frequency, anchor_day, next_run, end_date, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(q.quote_id, frequency, Number(start_date.slice(8, 10)), start_date, end_date || null, (req as any).user.username, new Date().toISOString());
-  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(q.quote_id, `Recurring schedule created (${frequency}, from ${start_date})`, (req as any).user.username, new Date().toISOString());
-  const created = runRecurringSchedules(); // a start date in the past or today generates immediately
-  res.json({ id: info.lastInsertRowid, createdNow: created });
-});
-app.delete('/api/recurring/:id', requireAuth, (req, res) => {
-  const sch = db.prepare('SELECT s.id, q.author_id, q.shared_with FROM recurring_schedules s LEFT JOIN quotes q ON q.quote_id = s.source_quote_id WHERE s.id = ?').get(Number(req.params.id)) as any;
-  if (!sch) return res.status(404).json({ error: 'Schedule not found' });
-  if (!canEditQuote(sch, (req as any).user)) return res.status(403).json({ error: 'Access denied.' });
-  db.prepare('UPDATE recurring_schedules SET active = 0 WHERE id = ?').run(sch.id);
-  res.json({ success: true });
-});
-
-// ── Payments API ─────────────────────────────────────────────────────────────
-const PaymentSchema = z.object({
-  amount: z.number().finite().positive().max(1e9),
-  paid_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  method: z.string().max(40).optional().default(''),
-  note: z.string().max(300).optional().default(''),
-});
-const paymentQuote = (req: express.Request, res: express.Response, needEdit = false) => {
-  const row = db.prepare('SELECT quote_id, author_id, shared_with, grand_total FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
-  if (!row) { res.status(404).json({ error: 'Quote not found' }); return null; }
-  const user = (req as any).user;
-  if (!(needEdit ? canEditQuote(row, user) : isQuoteVisibleToUser(row, user))) { res.status(403).json({ error: 'Access denied.' }); return null; }
-  return row;
-};
-const paymentSummary = (quoteId: string, total: number) => {
-  const payments = db.prepare('SELECT * FROM quote_payments WHERE quote_id = ? ORDER BY paid_on, id').all(quoteId);
-  const paid = round2((payments as any[]).reduce((s, p) => s + p.amount, 0));
-  return { payments, total: round2(total), paid, due: round2(Math.max(0, total - paid)), settled: paid >= total - 0.004 && total > 0 };
-};
-app.get('/api/quotes/:quote_id/payments', requireAuth, (req, res) => {
-  const q = paymentQuote(req, res); if (!q) return;
-  res.json(paymentSummary(q.quote_id, q.grand_total));
-});
-app.post('/api/quotes/:quote_id/payments', requireAuth, validate(PaymentSchema), (req, res) => {
-  const q = paymentQuote(req, res, true); if (!q) return;
-  const { amount, paid_on, method, note } = req.body;
-  const already = paymentSummary(q.quote_id, q.grand_total);
-  if (round2(already.paid + amount) > round2(q.grand_total) + 0.004) {
-    return res.status(400).json({ error: `This would overpay the document (balance due is ${already.due.toFixed(2)}).` });
-  }
-  db.prepare('INSERT INTO quote_payments (quote_id, amount, paid_on, method, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(q.quote_id, round2(amount), paid_on, method || null, note || null, (req as any).user.username, new Date().toISOString());
-  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(q.quote_id, `Payment received: ${round2(amount).toFixed(2)}${method ? ` (${method})` : ''}`, (req as any).user.username, new Date().toISOString());
-  res.json(paymentSummary(q.quote_id, q.grand_total));
-});
-app.delete('/api/quotes/:quote_id/payments/:id', requireAuth, (req, res) => {
-  const q = paymentQuote(req, res, true); if (!q) return;
-  db.prepare('DELETE FROM quote_payments WHERE id = ? AND quote_id = ?').run(Number(req.params.id), q.quote_id);
-  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(q.quote_id, 'Payment removed', (req as any).user.username, new Date().toISOString());
-  res.json(paymentSummary(q.quote_id, q.grand_total));
-});
-
-// ── Audit log viewer ─────────────────────────────────────────────────────────
-const requireAuditAccess = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const u = (req as any).user;
-  return (u.role === 'admin' || u.permissions?.canViewAuditLog) ? next() : res.status(403).json({ error: 'Access denied: audit log permission required.' });
-};
-app.get('/api/audit-log', requireAuth, requireAuditAccess, (req, res) => {
-  const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
-  const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit), 10) || 50));
-  const conds: string[] = [];
-  const params: any[] = [];
-  const q = String(req.query.q || '').trim();
-  if (q) { conds.push("(actor LIKE ? ESCAPE '\\' OR action LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' OR ip LIKE ? ESCAPE '\\')"); const like = `%${q.replace(/[\\%_]/g, m => '\\' + m)}%`; params.push(like, like, like, like); }
-  const actor = String(req.query.actor || '').trim();
-  if (actor) { conds.push('actor = ?'); params.push(actor); }
-  const from = String(req.query.from || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(from)) { conds.push('ts >= ?'); params.push(from); }
-  const to = String(req.query.to || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(to)) { conds.push('ts < ?'); params.push(new Date(new Date(to).getTime() + 86400000).toISOString().slice(0, 10)); }
-  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-  const total = (db.prepare(`SELECT COUNT(*) AS c FROM audit_log ${where}`).get(...params) as any).c;
-  const items = db.prepare(`SELECT * FROM audit_log ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, (page - 1) * limit);
-  const actors = (db.prepare('SELECT DISTINCT actor FROM audit_log WHERE actor IS NOT NULL ORDER BY actor').all() as any[]).map(r => r.actor);
-  res.json({ items, total, page, limit, actors });
-});
-// Keep one year of audit history.
-const pruneAuditLog = () => { try { db.prepare('DELETE FROM audit_log WHERE ts < ?').run(new Date(Date.now() - 365 * 86400000).toISOString()); } catch { } };
-pruneAuditLog();
-setInterval(pruneAuditLog, 24 * 60 * 60 * 1000);
-
-// ── Recycle Bin ──────────────────────────────────────────────────────────────
-const canUseRecycleBin = (user: any) => user.role === 'admin' || !!user.permissions?.canManageRecycleBin;
-const requireRecycleBin = (req: express.Request, res: express.Response, next: express.NextFunction) =>
-  canUseRecycleBin((req as any).user) ? next() : res.status(403).json({ error: 'Access denied: Recycle Bin permission required.' });
-
-const purgeQuote = (quoteId: string) => db.transaction(() => {
-  db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quoteId);
-  db.prepare('DELETE FROM activity_log WHERE quote_id = ?').run(quoteId);
-  db.prepare('DELETE FROM quotes WHERE quote_id = ?').run(quoteId);
-})();
-
-app.get('/api/recycle-bin', requireAuth, requireRecycleBin, (req, res) => {
-  const rows = db.prepare(`
-    SELECT q.quote_id, q.subject, c.name AS customer_name, COALESCE(q.author_name, u.name, u.username) AS author_name,
-           q.deleted_at, q.deleted_by, COALESCE(q.retain_forever, 0) AS retain_forever
-    FROM quotes q
-    LEFT JOIN customers c ON q.customer_id = c.id
-    LEFT JOIN users u ON q.author_id = u.id
-    WHERE q.deleted_at IS NOT NULL
-    ORDER BY q.deleted_at DESC
-  `).all();
-  res.json(rows);
-});
-
-app.post('/api/recycle-bin/:quote_id/restore', requireAuth, requireRecycleBin, (req, res) => {
-  const user = (req as any).user;
-  const info = db.prepare('UPDATE quotes SET deleted_at = NULL, deleted_by = NULL WHERE quote_id = ? AND deleted_at IS NOT NULL').run(req.params.quote_id);
-  if (!info.changes) return res.status(404).json({ error: 'Quote not found in the Recycle Bin' });
-  db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(req.params.quote_id, 'Restored from Recycle Bin', user.username, new Date().toISOString());
-  res.json({ success: true });
-});
-
-app.patch('/api/recycle-bin/:quote_id/retain', requireAuth, requireRecycleBin, (req, res) => {
-  const retain = req.body?.retain ? 1 : 0;
-  const info = db.prepare('UPDATE quotes SET retain_forever = ? WHERE quote_id = ? AND deleted_at IS NOT NULL').run(retain, req.params.quote_id);
-  if (!info.changes) return res.status(404).json({ error: 'Quote not found in the Recycle Bin' });
-  res.json({ success: true });
-});
-
-app.delete('/api/recycle-bin/:quote_id', requireAuth, requireRecycleBin, (req, res) => {
-  const row = db.prepare('SELECT quote_id FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
-  if (!row) return res.status(404).json({ error: 'Quote not found in the Recycle Bin' });
-  purgeQuote(req.params.quote_id);
-  res.json({ success: true });
-});
-
-// Daily prune: permanently remove binned quotes older than `recycleBinDays` (default 30, 0 = never) unless pinned.
-const pruneRecycleBin = () => {
+// ── Recycle Bin ───────────────────────────────────────────────────────────────
+app.get('/api/recycle-bin', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
   try {
-    const days = parseRecycleBinDays((db.prepare("SELECT value FROM settings WHERE key = 'recycleBinDays'").get() as any)?.value);
-    const cutoff = recycleBinCutoff(days);
-    if (!cutoff) return;
-    const old = db.prepare('SELECT quote_id FROM quotes WHERE deleted_at IS NOT NULL AND deleted_at < ? AND COALESCE(retain_forever, 0) = 0').all(cutoff) as { quote_id: string }[];
-    for (const r of old) purgeQuote(r.quote_id);
-    if (old.length) console.log(`🗑️  Recycle Bin: permanently removed ${old.length} quote(s) older than ${days} days`);
-  } catch (e) {
-    console.error('Recycle Bin prune failed:', e);
+    const quotes = db.prepare(`
+      SELECT q.quote_id, q.subject, q.date, q.grand_total, q.status, q.type, q.deleted_at, q.deleted_by, q.retain_forever,
+             c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
+      FROM quotes q
+      LEFT JOIN customers c ON q.customer_id = c.id
+      LEFT JOIN users u ON q.author_id = u.id
+      WHERE q.deleted_at IS NOT NULL
+      ORDER BY q.deleted_at DESC
+    `).all();
+    res.json(quotes);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
-};
-pruneRecycleBin();
-setInterval(pruneRecycleBin, 24 * 60 * 60 * 1000);
+});
+
+app.post('/api/recycle-bin/:quote_id/restore', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
+  try {
+    const currentUser = (req as any).user;
+    const quote = db.prepare('SELECT quote_id FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
+    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
+    const ts = new Date().toISOString();
+    db.transaction(() => {
+      db.prepare('UPDATE quotes SET deleted_at = NULL, deleted_by = NULL, retain_forever = 0 WHERE quote_id = ?').run(req.params.quote_id);
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(req.params.quote_id, 'Restored from Recycle Bin', currentUser.username, ts, null);
+    })();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/recycle-bin/:quote_id/retain', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
+  try {
+    const { retain } = req.body || {};
+    const quote = db.prepare('SELECT quote_id FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
+    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
+    db.prepare('UPDATE quotes SET retain_forever = ? WHERE quote_id = ?').run(retain ? 1 : 0, req.params.quote_id);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/recycle-bin/:quote_id', requireAuth, requirePermission('canManageRecycleBin'), (req, res) => {
+  try {
+    const currentUser = (req as any).user;
+    const quote = db.prepare('SELECT quote_id FROM quotes WHERE quote_id = ? AND deleted_at IS NOT NULL').get(req.params.quote_id);
+    if (!quote) return res.status(404).json({ error: 'Quote not found in recycle bin' });
+    db.transaction(() => {
+      db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(req.params.quote_id);
+      db.prepare('DELETE FROM quotes WHERE quote_id = ?').run(req.params.quote_id);
+      // activity_log is intentionally KEPT: preserves the audit trail and prevents ID re-use.
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp, details) VALUES (?, ?, ?, ?, ?)').run(req.params.quote_id, 'Permanently deleted', currentUser.username, new Date().toISOString(), null);
+    })();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ── Quote Note (internal, not printed) ───────────────────────────────────────
 app.patch('/api/quotes/:quote_id/note', requireAuth, validate(QuoteNoteSchema), (req, res) => {
@@ -2972,16 +2435,15 @@ app.patch('/api/quotes/:quote_id/note', requireAuth, validate(QuoteNoteSchema), 
     const currentUser = (req as any).user;
     const quoteId = req.params.quote_id;
     const { quote_note } = req.body;
-    const existing = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quoteId) as any;
+    const existing = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quoteId) as any;
     if (!existing) return res.status(404).json({ error: 'Quote not found' });
-    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-    if (!canSeeAll && existing.author_id !== currentUser.id) {
+    if (!canEditQuote(existing, currentUser)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     db.prepare('UPDATE quotes SET quote_note = ? WHERE quote_id = ?').run(quote_note ?? null, quoteId);
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -2997,10 +2459,8 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
       return res.status(403).json({ error: 'Access denied: You do not have permission to view quote history.' });
     }
 
-    const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-
     const quote = db.prepare(`
-      SELECT q.quote_id, q.date, q.status, q.type, q.updated_at, q.author_id, q.currency, q.lost_reason, q.shared_with,
+      SELECT q.quote_id, q.date, q.status, q.type, q.updated_at, q.author_id, q.shared_with,
              c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name
       FROM quotes q
       LEFT JOIN customers c ON q.customer_id = c.id
@@ -3009,19 +2469,18 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
     `).get(quoteId) as any;
 
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
-    // Owners, 'view all' users and people the quote is shared with may read its history.
     if (!isQuoteVisibleToUser(quote, currentUser)) {
       return res.status(403).json({ error: 'Access denied' });
     }
+    delete quote.shared_with;
 
     const logs = db.prepare(
       'SELECT * FROM activity_log WHERE quote_id = ? ORDER BY timestamp ASC'
     ).all(quoteId);
 
-    const { shared_with: _sw, ...publicQuote } = quote; // do not expose the share list to the client
-    res.json({ quote: publicQuote, logs });
+    res.json({ quote, logs });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3037,12 +2496,10 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
       return res.status(403).json({ error: 'Access denied: you do not have permission to undo timeline actions.' });
     }
 
-    const existing = db.prepare('SELECT author_id FROM quotes WHERE quote_id = ?').get(quote_id) as any;
-    if (existing) {
-      const canSeeAll = currentUser.role === 'admin' || !!currentUser.permissions?.canViewAllQuotes;
-      if (!canSeeAll && existing.author_id !== currentUser.id) {
-        return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
-      }
+    const existing = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quote_id) as any;
+    if (!existing) return res.status(404).json({ error: 'Quote not found' });
+    if (!canEditQuote(existing, currentUser)) {
+      return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
     }
 
     const logEntry = db.prepare('SELECT previous_state FROM activity_log WHERE id = ? AND quote_id = ?').get(log_id, quote_id) as any;
@@ -3058,7 +2515,10 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
 
     db.transaction(() => {
       // Restore main quote
-      const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id');
+      // Only restore real columns (snapshot keys are never trusted as SQL identifiers);
+      // keep current soft-delete flags untouched.
+      const realQuoteCols = new Set((db.pragma('table_info(quotes)') as any[]).map(c => c.name));
+      const quoteCols = Object.keys(oldQuote).filter(k => k !== 'id' && k !== 'quote_id' && realQuoteCols.has(k) && !['deleted_at', 'deleted_by', 'retain_forever'].includes(k));
       const setClause = quoteCols.map(c => `${c} = ?`).join(', ');
       const values = quoteCols.map(c => oldQuote[c]);
 
@@ -3067,7 +2527,8 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
       // Restore items
       db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quote_id);
       if (oldItems.length > 0) {
-        const itemCols = Object.keys(oldItems[0]).filter(k => k !== 'id');
+        const realItemCols = new Set((db.pragma('table_info(quote_items)') as any[]).map(c => c.name));
+        const itemCols = Object.keys(oldItems[0]).filter(k => k !== 'id' && realItemCols.has(k));
         const itemPlaceholders = itemCols.map(() => '?').join(', ');
         const insertStmt = db.prepare(`INSERT INTO quote_items (${itemCols.join(', ')}) VALUES (${itemPlaceholders})`);
 
@@ -3086,72 +2547,65 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
     res.json({ success: true });
   } catch (error: any) {
     console.error('Undo error:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // ── Bulk Status Update ────────────────────────────────────────────────────────
 app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (req, res) => {
-  const { ids, status, reason } = req.body;
+  const { ids, status } = req.body;
   if (!Array.isArray(ids) || !status) return res.status(400).json({ error: 'ids and status required' });
-  const lostReason = status === 'Rejected' && typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 500) : null;
-  const actor = (req as any).user?.username || 'system';
+  const currentUser = (req as any).user;
+  const actor = currentUser?.username || 'system';
   const ts = new Date().toISOString();
   try {
-    // SECURITY: only touch quotes the caller is allowed to see (owner, shared, canViewAllQuotes, admin).
-    const currentUser = (req as any).user;
-    const lookup = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?');
-    for (const id of ids) {
-      const row = lookup.get(id) as any;
-      if (row && !canEditQuote(row, currentUser)) {
-        return res.status(403).json({ error: `You do not have permission to change quote ${id}.` });
-      }
-    }
+    const updated: string[] = [];
+    const skipped: string[] = [];
     db.transaction(() => {
       for (const id of ids) {
-        // lost_reason is set on Rejected and cleared on any other status.
-        db.prepare('UPDATE quotes SET status = ?, updated_at = ?, lost_reason = ? WHERE quote_id = ?').run(status, ts, lostReason, id);
-        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(id, `Status changed to ${status}${lostReason ? ` (reason: ${lostReason})` : ''}`, actor, ts);
+        const q = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(id) as any;
+        if (!q || !canEditQuote(q, currentUser)) { skipped.push(id); continue; }
+        db.prepare('UPDATE quotes SET status = ?, updated_at = ? WHERE quote_id = ?').run(status, ts, id);
+        db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(id, `Status changed to ${status}`, actor, ts);
+        updated.push(id);
       }
     })();
-    res.json({ success: true });
+    if (updated.length === 0 && skipped.length > 0) {
+      return res.status(403).json({ error: 'Access denied: you cannot change the status of the selected quotation(s).', skipped });
+    }
+    res.json({ success: true, updated: updated.length, skipped });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // ── Single Quote Status Update (Kanban & Quick Status) ────────────────────────
 const handleSingleQuoteStatus = (req: express.Request, res: express.Response) => {
-  const { status, reason } = req.body;
-  const lostReason = status === 'Rejected' && typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 500) : null;
+  const { status } = req.body;
   const quoteIdentifier = req.params.quote_id;
   if (!status || !quoteIdentifier) return res.status(400).json({ error: 'status and quote_id required' });
-  if (!isStatus(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
-  }
-  const actor = (req as any).user?.username || 'system';
+  if (!QUOTE_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  const currentUser = (req as any).user;
+  const actor = currentUser?.username || 'system';
   const ts = new Date().toISOString();
   try {
     const isNumeric = /^\d+$/.test(quoteIdentifier);
     const existing = isNumeric
-      ? db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE id = ? OR quote_id = ?').get(Number(quoteIdentifier), quoteIdentifier) as any
-      : db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ?').get(quoteIdentifier) as any;
+      ? db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE (id = ? OR quote_id = ?) AND deleted_at IS NULL').get(Number(quoteIdentifier), quoteIdentifier) as any
+      : db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quoteIdentifier) as any;
 
     if (!existing) return res.status(404).json({ error: 'Quote not found' });
-    // SECURITY: changing the status needs EDIT rights (a view-only share is not enough).
-    if (!canEditQuote(existing, (req as any).user)) {
-      return res.status(403).json({ error: 'You do not have permission to change this quote.' });
-    }
+    if (!canEditQuote(existing, currentUser)) return res.status(403).json({ error: 'Access denied' });
     const targetQuoteId = existing.quote_id;
 
     db.transaction(() => {
-      db.prepare('UPDATE quotes SET status = ?, updated_at = ?, lost_reason = ? WHERE quote_id = ?').run(status, ts, lostReason, targetQuoteId);
-      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(targetQuoteId, `Status changed to ${status}${lostReason ? ` (reason: ${lostReason})` : ''}`, actor, ts);
+      db.prepare('UPDATE quotes SET status = ?, updated_at = ? WHERE quote_id = ?').run(status, ts, targetQuoteId);
+      db.prepare('INSERT INTO activity_log (quote_id, action, actor, timestamp) VALUES (?, ?, ?, ?)').run(targetQuoteId, `Status changed to ${status}`, actor, ts);
     })();
 
     res.json({ success: true, quote_id: targetQuoteId, status });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 };
 app.post('/api/quotes/:quote_id/status', requireAuth, handleSingleQuoteStatus);
@@ -3161,29 +2615,33 @@ app.patch('/api/quotes/:quote_id/status', requireAuth, handleSingleQuoteStatus);
 app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema), (req, res) => {
   const { followup_date, followup_note } = req.body;
   try {
-    const row = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
-    if (!row) return res.status(404).json({ error: 'Quote not found' });
-    if (!canEditQuote(row, (req as any).user)) {
-      return res.status(403).json({ error: 'You do not have permission to change this quote.' });
-    }
+    const q = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
+    if (!q) return res.status(404).json({ error: 'Quote not found' });
+    if (!canEditQuote(q, (req as any).user)) return res.status(403).json({ error: 'Access denied' });
     db.prepare('UPDATE quotes SET followup_date = ?, followup_note = ? WHERE quote_id = ?').run(followup_date || null, followup_note || null, req.params.quote_id);
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // ── Customer Stats ────────────────────────────────────────────────────────────
 app.get('/api/customers/stats', requireAuth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT customer_id,
-           SUM(grand_total) as total_won,
-           COUNT(*) as quote_count
+  // Same counting rules as the Dashboard (src/lib/quoteStats.ts): latest revision only,
+  // "won" = Accepted or Invoiced (was: SUM of every quote incl. drafts and all revisions).
+  const all = db.prepare(`
+    SELECT quote_id, customer_id, grand_total, status
     FROM quotes
     WHERE customer_id IS NOT NULL AND deleted_at IS NULL
-    GROUP BY customer_id
-  `).all();
-  res.json(rows);
+  `).all() as { quote_id: string; customer_id: number; grand_total: number | null; status: string | null }[];
+  const byCustomer = new Map<number, { customer_id: number; total_won: number; quote_count: number }>();
+  for (const q of latestRevisions(all)) {
+    const row = byCustomer.get(q.customer_id) || { customer_id: q.customer_id, total_won: 0, quote_count: 0 };
+    row.quote_count++;
+    if (isWon(q.status)) row.total_won = Math.round((row.total_won + (q.grand_total || 0)) * 100) / 100;
+    byCustomer.set(q.customer_id, row);
+  }
+  res.json([...byCustomer.values()]);
 });
 
 // ── Database Export / Import ───────────────────────────────────────────────────
@@ -3225,7 +2683,7 @@ app.get('/api/db/export', requireAuth, requirePermission('canDatabaseMaintenance
     }
     res.json(data);
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3244,6 +2702,10 @@ app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenanc
     importErrors.push(msg);
   };
 
+  // better-sqlite3 enforces FOREIGN KEYs. Tables are cleared and re-filled one by one, so the intermediate
+  // state violates them (this made every JSON import fail with "FOREIGN KEY constraint failed").
+  // Disable enforcement for the import only (cannot be changed inside a transaction), then re-enable.
+  db.pragma('foreign_keys = OFF');
   try {
     db.transaction(() => {
       const BUSINESS_TABLES = ['customers', 'suppliers', 'products', 'quotes', 'quote_items'];
@@ -3295,10 +2757,14 @@ app.post('/api/db/import', requireAuth, requirePermission('canDatabaseMaintenanc
       }
     })();
 
-    res.json({ success: true });
+    const orphans = db.pragma('foreign_key_check') as any[];
+    if (orphans.length > 0) console.warn(`DB import finished with ${orphans.length} row(s) referencing missing parents`);
+    res.json({ success: true, warnings: orphans.length ? `${orphans.length} row(s) reference missing customers/quotes` : undefined });
   } catch (error: any) {
     const detail = importErrors.length > 0 ? importErrors[importErrors.length - 1] : error.message;
     res.status(500).json({ error: `Import failed: ${detail}`, details: importErrors });
+  } finally {
+    db.pragma('foreign_keys = ON');
   }
 });
 
@@ -3323,7 +2789,7 @@ app.get('/api/admin/backup', requireAuth, requirePermission('canDatabaseMaintena
     });
   } catch (error: any) {
     console.error('Failed to run online hot backup:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3452,14 +2918,14 @@ app.get('/api/admin/backup-zip', requireAuth, requirePermission('canDatabaseMain
       if (fs.existsSync(tempDbBackup)) fs.unlinkSync(tempDbBackup);
       if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
     } catch {}
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // ── DATABASE OPTIMIZATION ENDPOINT ───────────────────────────────────────────
 app.post('/api/admin/db/optimize', requireAuth, requirePermission('canDatabaseMaintenance'), (req, res) => {
   try {
-    const dbPath = DB_FILE;
+    const dbPath = path.resolve(process.cwd(), 'quotes.db');
     const oldStats = fs.statSync(dbPath);
 
     // Run safe sqlite maintenance
@@ -3475,88 +2941,11 @@ app.post('/api/admin/db/optimize', requireAuth, requirePermission('canDatabaseMa
       savedBytes: oldStats.size - newStats.size
     });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // ── ZIP RESTORE SYSTEM (DISASTER RECOVERY) ───────────────────────────────────
-// Replaces the live database with the file at `extractedDbPath` safely: validate it first, snapshot the current
-// database, swap the files (dropping stale WAL/SHM), reopen. On failure the previous database is restored.
-async function swapInDatabase(extractedDbPath: string): Promise<void> {
-  try {
-    // 3b. Validate the uploaded database BEFORE touching the live one.
-      {
-        const probe = new Database(extractedDbPath, { readonly: true });
-        try {
-          const integrity = probe.pragma('integrity_check', { simple: true });
-          const hasQuotes = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='quotes'").get();
-          if (integrity !== 'ok' || !hasQuotes) {
-            throw new Error('Invalid backup archive: database failed integrity check or is not a quotation database.');
-          }
-        } finally {
-          probe.close();
-        }
-      }
-
-      // 3c. Keep a consistent snapshot of the CURRENT database so a bad restore can be undone.
-      try {
-        const snapDir = path.resolve(process.cwd(), 'backups');
-        fs.mkdirSync(snapDir, { recursive: true });
-        await db.backup(path.join(snapDir, `pre_restore_${new Date().toISOString().replace(/[:.]/g, '-')}.db`));
-      } catch (snapErr) {
-        console.error('Pre-restore snapshot failed:', snapErr);
-        throw new Error('Could not create a safety snapshot of the current database. Restore aborted.');
-      }
-
-      // 4. Safely close database connection before replacing the file
-      db.close();
-
-      // 5. Replace DB file with safe automated fallback recovery
-      const mainDbPath = DB_FILE;
-      const fallbackDbPath = DB_FILE + '.bak';
-
-      if (fs.existsSync(mainDbPath)) {
-        fs.copyFileSync(mainDbPath, fallbackDbPath);
-      }
-
-      try {
-        // Remove stale WAL/SHM files so they cannot be replayed onto the restored database.
-        for (const ext of ['-wal', '-shm']) {
-          const sidecar = mainDbPath + ext;
-          if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
-        }
-        fs.copyFileSync(extractedDbPath, mainDbPath);
-        if (fs.existsSync(fallbackDbPath)) {
-          fs.unlinkSync(fallbackDbPath);
-        }
-      } catch (copyErr) {
-        if (fs.existsSync(fallbackDbPath)) {
-          fs.copyFileSync(fallbackDbPath, mainDbPath);
-          fs.unlinkSync(fallbackDbPath);
-        }
-        throw copyErr;
-      }
-
-      // 6. Re-open connection
-      db = new Database(DB_FILE);
-      db.pragma('journal_mode = WAL');
-
-
-  } catch (error) {
-    // Safety fallback: make sure a connection is open again even when the swap failed half-way
-    // (validation errors happen before the old connection is closed, so only reopen when needed).
-    if (!db.open) {
-      try {
-        db = new Database(DB_FILE);
-        db.pragma('journal_mode = WAL');
-      } catch (reopenErr) {
-        console.error('Critical: Failed to emergency re-open database connection:', reopenErr);
-      }
-    }
-    throw error;
-  }
-}
-
 app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMaintenance'), upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
@@ -3572,12 +2961,7 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     // 2. Extract ZIP archive
     const zip = new AdmZip(tempZipPath);
     fs.mkdirSync(tempExtractDir, { recursive: true });
-    // SECURITY: extract only the quotes.db entry by name (avoids zip-slip from crafted entry paths).
-    const dbEntry = zip.getEntries().find(e => !e.isDirectory && e.entryName === 'quotes.db');
-    if (!dbEntry) {
-      throw new Error('Invalid backup archive: master quotes.db file is missing.');
-    }
-    fs.writeFileSync(path.join(tempExtractDir, 'quotes.db'), dbEntry.getData());
+    zip.extractAllTo(tempExtractDir, true);
 
     // 3. Verify standard file structure
     const extractedDbPath = path.join(tempExtractDir, 'quotes.db');
@@ -3585,20 +2969,45 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
       throw new Error('Invalid backup archive: master quotes.db file is missing.');
     }
 
-    // 3b-6. Validate, snapshot, swap in and reopen (shared with the encrypted restore).
-    await swapInDatabase(extractedDbPath);
+    // 4. Safely close database connection before replacing the file
+    db.close();
+
+    // 5. Replace DB file with safe automated fallback recovery
+    const mainDbPath = path.resolve(process.cwd(), 'quotes.db');
+    const fallbackDbPath = path.resolve(process.cwd(), 'quotes.db.bak');
+
+    if (fs.existsSync(mainDbPath)) {
+      fs.copyFileSync(mainDbPath, fallbackDbPath);
+    }
+
+    try {
+      fs.copyFileSync(extractedDbPath, mainDbPath);
+      if (fs.existsSync(fallbackDbPath)) {
+        fs.unlinkSync(fallbackDbPath);
+      }
+    } catch (copyErr) {
+      if (fs.existsSync(fallbackDbPath)) {
+        fs.copyFileSync(fallbackDbPath, mainDbPath);
+        fs.unlinkSync(fallbackDbPath);
+      }
+      throw copyErr;
+    }
+
+    // 6. Re-open connection
+    db = new Database('quotes.db');
+    db.pragma('journal_mode = WAL');
 
     res.json({ success: true });
   } catch (error: any) {
     console.error('ZIP System restore failed:', error);
     // Safety fallback: ensure database connection is re-opened if crashed
     try {
-      db = new Database(DB_FILE);
+      db = new Database('quotes.db');
       db.pragma('journal_mode = WAL');
     } catch (reopenErr) {
       console.error('Critical: Failed to emergency re-open database connection:', reopenErr);
     }
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   } finally {
     try {
       if (fs.existsSync(tempZipPath)) fs.unlinkSync(tempZipPath);
@@ -3606,43 +3015,6 @@ app.post('/api/admin/restore-zip', requireAuth, requirePermission('canDatabaseMa
     } catch (cleanupErr) {
       console.error('Failed to cleanup temp restore files:', cleanupErr);
     }
-  }
-});
-
-// ── Encrypted backups (passphrase protected, safe to store off-site) ────────────────────────────────
-const EncBackupSchema = z.object({ passphrase: z.string().min(12, 'Passphrase must be at least 12 characters').max(200) });
-app.post('/api/admin/backup-encrypted', requireAuth, requirePermission('canDatabaseMaintenance'), validate(EncBackupSchema), async (req, res) => {
-  const tmp = path.resolve(process.cwd(), `temp_enc_${Date.now()}.db`);
-  try {
-    await db.backup(tmp); // consistent snapshot even while the app is in use
-    const encrypted = encryptBackup(fs.readFileSync(tmp), req.body.passphrase);
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="quotes-backup-${new Date().toISOString().slice(0, 10)}.db.enc"`);
-    res.send(encrypted);
-  } catch (e: any) {
-    res.status(500).json({ error: publicError(e) || 'Backup failed' });
-  } finally {
-    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { }
-  }
-});
-
-app.post('/api/admin/restore-encrypted', requireAuth, requirePermission('canDatabaseMaintenance'), upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const passphrase = String(req.body?.passphrase || '');
-  const tmpDir = path.resolve(process.cwd(), `temp_encrestore_${Date.now()}`);
-  try {
-    let plain: Buffer;
-    try { plain = decryptBackup(req.file.buffer, passphrase); }
-    catch (e: any) { return res.status(400).json({ error: e.message }); }
-    fs.mkdirSync(tmpDir, { recursive: true });
-    const dbFile = path.join(tmpDir, 'quotes.db');
-    fs.writeFileSync(dbFile, plain);
-    await swapInDatabase(dbFile);
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ error: publicError(e) });
-  } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { }
   }
 });
 
@@ -3718,7 +3090,7 @@ app.get('/api/admin/backups/list', requireAuth, requirePermission('canDatabaseMa
 
     res.json(backups);
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3727,7 +3099,7 @@ app.post('/api/admin/backups/trigger-auto', requireAuth, requirePermission('canD
     await runAutomatedBackup();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3743,67 +3115,47 @@ app.get('/api/admin/backups/download/:filename', requireAuth, requirePermission(
     }
     res.download(file, filename);
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// SECURITY: the full settings list (bank details, terms, images) requires a login.
-// Individual non-sensitive keys stay public via /api/settings/:key (login page branding).
 app.get('/api/settings', requireAuth, (req, res) => {
   try {
-    const settings = db.prepare('SELECT key, value FROM settings WHERE key NOT IN (\'smtpConfig\', \'logExpirationDays\')').all();
+    // Single quotes: double-quoted literals are treated as identifiers by better-sqlite3 v12 (this returned 500 before).
+    const settings = db.prepare("SELECT key, value FROM settings WHERE key NOT IN ('smtpConfig', 'logExpirationDays')").all();
     res.json(settings);
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// SECURITY: every setting now requires a login (nothing is needed before sign-in), and sensitive keys
-// additionally require the canManageSettings permission. The SMTP password is never sent back to the browser.
 app.get('/api/settings/:key', requireAuth, (req, res) => {
   const sensitiveKeys = ['smtpConfig', 'logExpirationDays'];
   const key = req.params.key;
 
-  if (sensitiveKeys.includes(key) && !hasPermission((req as any).user, 'canManageSettings')) {
-    return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
+  if (sensitiveKeys.includes(key)) {
+    const user = (req as any).user;
+    if (!hasPermission(user, 'canManageSettings')) {
+      return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
+    }
   }
 
   try {
     const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-    if (key === 'smtpConfig' && setting?.value) {
-      try {
-        const cfg = JSON.parse(setting.value);
-        const masked = { ...cfg, passSet: !!cfg.pass, pass: '' };
-        return res.json({ value: JSON.stringify(masked) });
-      } catch { /* fall through to raw value */ }
-    }
     res.json({ value: setting ? setting.value : null });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
 app.post('/api/settings', requireAuth, requirePermission('canManageSettings'), validate(SettingSchema), (req, res) => {
-  const { key } = req.body;
-  let { value } = req.body;
+  const { key, value } = req.body;
   try {
-    if (key === 'smtpConfig') {
-      // Blank password in the form means "keep the stored one" (the GET above never returns it).
-      try {
-        const incoming = JSON.parse(value);
-        delete incoming.passSet;
-        if (!incoming.pass) {
-          const old = db.prepare("SELECT value FROM settings WHERE key = 'smtpConfig'").get() as { value: string } | undefined;
-          try { incoming.pass = JSON.parse(old?.value || '{}').pass || ''; } catch { incoming.pass = ''; }
-        }
-        value = JSON.stringify(incoming);
-      } catch { /* not JSON: store as sent */ }
-    }
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
     res.json({ success: true });
   } catch (error: any) {
     console.error(`[Settings Upload Error] Failed to save key "${key}":`, error.message);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3926,7 +3278,7 @@ app.post('/api/admin/bulk-update-quote-terms', requireAuth, requireAdmin, (req, 
     res.json({ success: true, count: updatedCount });
   } catch (error: any) {
     console.error('[Bulk Update Terms Error]:', error);
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -3935,14 +3287,9 @@ app.post('/api/admin/bulk-update-quote-terms', requireAuth, requireAdmin, (req, 
 app.post('/api/translate', requireAuth, async (req, res) => {
   const { text, sl = 'en', tl = 'ar' } = req.body;
   if (!text) return res.json({ translation: '' });
-  // SECURITY: cap input size (this endpoint can fall back to a paid API key).
-  if (typeof text !== 'string' || text.length > 20000) {
-    return res.status(413).json({ error: 'Text too long (max 20000 characters).' });
-  }
-  const LANG = /^[a-z]{2,8}(-[a-z]{2,8})?$/i;
-  if (typeof sl !== 'string' || typeof tl !== 'string' || !LANG.test(sl) || !LANG.test(tl)) {
-    return res.status(400).json({ error: 'Invalid language code' });
-  }
+  // Bound the fan-out of outbound translation requests (each ~chunk is a separate call)
+  if (typeof text !== 'string' || text.length > 20000) return res.status(413).json({ error: 'Text too long to translate (max 20,000 characters).' });
+  if (!/^[a-z]{2,5}(-[A-Za-z]{2,4})?$|^auto$/.test(String(sl)) || !/^[a-z]{2,5}(-[A-Za-z]{2,4})?$/.test(String(tl))) return res.status(400).json({ error: 'Invalid language code' });
 
   const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -4073,7 +3420,7 @@ app.post('/api/translate', requireAuth, async (req, res) => {
 
 // ── AI & Automation API ───────────────────────────────────────────────────────
 // RFQ Parsing (Multimodal LLM extraction)
-app.post('/api/rfq/parse', requireAuth, upload.single('file'), async (req, res) => {
+app.post('/api/rfq/parse', requireAuth, requirePermission('canUseRFQ'), upload.single('file'), async (req, res) => {
   if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
     return res.status(400).json({ error: 'Please set OPENROUTER_API_KEY in your .env file to use AI features.' });
   }
@@ -4225,7 +3572,7 @@ app.post('/api/admin/price-sync/extract', requireAuth, requirePermission('canUse
   } catch (err: any) {
     console.error('Price Sync Error:', err);
     logSystemError('PriceSync', 'ExtractionError', err.message, err.stack);
-    res.status(500).json({ error: publicError(err) || 'AI extraction failed. Ensure the file is readable.' });
+    res.status(500).json({ error: err.message || 'AI extraction failed. Ensure the file is readable.' });
   }
 });
 
@@ -4237,10 +3584,7 @@ app.post('/api/admin/price-sync/apply', requireAuth, requirePermission('canUsePr
     const stmt = db.prepare('UPDATE products SET unit_price = ? WHERE id = ?');
     const updateMany = db.transaction((list) => {
       for (const item of list) {
-        const price = Number(item.new_price);
-        // Reject NaN / negative / absurd values instead of writing them into the catalog.
-        if (!item.id || !Number.isFinite(price) || price < 0 || price > 1e9) continue;
-        stmt.run(round2(price), item.id);
+        if (item.id) stmt.run(item.new_price, item.id);
       }
     });
     updateMany(updates);
@@ -4252,7 +3596,7 @@ app.post('/api/admin/price-sync/apply', requireAuth, requirePermission('canUsePr
 });
 
 // Database Assistant (Text-to-SQL)
-app.post('/api/ai/chat', requireAuth, async (req, res) => {
+app.post('/api/ai/chat', requireAuth, requirePermission('canUseAI'), async (req, res) => {
   if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'dummy_key_to_prevent_startup_crash') {
     return res.status(400).json({ error: 'Please set OPENROUTER_API_KEY in your .env file to use AI features.' });
   }
@@ -4320,21 +3664,42 @@ app.post('/api/ai/chat', requireAuth, async (req, res) => {
       });
     }
 
-    // --- Security: model-written SQL is checked, then run on a separate READ-ONLY connection whose
-    // quotes / quote_items / customers are filtered views (see src/lib/aiQuery.ts). Non-admins can only ever
-    // see their own non-deleted quotes, no matter what the model (or a prompt injection) writes. ---
-    const guardReason = checkAiSql(cleanedQuery);
-    if (guardReason) {
-      logSystemError('AI Assistant', 'SecurityBlock', `Blocked unsafe or unauthorized query (${guardReason})`, `Query: ${cleanedQuery}`);
+    // --- Critical Security Guardrails for SQL Queries ---
+    const forbiddenPatterns = [
+      /users/i, /settings/i, /activity_log/i,
+      /sqlite_master/i, /sqlite_schema/i, /sqlite_temp/i,
+      /pragma/i, /insert\s/i, /update\s/i, /delete\s/i, /drop\s/i, /alter\s/i,
+      /;\s*select/i, // prevent stacked queries
+      /\b(main|temp)\s*\./i, /attach/i, /load_extension/i, /sqlite_/i, /permission_groups/i, /sessions/i, /system_logs/i
+    ];
+
+    if (
+      forbiddenPatterns.some(p => p.test(cleanedQuery)) ||
+      (!canSeeAll && !cleanedQuery.includes(`author_id = ${currentUser.id}`))
+    ) {
+      logSystemError('AI Assistant', 'SecurityBlock', `Blocked unsafe or unauthorized query`, `Query: ${cleanedQuery}`);
       return res.json({ answer: "I'm sorry, I cannot run that query due to data security and privacy policies." });
     }
+    // ------------------------------------
 
+    // Execute query
     let rows;
+    let roDb: any = null;
     try {
-      rows = runAiQuery(DB_FILE, currentUser, cleanedQuery, 200);
+      // Run on a READ-ONLY connection so a crafted query can never modify data.
+      roDb = new Database('quotes.db', { readonly: true, fileMustExist: true });
+      const userSql = cleanedQuery.replace(/;\s*$/, '');
+      // Non-admins: shadow the quotes / quote_items tables with CTEs limited to their own live quotes.
+      // This enforces ownership no matter how the SQL is phrased (OR 1=1, UNION, sub-selects …).
+      const finalSql = canSeeAll
+        ? `WITH quotes AS (SELECT * FROM main.quotes WHERE deleted_at IS NULL), quote_items AS (SELECT * FROM main.quote_items WHERE quote_id IN (SELECT quote_id FROM main.quotes WHERE deleted_at IS NULL)) SELECT * FROM (${userSql}) LIMIT 500`
+        : `WITH quotes AS (SELECT * FROM main.quotes WHERE author_id = ${Number(currentUser.id)} AND deleted_at IS NULL), quote_items AS (SELECT * FROM main.quote_items WHERE quote_id IN (SELECT quote_id FROM main.quotes WHERE author_id = ${Number(currentUser.id)} AND deleted_at IS NULL)) SELECT * FROM (${userSql}) LIMIT 500`;
+      rows = roDb.prepare(finalSql).all();
     } catch (sqlErr: any) {
       logSystemError('AI Assistant', 'SQLException', `Database execution error: ${sqlErr.message}`, `Query: ${cleanedQuery}\n\nStack: ${sqlErr.stack || sqlErr}`);
-      return res.json({ answer: 'I could not run that query. Please rephrase your question.' });
+      return res.json({ answer: `Database execution error: ${sqlErr.message}` });
+    } finally {
+      try { roDb?.close(); } catch { }
     }
 
     // Phase 2: Natural Language Summary of Results
@@ -4372,7 +3737,7 @@ app.get('/api/admin/logs', requireAuth, requirePermission('canManageSettings'), 
     const logs = db.prepare('SELECT * FROM system_logs ORDER BY id DESC LIMIT 500').all();
     res.json(logs);
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -4381,7 +3746,7 @@ app.delete('/api/admin/logs', requireAuth, requirePermission('canManageSettings'
     db.prepare('DELETE FROM system_logs').run();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: publicError(error) });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -4397,14 +3762,12 @@ app.get('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) =>
 
 app.post('/api/system/remote-url', requireAuth, requireAdmin, async (req, res) => {
   const { url } = req.body;
-  // SECURITY: validate strictly and avoid the shell (was interpolated into exec -> command injection).
-  let parsedUrl: URL | null = null;
-  try { parsedUrl = new URL(String(url)); } catch { parsedUrl = null; }
-  if (!parsedUrl || !['https:', 'http:'].includes(parsedUrl.protocol) || /[\s;&|`$<>"'\\]/.test(String(url)) || String(url).length > 300) {
+  // Strict validation + execFile (no shell) — the old code interpolated the URL into a shell command.
+  if (typeof url !== 'string' || !/^https?:\/\/[A-Za-z0-9.\-]+(:\d+)?(\/[A-Za-z0-9._~\-\/]*)?$/.test(url.trim())) {
     return res.status(400).json({ error: 'Invalid repository URL' });
   }
   try {
-    await execFileAsync('git', ['remote', 'set-url', 'origin', parsedUrl.toString()]);
+    await execFileAsync('git', ['remote', 'set-url', 'origin', url.trim()]);
     res.json({ success: true, message: 'Remote URL updated successfully' });
   } catch (error: any) {
     res.status(500).json({ error: `Failed to update remote URL: ${error.message}` });
@@ -4436,11 +3799,6 @@ app.get('/api/system/update-status', requireAuth, requireAdmin, async (req, res)
 });
 
 app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
-  // SECURITY: self-update runs `git reset --hard`, `npm install` and a build from the live server.
-  // It is disabled unless the operator explicitly opts in with ALLOW_SELF_UPDATE=true.
-  if (process.env.ALLOW_SELF_UPDATE !== 'true') {
-    return res.status(403).json({ error: 'Self-update is disabled. Set ALLOW_SELF_UPDATE=true in .env to enable it, or deploy via your normal pipeline.' });
-  }
   try {
     console.log('🚀 Starting system update...');
 
@@ -4487,6 +3845,11 @@ app.post('/api/system/update', requireAuth, requireAdmin, async (req, res) => {
 
 // ── GLOBAL EXPRESS ERROR HANDLER ──────────────────────────────────────────────
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Body-parser client errors (malformed JSON / payload too large / aborted upload) are not server faults
+  if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON body' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request body too large' });
+  if (err?.type === 'request.aborted') return res.status(400).json({ error: 'Request aborted' });
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Uploaded file is too large (max 100 MB).' });
   console.error('Unhandled API Error:', err);
   logSystemError('Express API', 'UnhandledRouteError', `Error in ${req.method} ${req.url}: ${err.message}`, err.stack);
   res.status(500).json({ error: 'Internal Server Error' });
@@ -4507,17 +3870,14 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Serve the built frontend from ./dist next to this file (works from any working directory) ...
-    const distDir = fs.existsSync(fileURLToPath(new URL('./dist', import.meta.url)))
-      ? fileURLToPath(new URL('./dist', import.meta.url))
-      : path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
-    // ... and fall back to index.html for client-side routes (/tracking, /quote ...). Without this a page refresh or a
-    // bookmarked deep link returned "Cannot GET /tracking". Unknown /api paths still get a JSON 404.
-    app.get(/^\/(?!api\/).*/, (req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
+    app.use(express.static('dist'));
+    // SPA fallback: deep links such as /tracking or /quote?recall=… must return index.html
+    // (previously a browser refresh on any page other than / returned "Cannot GET" in production).
+    app.get(/^\/(?!api\/).*/, (req, res, next) => {
+      const indexFile = path.resolve(process.cwd(), 'dist', 'index.html');
+      if (fs.existsSync(indexFile)) return res.sendFile(indexFile);
+      next();
     });
-    app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
   }
 
   httpServer.listen(PORT, '0.0.0.0', () => {

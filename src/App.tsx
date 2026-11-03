@@ -2,22 +2,15 @@
 // App.tsx — Root Application Layout
 // =============================================================================
 import React, { useState, useEffect, useRef } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
-import { readJson, clearSessionStorage } from './lib/storage';
-import { readStoredDarkMode, applyDarkMode, hasSavedTheme } from './lib/theme';
-import { t, useLang, setLang } from './lib/i18n';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import {
   FileText, Database, Users, History,
   Settings as SettingsIcon, LogOut, Shield,
   LayoutDashboard, KeyRound, X, ChevronDown,
   User, CheckCircle2, Lock, Eye, EyeOff,
-  Moon, Sun, Kanban, Truck, Trash2, ClipboardList
+  Moon, Sun, Kanban, Truck, Trash2
 } from 'lucide-react';
 import KanbanBoard from './components/KanbanBoard';
-import { RecycleBin } from './components/RecycleBin';
-import AuditLog from './components/AuditLog';
-import SecurityModal from './components/SecurityModal';
-import ApprovalPage from './components/ApprovalPage';
 import QuoteForm from './components/QuoteForm';
 import Dashboard from './components/Dashboard';
 import ProductDB from './components/ProductDB';
@@ -28,6 +21,7 @@ import Settings from './components/Settings';
 import Login from './components/Login';
 import UsersDB from './components/UsersDB';
 import AIAssistant from './components/AIAssistant';
+import { RecycleBin } from './components/RecycleBin';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Global fetch interceptor for auth token
@@ -35,22 +29,12 @@ const originalFetch = window.fetch;
 Object.defineProperty(window, 'fetch', {
   value: async (input: RequestInfo | URL, init?: RequestInit) => {
     const token = localStorage.getItem('token');
-    // SECURITY: only attach the session token to same-origin requests (never leak it to third parties).
-    let sameOrigin = true;
-    try {
-      const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
-      sameOrigin = new URL(rawUrl, window.location.origin).origin === window.location.origin;
-    } catch { sameOrigin = true; }
-    if (token && sameOrigin) {
+    if (token) {
       init = init || {};
-      // Use Headers so Headers instances / arrays passed by callers are preserved.
-      const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
-      if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
-      init.headers = headers;
+      init.headers = { ...init.headers, 'Authorization': `Bearer ${token}` };
     }
     const response = await originalFetch(input, init);
-    if (response.status === 401 && sameOrigin && window.location.pathname !== '/login') {
-      // Keep the unsaved draft on session expiry so the user does not lose work; only a manual logout wipes it.
+    if (response.status === 401 && window.location.pathname !== '/login') {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.dispatchEvent(new Event('auth-change'));
@@ -63,19 +47,20 @@ Object.defineProperty(window, 'fetch', {
 
 // ── NavItem ───────────────────────────────────────────────────────────────────
 function NavItem({ to, icon: Icon, label }: { to: string; icon: any; label: string }) {
-  useLang(); // re-render when the language changes
   const location = useLocation();
   const isActive = location.pathname === to;
   return (
     <Link
       to={to}
-      aria-current={isActive ? 'page' : undefined}
-      className={`flex items-center gap-2 px-3 xl:px-4 py-2 rounded-lg transition-colors whitespace-nowrap shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 ${
-        isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+      title={label}
+      aria-label={label}
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+        isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'
       }`}
     >
-      <Icon size={20} />
-      <span className="font-medium">{t(label)}</span>
+      <Icon size={20} className="shrink-0" />
+      {/* Labels only where they fit; on smaller screens the active item keeps its label, others show icon + tooltip */}
+      <span className={`font-medium text-sm ${isActive ? 'inline' : 'hidden min-[1700px]:inline'}`}>{label}</span>
     </Link>
   );
 }
@@ -104,6 +89,8 @@ const PERM_LABELS: Record<string, string> = {
   canShareQuote: 'Share Quotes',
   canEditSharedQuote: 'Edit Shared Quotes',
   canUndoQuote: 'Undo Timeline Actions',
+  canUseKanban: 'Use Kanban Board',
+  canManageRecycleBin: 'Manage Recycle Bin',
 };
 
 const PERM_DESCRIPTIONS: Record<string, string> = {
@@ -129,6 +116,8 @@ const PERM_DESCRIPTIONS: Record<string, string> = {
   canShareQuote: 'Allow sharing specific quotes with selected users or groups.',
   canEditSharedQuote: 'Allow editing and saving quotes that were shared with this user.',
   canUndoQuote: 'Allow restoring quotes to previous states via the timeline.',
+  canUseKanban: 'Access the interactive Kanban board for quotation stages.',
+  canManageRecycleBin: 'Open the Recycle Bin to restore or permanently delete removed quotes.',
 };
 
 // ── Profile Modal ─────────────────────────────────────────────────────────────
@@ -151,9 +140,7 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
         // Update local user object
         const updatedUser = { ...user, name: data.name };
         localStorage.setItem('user', JSON.stringify(updatedUser));
-        // No page reload (it threw away an unsaved quote in progress): the App root re-reads the user on this event.
-        window.dispatchEvent(new Event('auth-change'));
-        onClose();
+        window.location.reload();
       } else {
         setError('Failed to update profile.');
       }
@@ -165,7 +152,7 @@ function ProfileModal({ user, onClose }: { user: any; onClose: () => void }) {
   };
 
   return (
-    <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
@@ -226,7 +213,7 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     setError('');
     if (newPw !== confirm) { setError('New passwords do not match.'); return; }
-    if (newPw.length < 10) { setError('New password must be at least 10 characters.'); return; }
+    if (newPw.length < 4) { setError('New password must be at least 4 characters.'); return; }
     setLoading(true);
     try {
       const res = await fetch('/api/me/change-password', {
@@ -242,7 +229,7 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div className="flex items-center gap-2.5">
@@ -349,9 +336,9 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
   const [open, setOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
-  const [showSecurity, setShowSecurity] = useState(false);
   const [showPermissions, setShowPermissions] = useState(false);
   const [globalShowFeatureAccess, setGlobalShowFeatureAccess] = useState(true);
+  const [inspectionProtection, setInspectionProtection] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click
@@ -370,13 +357,36 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
           if (config.showFeatureAccess !== undefined) {
             setGlobalShowFeatureAccess(config.showFeatureAccess);
           }
+          if (config.inspectionProtection !== undefined) {
+            setInspectionProtection(config.inspectionProtection);
+          }
         }
       })
       .catch(console.error);
   }, []);
 
-  // (The right-click / F12 'Source Inspection Protection' was removed: it gave no real protection because the JS
-  //  bundle is public, and it broke copy/paste for users. Leftover `inspectionProtection` settings are ignored.)
+  useEffect(() => {
+    if (!inspectionProtection) return;
+
+    const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Disable F12
+      if (e.keyCode === 123) e.preventDefault();
+      // Disable Ctrl+Shift+I (Inspect)
+      if (e.ctrlKey && e.shiftKey && e.keyCode === 73) e.preventDefault();
+      // Disable Ctrl+Shift+J (Console)
+      if (e.ctrlKey && e.shiftKey && e.keyCode === 74) e.preventDefault();
+      // Disable Ctrl+U (View Source)
+      if (e.ctrlKey && e.keyCode === 85) e.preventDefault();
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [inspectionProtection]);
 
   const displayName = user?.name || user?.username;
   const initials = (displayName || 'U').slice(0, 2).toUpperCase();
@@ -402,7 +412,7 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
         <button
           onClick={() => setOpen(v => !v)}
           className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-xl hover:bg-gray-100 transition-colors"
-          title="Profile" aria-label="Profile"
+          title="Profile"
         >
           {/* Avatar */}
           <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-xs font-bold shrink-0">
@@ -494,19 +504,6 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
               )}
 
               <button
-                onClick={() => { setOpen(false); setShowSecurity(true); }}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-indigo-50 transition-colors text-left group mt-1"
-              >
-                <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-200 transition-colors">
-                  <Shield size={15} className="text-indigo-600" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-800">Security</p>
-                  <p className="text-[10px] text-gray-400">Two-factor login and signed-in devices</p>
-                </div>
-              </button>
-
-              <button
                 onClick={() => { setOpen(false); handleLogout(); }}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-red-50 transition-colors text-left group mt-1"
               >
@@ -525,7 +522,6 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
 
       {showProfile && <ProfileModal user={user} onClose={() => setShowProfile(false)} />}
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
-      {showSecurity && <SecurityModal onClose={() => setShowSecurity(false)} />}
     </>
   );
 }
@@ -533,22 +529,21 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
 // ── Main Layout ───────────────────────────────────────────────────────────────
 function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: any; handleLogout: () => void; isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) {
   const location = useLocation();
-  const lang = useLang();
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col">
-      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:bg-white focus:text-indigo-700 focus:px-3 focus:py-2 focus:rounded-lg focus:shadow-lg">{t('Skip to content')}</a>
-      <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 transition-colors duration-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-16 py-4 md:py-0 gap-4">
+      <header className="bg-white/90 dark:bg-gray-900/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors duration-300 print:hidden">
+        <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
+          {/* One row: logo | nav (shrinks & scrolls) | theme + profile. Nothing may spill outside the header. */}
+          <div className="flex items-center h-16 gap-3 min-w-0">
             <div className="flex items-center gap-2 shrink-0">
               <div className="bg-indigo-600 p-2 rounded-lg">
-                <FileText className="text-white" size={24} />
+                <FileText className="text-white" size={22} />
               </div>
-              <h1 className="text-xl font-bold text-gray-900 whitespace-nowrap">AJ Network Solutions</h1>
+              <h1 className="hidden xl:block text-lg font-bold text-gray-900 dark:text-white whitespace-nowrap">AJ Network Solutions</h1>
             </div>
-            <div className="flex items-center gap-2 w-full md:w-auto md:flex-1 md:min-w-0 md:justify-end">
-              <nav aria-label="Main" className="flex gap-1 overflow-x-auto flex-1 min-w-0 pb-2 md:pb-0 scrollbar-hide items-center">
+            <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
+              <nav className="flex gap-1 overflow-x-auto min-w-0 scrollbar-hide items-center">
                 <NavItem to="/" icon={LayoutDashboard} label="Dashboard" />
                 <NavItem to="/quote" icon={FileText} label="Docs" />
                 <NavItem to="/products" icon={Database} label="Product DB" />
@@ -561,9 +556,6 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                 {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
                   <NavItem to="/recycle-bin" icon={Trash2} label="Recycle Bin" />
                 )}
-                {(user?.role === 'admin' || user?.permissions?.canViewAuditLog) && (
-                  <NavItem to="/audit-log" icon={ClipboardList} label="Audit Log" />
-                )}
                 {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                   <NavItem to="/users" icon={Shield} label="Users" />
                 )}
@@ -571,19 +563,12 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
                   <NavItem to="/settings" icon={SettingsIcon} label="Settings" />
                 )}
               </nav>
-              {/* Language toggle (English / Arabic, switches page direction too) */}
-              <button
-                onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
-                className="px-2 py-1 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 text-sm font-semibold transition-colors"
-                title={t('Language')} aria-label={t('Language')}
-              >
-                {lang === 'ar' ? 'EN' : 'عربي'}
-              </button>
               {/* Theme Toggle */}
               <button
                 onClick={() => setIsDarkMode(!isDarkMode)}
-                className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition-colors"
-                title={isDarkMode ? 'Light Mode' : 'Dark Mode'} aria-label={isDarkMode ? 'Light Mode' : 'Dark Mode'}
+                className="shrink-0 p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-300 transition-colors"
+                title={isDarkMode ? 'Switch to Day mode' : 'Switch to Night mode'}
+                aria-label={isDarkMode ? 'Switch to Day mode' : 'Switch to Night mode'}
               >
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
@@ -596,8 +581,9 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
         </div>
       </header>
 
-      <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full outline-none">
-        <div className="max-md:overflow-x-auto" style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
+      {/* The quote editor needs more width (A4 document + analysis sidebar); other pages stay centred */}
+      <main className={`flex-1 mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full min-w-0 ${location.pathname === '/quote' ? 'max-w-[1920px]' : 'max-w-7xl'}`}>
+        <div style={location.pathname === '/quote' ? { display: 'block' } : { display: 'block', height: 0, overflow: 'hidden', visibility: 'hidden' }}>
           <QuoteForm />
         </div>
         <AnimatePresence mode="wait">
@@ -621,17 +607,12 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
               {(user?.role === 'admin' || user?.permissions?.canManageRecycleBin) && (
                 <Route path="/recycle-bin" element={<RecycleBin />} />
               )}
-              {(user?.role === 'admin' || user?.permissions?.canViewAuditLog) && (
-                <Route path="/audit-log" element={<AuditLog />} />
-              )}
               {(user?.role === 'admin' || user?.permissions?.canManageUsers) && (
                 <Route path="/users" element={<UsersDB />} />
               )}
               {(user?.role === 'admin' || user?.permissions?.canManageSettings) && (
                 <Route path="/settings" element={<Settings />} />
               )}
-              {/* Unknown paths (or pages the user lacks permission for) go home instead of a blank screen */}
-              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </motion.div>
         </AnimatePresence>
@@ -644,20 +625,38 @@ function MainLayout({ user, handleLogout, isDarkMode, setIsDarkMode }: { user: a
 // ── App Root ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
-  const [user, setUser] = useState<any>(readJson<any>('user', null));
-  // Saved choice wins; otherwise follow the operating system (src/lib/theme.ts).
-  const [isDarkMode, setIsDarkMode] = useState(readStoredDarkMode);
-  const initialDark = useRef(isDarkMode);
+  const [user, setUser] = useState<any>(JSON.parse(localStorage.getItem('user') || 'null'));
+  // Day/Night: the user's choice wins; with no saved choice follow the operating-system setting.
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark' || saved === 'light') return saved === 'dark';
+    try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return false; }
+  });
 
   useEffect(() => {
-    // Only save once the user has actually used the toggle, so the OS default keeps working until then.
-    applyDarkMode(isDarkMode, isDarkMode !== initialDark.current || hasSavedTheme());
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
   }, [isDarkMode]);
+
+  // Printing (Ctrl+P / browser menu / Print button) is always done in Day mode → white paper
+  useEffect(() => {
+    let wasDark = false;
+    const before = () => { wasDark = document.documentElement.classList.contains('dark'); document.documentElement.classList.remove('dark'); };
+    const after = () => { if (wasDark) document.documentElement.classList.add('dark'); };
+    window.addEventListener('beforeprint', before);
+    window.addEventListener('afterprint', after);
+    return () => { window.removeEventListener('beforeprint', before); window.removeEventListener('afterprint', after); };
+  }, []);
 
   useEffect(() => {
     const handleAuthChange = () => {
       setIsAuthenticated(!!localStorage.getItem('token'));
-      setUser(readJson<any>('user', null));
+      setUser(JSON.parse(localStorage.getItem('user') || 'null'));
     };
     window.addEventListener('auth-change', handleAuthChange);
 
@@ -695,15 +694,11 @@ export default function App() {
 
   const handleLogout = async () => {
     try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
-    // Wipe the draft too so the next user on a shared browser never sees it.
-    clearSessionStorage();
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
     setIsAuthenticated(false);
     setUser(null);
   };
-
-  // Public client approval page: reachable without a login, e.g. https://host/approve/<token>
-  const approveMatch = window.location.pathname.match(/^\/approve\/([A-Za-z0-9_-]+)\/?$/);
-  if (approveMatch) return <ApprovalPage token={approveMatch[1]} />;
 
   if (!isAuthenticated) return <Login onLogin={handleLogin} />;
 

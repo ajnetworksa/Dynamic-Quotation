@@ -17,18 +17,12 @@
 //   • LOGO SIZE CONTROL                       → search for logoSize state and h-{logoSize}
 // =============================================================================
 
-import { getStoredUser } from '../lib/storage';
-import { toast, confirmAsync } from '../lib/notify';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import AddProductModal from './quote/AddProductModal';
-import AddCustomerModal from './quote/AddCustomerModal';
-import ExportRecordModal from './quote/ExportRecordModal';
-import TotalsPanel from './quote/TotalsPanel';
-import { OverwriteModal, ConflictModal, SaveTemplateModal } from './quote/QuoteDialogs';
-import { round2, lineTotal, computeTotals, discountFromRate, rateFromDiscount, clampPercent, marginPercent } from '../lib/money';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { Plus, Trash2, Save, Printer, RefreshCw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
 import html2canvas from 'html2canvas';
+import { localDate, localDatePlusDays, normalizeDate } from '../lib/dates';
+import { getItemRule as sharedGetItemRule, analyzeItem, analyzeItems, refreshItemCost, canSeeCost, clearCostColumns } from '../lib/pricing';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
@@ -112,9 +106,10 @@ export default function QuoteForm() {
   // outside the form) to align its table header perfectly with the 
   // document's items table.
   const printRef = useRef<HTMLDivElement>(null);
+  const editorScrollRef = useRef<HTMLDivElement>(null); // horizontal scroller around document + sidebar
   const formTopRef = useRef<HTMLDivElement>(null);
   const [formTopHeight, setFormTopHeight] = useState<number>(0);
-  const user = getStoredUser();
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
   // logoSize is loaded from the Admin Settings page (Settings → Logo Size).
   // The number maps to a Tailwind spacing unit: 24 = h-24 = 6rem ≈ 96px tall.
   // You can change the default here, but it will be overridden by whatever is
@@ -163,13 +158,10 @@ export default function QuoteForm() {
 
   const [quoteId, setQuoteId] = useState('');
   const [idUnlocked, setIdUnlocked] = useState(false);
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [expiryDate, setExpiryDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 30);
-    return d.toISOString().split('T')[0];
-  });
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | number>('');
+  // Local calendar dates (UTC made quotes created after midnight carry yesterday's date)
+  const [date, setDate] = useState(localDate());
+  const [expiryDate, setExpiryDate] = useState(() => localDatePlusDays(30));
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerFocused, setCustomerFocused] = useState(false);
@@ -177,9 +169,6 @@ export default function QuoteForm() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
   const [isRecorded, setIsRecorded] = useState(false);
-  // True while a RECALLED (already recorded) quote has edits that were not saved yet. Fresh drafts are cached
-  // locally and survive a closed tab, recalled quotes are not, so only they trigger the leave-page warning.
-  const [hasUnsavedRecalledEdits, setHasUnsavedRecalledEdits] = useState(false);
   const [showExportRecordModal, setShowExportRecordModal] = useState(false);
   const [pendingExportType, setPendingExportType] = useState<'excel' | 'pdf' | 'server-pdf' | 'server-pdf-stamped' | null>(null);
   const isInitialLoadRef = useRef(true);
@@ -195,7 +184,7 @@ export default function QuoteForm() {
   const [focusedDescriptionIndex, setFocusedDescriptionIndex] = useState<number | null>(null);
   const descriptionRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
   const descriptionArRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
-  const blurTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const blurTimeoutRef = useRef<NodeJS.Timeout>();
   // Measured position of the active description textarea — updated by useEffect so it's always fresh
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   // Standalone modal for adding a new product (outside textarea focus chain)
@@ -211,9 +200,7 @@ export default function QuoteForm() {
   const [subjectAr, setSubjectAr] = useState('');
   const [items, setItems] = useState<QuoteItem[]>([]);
   const [itemsHistory, setItemsHistory] = useState<QuoteItem[][]>([]);
-  // rawDiscount is what the user typed; `discount` (derived below) is the amount actually applied (capped at the subtotal).
-  const [currency, setCurrency] = useState('SAR'); // per-quote currency (ISO code)
-  const [rawDiscount, setDiscount] = useState(0);
+  const [discount, setDiscount] = useState(0);
   const [discountRate, setDiscountRate] = useState(0);
   const [discountMode, setDiscountMode] = useState<'amount' | 'percentage' | 'both'>('amount');
   const lastDiscountEditedRef = useRef<'rate' | 'amount'>('amount');
@@ -324,12 +311,12 @@ export default function QuoteForm() {
       if ((item.manual_price !== undefined && item.manual_price !== null) || item.original_price === undefined || item.original_price === null) {
         return item;
       }
-      // Same rounding as updateItem/fetchQuote so every path produces identical prices.
-      const newUnitPrice = round2(item.original_price * (1 + markup / 100));
+      // rounded to 2 decimals like a typed price (unrounded prices made unit × qty ≠ net on the printout)
+      const newUnitPrice = Math.round(item.original_price * (1 + markup / 100) * 100) / 100;
       return {
         ...item,
         unit_price: newUnitPrice,
-        net_price: lineTotal(item.qty, newUnitPrice)
+        net_price: Math.round(newUnitPrice * item.qty * 100) / 100
       };
     }));
   }, [markup]);
@@ -443,8 +430,34 @@ export default function QuoteForm() {
   const UNIT_SUGGESTIONS = ['pc', 'set', 'lot', 'm²', 'hr', 'day', 'kg', 'm', 'lm', 'pair', 'roll'];
 
   // ── DRAFT LOCAL CACHE ────────────────────────────────────────────────────────
-  const DRAFT_KEY = 'quote_draft';
+  // Drafts live ONLY in this browser (never written to the shared quote row), so they can never overwrite
+  // another user's work. Keys are per user:
+  //   quote_draft:<userId>                → the NEW (not yet opened from the database) quote being typed
+  //   quote_edit_draft:<userId>:<quoteId> → unsaved changes to an EXISTING quote opened from Tracking/Dashboard
+  const DRAFT_KEY = `quote_draft:${user?.id ?? 'anon'}`;
+  const editDraftKey = (qid: string) => `quote_edit_draft:${user?.id ?? 'anon'}:${qid}`;
+  const legacyDraftMigratedRef = useRef(false);
+  if (!legacyDraftMigratedRef.current) {
+    legacyDraftMigratedRef.current = true;
+    try {
+      // one-time move of the old shared key ('quote_draft') to the per-user key
+      const legacy = localStorage.getItem('quote_draft');
+      if (legacy && !localStorage.getItem(DRAFT_KEY)) localStorage.setItem(DRAFT_KEY, legacy);
+      if (legacy) localStorage.removeItem('quote_draft');
+      // housekeeping: forget unsaved edit drafts older than 30 days
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      Object.keys(localStorage).filter(k => k.startsWith('quote_edit_draft:')).forEach(k => {
+        try { const t = Date.parse(JSON.parse(localStorage.getItem(k) || '{}').savedAt); if (!t || t < cutoff) localStorage.removeItem(k); } catch { localStorage.removeItem(k); }
+      });
+    } catch { }
+  }
   const [draftBanner, setDraftBanner] = useState(false);
+  // Banner shown when unsaved changes of an existing quote were found in this browser
+  const [editDraftNotice, setEditDraftNotice] = useState<null | { kind: 'restored' | 'outdated'; quoteId: string; savedAt: string; data?: any }>(null);
+  const editBaselineRef = useRef<string | null>(null);      // snapshot of the quote exactly as loaded/saved
+  const latestSnapshotRef = useRef<any>(null);              // snapshot of the current form (updated every render)
+  const lastInitRecallRef = useRef<string | null | undefined>(undefined); // document currently loaded in the form
+  const skipNextInitRef = useRef(false);                     // set by Duplicate (keeps the copied content)
 
   const restoreDraftData = useCallback((d: any) => {
     if (!d) return;
@@ -473,8 +486,11 @@ export default function QuoteForm() {
     if (d.discountRate !== undefined) setDiscountRate(d.discountRate);
     if (d.discountMode !== undefined) setDiscountMode(d.discountMode);
     if (d.vatRate !== undefined) setVatRate(d.vatRate);
-    if (d.currency) setCurrency(d.currency);
     if (d.markup !== undefined) setMarkup(d.markup);
+    if (d.status) setStatus(d.status);
+    if (d.type) setType(d.type);
+    if (d.isRecorded && typeof d.version === 'number') setVersion(d.version);
+    if (d.sharedWith && typeof d.sharedWith === 'object') setSharedWith(d.sharedWith);
     if (d.authorName !== undefined) setAuthorName(d.authorName);
     if (d.authorId !== undefined) setAuthorId(d.authorId);
     if (d.note) setNote(d.note);
@@ -581,6 +597,34 @@ export default function QuoteForm() {
   }, []);
 
   useEffect(() => {
+    // The form stays mounted on every page. Only (re)load a document while the editor is on screen, and
+    // never wipe the form just because the user visited another page (that previously reset an opened
+    // quote to a half-blank form and lost unsaved work).
+    const target = recallQuoteId || null;
+    if (skipNextInitRef.current) {            // Duplicate: keep the copied content as a new draft
+      skipNextInitRef.current = false;
+      lastInitRecallRef.current = target;
+      prevRecallRef.current = recallQuoteId;
+      return;
+    }
+    if (lastInitRecallRef.current !== undefined) {
+      if (isClearingRef.current) {            // Clear button handles its own reset
+        lastInitRecallRef.current = target;
+        prevRecallRef.current = recallQuoteId;
+        return;
+      }
+      if (location.pathname !== '/quote') return;
+      if (target === lastInitRecallRef.current) return;   // same document → keep in-memory state
+      if (!target && lastInitRecallRef.current && !(location.state as any)?.newQuote) {
+        // Came back through the "Docs" menu → return to the quote that is still open
+        setSearchParams({ recall: lastInitRecallRef.current }, { replace: true });
+        return;
+      }
+    }
+    lastInitRecallRef.current = target;
+    editBaselineRef.current = null;
+    setEditDraftNotice(null);
+
     const init = async () => {
       // If we are not visible and not on the quote page, don't trigger the heavy init sequence
       if (document.visibilityState !== 'visible' && location.pathname !== '/quote') return;
@@ -622,13 +666,27 @@ export default function QuoteForm() {
       if (isClearingRef.current) return;
 
       if (recallQuoteId) {
+        isInitialLoadRef.current = true;
+        // An older "new quote" draft that is actually THIS recorded quote → treat it as an edit draft of it
+        try {
+          const nd = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+          if (nd && nd.isRecorded && nd.quoteId === recallQuoteId) {
+            if (!localStorage.getItem(editDraftKey(recallQuoteId))) {
+              localStorage.setItem(editDraftKey(recallQuoteId), JSON.stringify({ quoteId: recallQuoteId, savedAt: nd.savedAt || new Date().toISOString(), data: { ...nd, editingQuoteId: recallQuoteId } }));
+            }
+            localStorage.removeItem(DRAFT_KEY);
+          }
+        } catch { }
         await fetchQuote(recallQuoteId, dbCustomers, dbProducts);
-        // Loading fills many fields; do not count that as the user's edits (clears after React has applied it).
-        setTimeout(() => setHasUnsavedRecalledEdits(false), 900);
         setIsRecorded(true);
-        // Do not keep stale draft cache while viewing an existing database quote
-        localStorage.removeItem(DRAFT_KEY);
-        setTimeout(() => { isInitialLoadRef.current = false; }, 600);
+        // The new-quote draft (if any) is kept so the user can go back to it later.
+        const loadedId = recallQuoteId;
+        setTimeout(() => {
+          isInitialLoadRef.current = false;
+          if (lastInitRecallRef.current !== loadedId) return;  // user already moved to another quote
+          editBaselineRef.current = JSON.stringify(latestSnapshotRef.current);
+          restorePendingEditDraft(loadedId);
+        }, 600);
       } else if (!wasRecalling) {
         // Auto-restore locally cached draft if it exists (only for fresh quote creation, not after clearing a recalled quote)
         const draft = localStorage.getItem(DRAFT_KEY);
@@ -642,22 +700,27 @@ export default function QuoteForm() {
         } else {
           setQuoteId('');
           setIsRecorded(false);
-          setDate(new Date().toISOString().split('T')[0]);
+          setDate(localDate());
           setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
         }
         setTimeout(() => { isInitialLoadRef.current = false; }, 600);
       } else {
-        // Was recalling an existing quote and now cleared -> ensure blank fresh form and no draft restored
-        localStorage.removeItem(DRAFT_KEY);
-        setQuoteId('');
-        setIsRecorded(false);
-        setDate(new Date().toISOString().split('T')[0]);
-        setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
+        // Switching from an opened quote to a NEW document ("New Document" / "+ New Quote"):
+        // fully reset the form (the old code left the previous quote's customer, subject and terms behind),
+        // then bring back the user's unsaved new-quote draft if there is one.
+        isInitialLoadRef.current = true;
+        resetToBlankForm();
+        try {
+          const draft = localStorage.getItem(DRAFT_KEY);
+          if (draft) restoreDraftData(JSON.parse(draft));
+        } catch (e) {
+          console.error('Failed to parse cached draft:', e);
+        }
         setTimeout(() => { isInitialLoadRef.current = false; }, 600);
       }
     };
     init();
-  }, [recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [recallQuoteId, location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for live updates when documentTerms are saved in Settings tab
   useEffect(() => {
@@ -696,7 +759,10 @@ export default function QuoteForm() {
       fetchSuppliers();
       fetchDocumentTerms(!recallQuoteId && !selectedCustomerId && !subject && items.every(i => !i.description.trim()));
     }
-  }, [location.pathname, recallQuoteId, selectedCustomerId, subject, items, fetchDocumentTerms]);
+    // Only re-run when the user navigates to /quote (or opens another quote). Previously `items`,
+    // `subject` and `selectedCustomerId` were dependencies, so every keystroke re-downloaded the full
+    // customer, product and supplier lists plus the document terms (4 requests per keystroke).
+  }, [location.pathname, recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refetch lists when the browser tab gains focus (e.g. from another tab or window)
   // or via a regular background sync every 15 seconds so data is always fresh.
@@ -797,25 +863,27 @@ export default function QuoteForm() {
     };
   }, [focusedDescriptionIndex]);
 
-  // Undo (Ctrl+Z) for row operations (drag, move up/down, add, remove).
-  // History lives in a ref mirror so the handler never calls setState inside a state updater
-  // (that ran twice under StrictMode and popped two entries).
-  const itemsHistoryRef = useRef<QuoteItem[][]>([]);
-  itemsHistoryRef.current = itemsHistory;
+  // QuoteForm stays mounted (hidden) on every page, so global shortcuts must only act while /quote is shown.
+  const pathnameRef = useRef(location.pathname);
+  pathnameRef.current = location.pathname;
+
+  // Undo (Ctrl+Z) for dragging operations
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (window.location.pathname !== '/quote') return; // form stays mounted on every page
+      if (pathnameRef.current !== '/quote') return;
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         // Prevent intercepting native text undo if typing in an input
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
         e.preventDefault();
-        const history = itemsHistoryRef.current;
-        if (history.length === 0) return;
-        const previousItems = history[history.length - 1];
-        setItemsHistory(history.slice(0, -1));
-        setItems(previousItems);
+        setItemsHistory(prevHistory => {
+          if (prevHistory.length === 0) return prevHistory;
+          const newHistory = [...prevHistory];
+          const previousItems = newHistory.pop()!;
+          setItems(previousItems);
+          return newHistory;
+        });
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -823,35 +891,27 @@ export default function QuoteForm() {
   }, []);
 
   // ── KEYBOARD SHORTCUTS ──
-  // The handlers are kept in a ref that is refreshed after every render, so the shortcut always runs
-  // with the CURRENT form state (the old dependency list missed date, markup, notes, terms, status...,
-  // so Ctrl+S could save stale values). Ctrl+S now goes through recordQuote, i.e. the same
-  // validation as the Save button.
-  const shortcutHandlersRef = useRef<{ save: () => void; print: () => void } | null>(null);
-  useEffect(() => {
-    shortcutHandlersRef.current = {
-      save: () => { recordQuote(); },
-      print: () => handlePrint(),
-    };
-  });
+  // Refs always point at the latest handlers, so Ctrl+S never saves a stale snapshot of the form.
+  const shortcutHandlersRef = useRef<{ save: () => any; print: () => any }>({ save: () => {}, print: () => {} });
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // This component stays mounted (hidden) on every page, so only react while the quote page is showing.
-      if (window.location.pathname !== '/quote') return;
+      // Only when the quote editor is the visible page (previously Ctrl+S on Tracking silently
+      // re-saved the hidden quote — which could even bring back a quote that had just been deleted).
+      if (pathnameRef.current !== '/quote') return;
       // Ctrl+S to Save
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        shortcutHandlersRef.current?.save();
+        shortcutHandlersRef.current.save();
       }
       // Ctrl+P to Print
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
         e.preventDefault();
-        shortcutHandlersRef.current?.print();
+        shortcutHandlersRef.current.print();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [items, quoteId, subject, selectedCustomerId, discount, vatRate]);
 
   const fetchLogo = async () => {
     try {
@@ -1057,8 +1117,10 @@ export default function QuoteForm() {
   const onRowBodyPointerDown = (e: React.PointerEvent, index: number) => {
     if (rowReorderMode !== 'drag') return;
     if ((e.target as HTMLElement).closest('.product-dropdown')) return;
-    const tag = (e.target as HTMLElement).tagName;
-    if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'LABEL', 'TH'].includes(tag)) return;
+    // Use closest(): clicking a button's ICON targets the <svg>/<path>, not the <button>. The old tagName check
+    // missed that, started a row drag and captured the pointer, so the button's click (e.g. 🗑 Remove Item,
+    // internal-note) never fired.
+    if ((e.target as HTMLElement).closest('input, textarea, select, button, a, label, th, [contenteditable="true"]')) return;
     longPressStartRef.current = { x: e.clientX, y: e.clientY };
     const el = e.currentTarget as HTMLElement;
 
@@ -1128,7 +1190,7 @@ export default function QuoteForm() {
   };
 
   const handleTranslateAll = async () => {
-    const isConfirm = await confirmAsync('This will force translate ALL Arabic fields based on current English content. Proceed?');
+    const isConfirm = confirm('This will force translate ALL Arabic fields based on current English content. Proceed?');
     if (!isConfirm) return;
 
     // 1. Subject
@@ -1137,22 +1199,25 @@ export default function QuoteForm() {
       if (trans) setSubjectAr(trans);
     }
 
-    // 2. Items. Results are collected by row id and merged into the CURRENT items afterwards, so edits typed,
-    // rows added/removed or reordered while the (slow) translation runs are never overwritten or mis-targeted.
-    const arById = new Map<string, string>();
-    for (const it of [...items]) {
-      if (!it.description) continue;
-      const prod = it.product_id ? products.find(p => p.id === it.product_id) : null;
-      if (prod?.description_ar) {
-        arById.set(it.id, prod.description_ar);
-      } else {
-        const trans = await translateSingle(it.description);
-        if (trans) arById.set(it.id, trans);
+    // 2. Items
+    const newItems = [...items];
+    let itemsChanged = false;
+    for (let i = 0; i < newItems.length; i++) {
+      if (newItems[i].description) {
+        const prod = newItems[i].product_id ? products.find(p => p.id === newItems[i].product_id) : null;
+        if (prod?.description_ar) {
+          newItems[i].description_ar = prod.description_ar;
+          itemsChanged = true;
+        } else {
+          const trans = await translateSingle(newItems[i].description);
+          if (trans) {
+            newItems[i].description_ar = trans;
+            itemsChanged = true;
+          }
+        }
       }
     }
-    if (arById.size) {
-      setItems(prev => prev.map(i => arById.has(i.id) ? { ...i, description_ar: arById.get(i.id)! } : i));
-    }
+    if (itemsChanged) setItems(newItems);
 
     // 3. Terms
     if (note) {
@@ -1198,14 +1263,12 @@ export default function QuoteForm() {
     }
     if (cfChanged) setCustomFields(newCFs);
 
-    toast('Translation process complete!');
+    alert('Translation process complete!');
   };
 
   const handleProductAutoTranslate = async (index: number, text: string, currentAr: string, force = true) => {
     if (translationMode !== 'auto') return;
     if (!text) return;
-    // Remember WHICH row this is (by id): the user may reorder or delete rows while the request is in flight.
-    const rowId = items[index]?.id;
     // Mark row as translating
     setTranslatingRows(prev => { const s = new Set(prev); s.add(index); return s; });
     const clearIndicator = () => setTranslatingRows(prev => { const s = new Set(prev); s.delete(index); return s; });
@@ -1222,8 +1285,7 @@ export default function QuoteForm() {
         if (res.ok) {
           const data = await res.json();
           if (data.translation) {
-            if (rowId) setItems(prev => prev.map(i => i.id === rowId ? { ...i, description_ar: data.translation } : i));
-            else updateItem(index, 'description_ar', data.translation);
+            updateItem(index, 'description_ar', data.translation);
           } else if (tries < 2) {
             // Empty result — retry once after a short delay
             await new Promise(r => setTimeout(r, 700));
@@ -1291,7 +1353,7 @@ export default function QuoteForm() {
       };
 
       setQuoteId(data.quote_id);
-      setDate(pick(parsedDraft?.date, data.date, new Date().toISOString().split('T')[0]));
+      setDate(normalizeDate(pick(parsedDraft?.date, data.date, '')) || localDate());
       setExpiryDate(pick(parsedDraft?.expiryDate, data.expiry_date, ''));
       const custId = pick(parsedDraft?.selectedCustomerId, data.customer_id, '');
       setSelectedCustomerId(custId);
@@ -1320,7 +1382,6 @@ export default function QuoteForm() {
       setType(data.type || 'Quotation');
       setVersion(data.version || 1);
       setVatRate(parsedDraft?.vatRate !== undefined ? parsedDraft.vatRate : (data.vat_rate !== undefined ? data.vat_rate : 15));
-      setCurrency(parsedDraft?.currency || data.currency || 'SAR');
       setMarkup(parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8));
       setPayment(pick(parsedDraft?.payment, data.payment, dt.payment || ''));
       setPaymentAr(pick(parsedDraft?.paymentAr, data.payment_ar, dt.paymentAr || ''));
@@ -1395,47 +1456,24 @@ export default function QuoteForm() {
         itemsToProcess = Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }));
       }
 
+      const productPriceById = new Map<number, number>(productsList.map(p => [p.id, p.unit_price]));
       setItems(itemsToProcess.map((item: any) => {
-        let original_price = item.original_price;
-        let manual_price = item.manual_price !== null && item.manual_price !== undefined ? item.manual_price : undefined;
-
-        let costShift: 'up' | 'down' | undefined = undefined;
-
-        if (item.product_id) {
-          const prod = productsList.find(p => p.id === item.product_id);
-          if (prod) {
-            const dbPrice = prod.unit_price;
-            if (original_price !== dbPrice && original_price !== undefined) {
-              if (dbPrice > original_price) {
-                increases++;
-                costShift = 'up';
-              } else {
-                decreases++;
-                costShift = 'down';
-              }
-
-              original_price = dbPrice;
-              const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8);
-              const expectedNewUnitPrice = dbPrice * (1 + currentMarkup / 100);
-              const currentUnitPrice = item.unit_price;
-              if (manual_price === undefined && Math.abs(currentUnitPrice - expectedNewUnitPrice) > 0.01) {
-                manual_price = Math.round(currentUnitPrice * 100) / 100;
-              }
-            }
-          }
-        }
-
-        // Round manual price if it exists
-        if (manual_price !== undefined) {
-          manual_price = Math.round(manual_price * 100) / 100;
-        }
+        // Cost refresh from the Product DB — shared with the Tracking Excel exports (src/lib/pricing.ts)
+        const costMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup !== undefined ? data.markup : 8);
+        const refreshed = refreshItemCost(item, productPriceById, costMarkup);
+        const original_price = refreshed.original_price;
+        const manual_price = refreshed.manual_price;
+        const costShift = refreshed.costShift;
+        if (costShift === 'up') increases++;
+        else if (costShift === 'down') decreases++;
 
         // Determine current unit price
         let unit_price = item.unit_price || 0;
         if (manual_price !== undefined) {
           unit_price = manual_price;
         } else if (original_price !== undefined) {
-          const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup || 8);
+          // 0 % is a valid markup — `|| 8` turned it into 8 % and re-priced every line on opening
+          const currentMarkup = parsedDraft?.markup !== undefined ? parsedDraft.markup : (data.markup ?? 8);
           unit_price = Math.round(original_price * (1 + currentMarkup / 100) * 100) / 100;
         }
 
@@ -1483,18 +1521,22 @@ export default function QuoteForm() {
   };
 
   const clearForm = async () => {
-    if (!await confirmAsync('Quote Form will be cleaned up. Do you confirm?')) return;
+    if (!confirm('Quote Form will be cleaned up. Do you confirm?')) return;
     isClearingRef.current = true;
     if (cacheTimerRef.current) {
       clearTimeout(cacheTimerRef.current);
       cacheTimerRef.current = null;
     }
     localStorage.removeItem(DRAFT_KEY);
+    const openedId = recallQuoteId || lastInitRecallRef.current;
+    if (openedId) localStorage.removeItem(editDraftKey(openedId));
+    editBaselineRef.current = null;
+    setEditDraftNotice(null);
 
     setQuoteId('');
     setIsRecorded(false);
     setSearchParams({});
-    setDate(new Date().toISOString().split('T')[0]);
+    setDate(localDate());
     setExpiryDate('');
     setSelectedCustomerId('');
     setSelectedCustomer(null);
@@ -1506,7 +1548,6 @@ export default function QuoteForm() {
     setStatus('Draft');
     setType('Quotation');
     setVatRate(15);
-    setCurrency('SAR');
     setAuthorName(user.name || user.username);
     setAuthorId(null);
     setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
@@ -1539,7 +1580,6 @@ export default function QuoteForm() {
 
     localStorage.removeItem(DRAFT_KEY);
     setSaveStatus('saved');
-    setHasUnsavedRecalledEdits(false);
     setLastSavedTime(null);
 
     // Keep isClearingRef active across render cycles and router updates
@@ -1550,7 +1590,7 @@ export default function QuoteForm() {
   };
 
   const handleUpdateDocumentTermsOnly = async () => {
-    if (!await confirmAsync('Update only the Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to the latest defaults from Settings?\n\nYour items, customer, and pricing will not be changed.')) return;
+    if (!confirm('Update only the Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to the latest defaults from Settings?\n\nYour items, customer, and pricing will not be changed.')) return;
     try {
       const freshTerms = await fetchDocumentTerms(true);
       if (!freshTerms) {
@@ -1564,7 +1604,7 @@ export default function QuoteForm() {
         });
       }, 50);
     } catch (err: any) {
-      toast(`Failed to update terms: ${err.message}`);
+      alert(`Failed to update terms: ${err.message}`);
     }
   };
 
@@ -1573,7 +1613,7 @@ export default function QuoteForm() {
     if (product) {
       setItems(prevItems => {
         const newItems = [...prevItems];
-        const newUnitPrice = product.unit_price * (1 + markup / 100);
+        const newUnitPrice = Math.round(product.unit_price * (1 + markup / 100) * 100) / 100;
         newItems[index] = {
           ...newItems[index],
           product_id: product.id,
@@ -1583,7 +1623,7 @@ export default function QuoteForm() {
           unit: product.unit,
           unit_price: newUnitPrice,
           manual_price: undefined,
-          net_price: newItems[index].qty * newUnitPrice,
+          net_price: Math.round(newItems[index].qty * newUnitPrice * 100) / 100,
           item_code: product.item_code,
           supplier_name: product.supplier_name
         };
@@ -1646,16 +1686,16 @@ export default function QuoteForm() {
             const temp = prev.filter(p => p.description.trim() !== '');
             return [...temp, ...mappedItems];
           });
-          toast('RFQ Parsed successfully! Prices are set to 0. Please verify descriptions.');
+          alert('RFQ Parsed successfully! Prices are set to 0. Please verify descriptions.');
         } else {
-          toast('AI did not find any items or returned an invalid format.');
+          alert('AI did not find any items or returned an invalid format.');
         }
       } else {
         const err = await res.json();
-        toast(`Failed: ${err.error || 'Server error'}`);
+        alert(`Failed: ${err.error || 'Server error'}`);
       }
     } catch (err: any) {
-      toast(`Upload error: ${err.message}`);
+      alert(`Upload error: ${err.message}`);
     } finally {
       setIsRfqLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1663,10 +1703,6 @@ export default function QuoteForm() {
   };
 
   const updateItem = (index: number, field: keyof QuoteItem, value: any) => {
-    // Quantities and prices can never be negative (a negative line silently reduced the quote total).
-    if ((field === 'qty' || field === 'unit_price' || field === 'manual_price') && typeof value === 'number' && !isNaN(value) && value < 0) {
-      value = 0;
-    }
     setItems(prevItems => {
       const newItems = [...prevItems];
       newItems[index] = { ...newItems[index], [field]: value };
@@ -1682,8 +1718,6 @@ export default function QuoteForm() {
         }
       } else if (field === 'unit_price') {
         newItems[index].manual_price = value === '' || isNaN(value) ? undefined : Math.round(value * 100) / 100;
-        // Store the price exactly as it is shown (2 decimals) so qty x price always equals the displayed net price.
-        if (value !== '' && !isNaN(value)) newItems[index].unit_price = round2(value);
       }
 
       if (field === 'qty' || field === 'unit_price' || field === 'manual_price') {
@@ -1693,28 +1727,18 @@ export default function QuoteForm() {
     });
   };
 
-  const pushHistory = (snapshot: QuoteItem[]) => setItemsHistory(h => [...h, snapshot].slice(-20));
-  const blankItem = (): QuoteItem => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 });
-
   const addItem = () => {
-    pushHistory(items);
-    // Functional update: two quick clicks (or an async translation landing at the same time) cannot drop a row.
-    setItems(prev => [...prev, blankItem()]);
+    setItems([...items, { id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
   };
 
-  const removeItem = async (index: number) => {
-    if (!await confirmAsync('Are you sure you want to remove this item? (Ctrl+Z undoes it)')) return;
-    pushHistory(items);
-    const targetId = items[index]?.id;
-    setItems(prev => {
-      const next = prev.filter(i => i.id !== targetId);
-      return next.length ? next : [blankItem()];
-    });
+  const removeItem = (index: number) => {
+    if (!window.confirm('Are you sure you want to remove this item?')) return;
+    const newItems = items.filter((_, i) => i !== index);
+    setItems(newItems.length ? newItems : [{ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 }]);
   };
 
   const moveItemUp = (index: number) => {
     if (index === 0) return;
-    pushHistory(items);
     setItems(prevItems => {
       const newItems = [...prevItems];
       const temp = newItems[index - 1];
@@ -1726,7 +1750,6 @@ export default function QuoteForm() {
 
   const moveItemDown = (index: number) => {
     if (index === items.length - 1) return;
-    pushHistory(items);
     setItems(prevItems => {
       const newItems = [...prevItems];
       const temp = newItems[index + 1];
@@ -1737,78 +1760,38 @@ export default function QuoteForm() {
   };
 
   // ── ADVANCED MU CALCULATION ───────────────────────────────────────────────
-  const getItemRule = (item: QuoteItem) => {
-    const desc = (item.description || '').toLowerCase();
-    if (muFilters.excluded.some(kw => desc.includes(kw.toLowerCase()))) return 'EXCL';
-    if (muFilters.zeroMarkup.some(kw => desc.includes(kw.toLowerCase()))) return 'ZM';
+  // Rules live in src/lib/pricing.ts (shared with all Excel exports in Tracking)
+  const getItemRule = (item: QuoteItem) => sharedGetItemRule(item, muFilters);
 
-    const hasManual = item.manual_price !== undefined && item.manual_price !== null;
-    const hasDB = item.original_price !== undefined && item.original_price !== null;
-    // User requested: only overwrite base price if it contains 'materials'
-    const isSpecial = desc.includes('materials');
+  const subtotal = Math.round(items.reduce((sum, item) => sum + (item.net_price || 0), 0) * 100) / 100;
 
-    if (hasManual) {
-      // Use manual price as the BASE calculation if it's special OR if no DB price exists to fall back on
-      if (isSpecial || !hasDB) {
-        return 'MAN';
-      }
-    }
-
-    if (hasDB) return 'DB';
-    return '--';
-  };
-
-  // All money figures come from the shared module (src/lib/money.ts) so form, PDF and exports agree.
-  const totals = computeTotals({ lineNets: items.map(i => i.net_price || 0), discount: rawDiscount, vatRate });
-  const subtotal = totals.subtotal;
-  const discount = totals.discount;
-
-  let baseTotal = 0;
-  let markupProfit = 0;
-
-  items.forEach(item => {
-    const rule = getItemRule(item);
-    const saleTotal = item.net_price || 0;
-
-    if (rule === 'EXCL') {
-      // Excluded: contributes nothing to base cost and nothing to profit
-    } else if (rule === 'ZM') {
-      // Zero markup: base cost equals sale price, so 0 profit
-      baseTotal += saleTotal;
-    } else {
-      let itemBaseUnit = 0;
-      if (rule === 'MAN') itemBaseUnit = item.manual_price!;
-      else if (rule === 'DB') itemBaseUnit = item.original_price!;
-
-      const itemBaseTotal = itemBaseUnit * item.qty;
-      baseTotal += itemBaseTotal;
-      markupProfit += (saleTotal - itemBaseTotal);
-    }
-  });
-
-  // Profit is what is left after the discount is given away.
-  markupProfit = round2(markupProfit - discount);
+  // B.TOTAL / TTL PROFIT — same function as every Excel export (src/lib/pricing.ts)
+  const { baseTotal, markupProfit } = analyzeItems(items, muFilters);
 
   useEffect(() => {
     if (discountMode === 'percentage') {
-      setDiscount(discountFromRate(subtotal, discountRate));
+      const computed = Number(((subtotal * (discountRate || 0)) / 100).toFixed(2));
+      setDiscount(computed);
     } else if (discountMode === 'both') {
       if (lastDiscountEditedRef.current === 'rate') {
-        setDiscount(discountFromRate(subtotal, discountRate));
+        const computed = Number(((subtotal * (discountRate || 0)) / 100).toFixed(2));
+        setDiscount(computed);
       } else {
-        setDiscountRate(rateFromDiscount(subtotal, discount));
+        const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
+        setDiscountRate(rate);
       }
     }
   }, [subtotal, discountRate, discountMode]);
 
-  const discountedSubtotal = totals.discountedSubtotal;
-  const tax = totals.tax;
-  const grandTotal = totals.grandTotal;
+  const discountedSubtotal = Math.max(0, subtotal - discount);
+  // rounded to 2 decimals — same formula the server uses when saving
+  const tax = Math.round(discountedSubtotal * (vatRate / 100) * 100) / 100;
+  const grandTotal = Math.round((discountedSubtotal + tax) * 100) / 100;
 
   const performSave = async (force: boolean = false, overrideQuoteId?: string): Promise<boolean> => {
     const activeQuoteId = overrideQuoteId || quoteId;
     if (!activeQuoteId) {
-      toast('Cannot record without Quote ID!');
+      alert('Cannot record without Quote ID!');
       return false;
     }
 
@@ -1848,7 +1831,6 @@ export default function QuoteForm() {
       status,
       type,
       vat_rate: vatRate,
-      currency,
       markup: markup,
       author_name: authorName,
       author_id: authorId,
@@ -1891,55 +1873,52 @@ export default function QuoteForm() {
         setVersion(data.version || 1); // Update local version lock to the newly saved version
         setIsRecorded(true);
         setSaveStatus('saved');
-        setHasUnsavedRecalledEdits(false);
         setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-        toast(recallQuoteId === activeQuoteId ? 'Quote updated successfully!' : `Quote data (${activeQuoteId}) is recorded to Tracking section!`);
+        alert(recallQuoteId === activeQuoteId ? 'Quote updated successfully!' : `Quote data (${activeQuoteId}) is recorded to Tracking section!`);
         localStorage.removeItem(DRAFT_KEY); // clear local draft since officially recorded
+        localStorage.removeItem(editDraftKey(activeQuoteId));
+        setEditDraftNotice(null);
+        editBaselineRef.current = null;
+        setTimeout(() => {
+          // new baseline = what is now in the database
+          if (lastInitRecallRef.current === activeQuoteId) editBaselineRef.current = JSON.stringify(latestSnapshotRef.current);
+        }, 300);
         setShowOverwriteModal(false);
         setShowConflictModal(false);
         return true;
       } else if (res.status === 409) {
         const errorData = await res.json();
         if (errorData.error === 'ID_TAKEN') {
-          toast("This Quote ID was just used by someone else! Generating a new one for you automatically...");
+          alert("This Quote ID was just used by someone else! Generating a new one for you automatically...");
           handleCreateNewId();
+        } else if (typeof errorData.error === 'string' && errorData.error.includes('Recycle Bin')) {
+          alert(errorData.error);
         } else {
           setShowConflictModal(true);
         }
         return false;
       } else {
         const error = await res.json();
-        toast(`Failed to record quote: ${error.error}`);
+        alert(`Failed to record quote: ${error.error}`);
         return false;
       }
     } catch (e: any) {
-      toast(`Network error saving quote: ${e.message}`);
+      alert(`Network error saving quote: ${e.message}`);
       return false;
     }
   };
 
   const recordQuote = async (): Promise<boolean> => {
     if (!date) {
-      toast('Please input date!');
+      alert('Please input date!');
       return false;
     }
     if (grandTotal === 0) {
-      toast('Total is zero! Please check.');
-      return false;
-    }
-    // Lines with a price but no description are dropped on save while still counted in the totals, so refuse them.
-    const orphanIdx = items.findIndex(i => (i.description || '').trim() === '' && (i.net_price || 0) > 0);
-    if (orphanIdx !== -1) {
-      toast(`Item ${orphanIdx + 1} has a price but no description. Add a description or remove the line.`);
-      return false;
-    }
-    const badQtyIdx = items.findIndex(i => (i.description || '').trim() !== '' && !(Number(i.qty) > 0));
-    if (badQtyIdx !== -1) {
-      toast(`Item ${badQtyIdx + 1} has a quantity of zero. Enter a quantity greater than 0.`);
+      alert('Total is zero! Please check.');
       return false;
     }
     if (!selectedCustomerId) {
-      toast('Please select a customer.');
+      alert('Please select a customer.');
       return false;
     }
 
@@ -1947,7 +1926,7 @@ export default function QuoteForm() {
     if (!activeId) {
       activeId = await generateQuoteId();
       if (!activeId) {
-        toast('Failed to generate Quote ID. Please try again.');
+        alert('Failed to generate Quote ID. Please try again.');
         return false;
       }
     }
@@ -1957,8 +1936,7 @@ export default function QuoteForm() {
       const checkRes = await fetch(`/api/quotes/${activeId}`);
       if (checkRes.ok) {
         // Quote exists. If we are not explicitly editing this specific quote, warn them.
-        // A quote this form just recorded (isRecorded) is being updated, not colliding with someone else's ID.
-        if (recallQuoteId !== activeId && !(isRecorded && quoteId === activeId)) {
+        if (recallQuoteId !== activeId) {
           setShowOverwriteModal(true);
           return false;
         }
@@ -1975,14 +1953,111 @@ export default function QuoteForm() {
     const newId = await generateQuoteId();
     // Use setTimeout so the new ID state applies before telling user to save again.
     setTimeout(() => {
-      toast(`A new Quote ID (${newId}) has been generated! You can now click Record to save.`);
+      alert(`A new Quote ID (${newId}) has been generated! You can now click Record to save.`);
     }, 100);
+  };
+
+  // Plain snapshot of everything the user can edit (used for both draft kinds)
+  const buildDraftSnapshot = () => ({
+    quoteId: idUnlocked ? quoteId : '',
+    editingQuoteId: quoteId,
+    isRecorded,
+    idUnlocked,
+    version, status, type, sharedWith,
+    date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup, authorName, authorId,
+    selectedCustomerId, selectedCustomer, customerSearch,
+    note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
+    manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
+    bankDetails, bankDetailsAr, footer, footerAr, customFields,
+    showNote, showPayment, showWarranty, showManpower, showMobilization, showDuration, showBankDetails, showCustomField,
+    subtotal, tax, grandTotal,
+  });
+  latestSnapshotRef.current = buildDraftSnapshot();
+
+  // Unsaved changes of an EXISTING quote → stored per user + per quote in this browser only.
+  const persistEditDraft = (qid: string | null) => {
+    if (!qid || isInitialLoadRef.current || isClearingRef.current || editBaselineRef.current === null) return;
+    const snap = latestSnapshotRef.current;
+    if (!snap || snap.editingQuoteId !== qid) return;
+    try {
+      if (JSON.stringify(snap) === editBaselineRef.current) localStorage.removeItem(editDraftKey(qid));
+      else localStorage.setItem(editDraftKey(qid), JSON.stringify({ quoteId: qid, savedAt: new Date().toISOString(), data: snap }));
+    } catch { }
+  };
+
+  const restorePendingEditDraft = (qid: string) => {
+    try {
+      const raw = localStorage.getItem(editDraftKey(qid));
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      const data = d?.data;
+      const current = latestSnapshotRef.current;
+      if (!data || data.editingQuoteId !== qid || JSON.stringify(data) === JSON.stringify(current)) {
+        localStorage.removeItem(editDraftKey(qid));
+        return;
+      }
+      if ((data.version ?? 1) === (current?.version ?? 1)) {
+        // Nobody saved this quote since → put the user's unsaved work back automatically
+        restoreDraftData({ ...data, isRecorded: true, quoteId: qid });
+        setEditDraftNotice({ kind: 'restored', quoteId: qid, savedAt: d.savedAt });
+      } else {
+        // Someone saved a newer version → let the user decide (saving will then show the version-conflict dialog)
+        setEditDraftNotice({ kind: 'outdated', quoteId: qid, savedAt: d.savedAt, data });
+      }
+    } catch { }
+  };
+
+  const discardEditDraft = async () => {
+    const qid = editDraftNotice?.quoteId || recallQuoteId;
+    setEditDraftNotice(null);
+    if (!qid) return;
+    localStorage.removeItem(editDraftKey(qid));
+    isInitialLoadRef.current = true;
+    editBaselineRef.current = null;
+    await fetchQuote(qid);
+    setTimeout(() => {
+      isInitialLoadRef.current = false;
+      if (lastInitRecallRef.current === qid) editBaselineRef.current = JSON.stringify(latestSnapshotRef.current);
+    }, 600);
+  };
+
+  const loadOutdatedEditDraft = () => {
+    if (!editDraftNotice?.data) return;
+    restoreDraftData({ ...editDraftNotice.data, isRecorded: true, quoteId: editDraftNotice.quoteId });
+    setEditDraftNotice({ kind: 'restored', quoteId: editDraftNotice.quoteId, savedAt: editDraftNotice.savedAt });
+  };
+
+  // Full reset to an empty document (same fields as the Clear button, without the confirmation)
+  const resetToBlankForm = () => {
+    setQuoteId('');
+    setIsRecorded(false);
+    setIdUnlocked(false);
+    setVersion(1);
+    setDate(localDate());
+    setExpiryDate('');
+    setSelectedCustomerId('');
+    setSelectedCustomer(null);
+    setCustomerSearch('');
+    setSubject('');
+    setSubjectAr('');
+    setDiscount(0);
+    setDiscountRate(0);
+    setStatus('Draft');
+    setType('Quotation');
+    setVatRate(15);
+    setAuthorName(user.name || user.username);
+    setAuthorId(null);
+    setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
+    setItems(Array.from({ length: 4 }).map(() => ({ id: generateId(), description: '', description_ar: '', qty: 1, unit: 'set', unit_price: 0, net_price: 0 })));
+    applyDefaultTerms(defaultTermsRef.current || getCachedTerms());
   };
 
   // ── LOCAL DRAFT CACHE: Auto-saves to localStorage across tabs/reloads (NO DB WRITE) ────────
   const cacheDraftLocally = useCallback(() => {
     // Recalled quotes from database and active clear operations MUST NOT be cached into draft_key!
-    if (recallQuoteId || isClearingRef.current) return;
+    // Use the document actually loaded in the form (not the URL): on other pages the URL has no ?recall,
+    // which previously copied an opened quote into the new-quote draft.
+    if (recallQuoteId || lastInitRecallRef.current || isClearingRef.current) return;
 
     const isMeaningful = subject.trim() !== '' ||
       selectedCustomerId !== '' ||
@@ -1990,45 +2065,50 @@ export default function QuoteForm() {
     if (!isMeaningful) return;
 
     const draft = {
-      quoteId: idUnlocked ? quoteId : '',
-      isRecorded,
-      idUnlocked,
-      date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, currency, markup, authorName, authorId,
-      selectedCustomerId, selectedCustomer, customerSearch,
-      note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
-      manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
-      bankDetails, bankDetailsAr, footer, footerAr, customFields,
-      showNote, showPayment, showWarranty, showManpower, showMobilization, showDuration, showBankDetails, showCustomField,
-      subtotal, tax, grandTotal,
+      ...buildDraftSnapshot(),
       savedAt: new Date().toISOString(),
     };
 
-    try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-    } catch (e) {
-      // Storage full / blocked (private window): keep working, but do not claim the draft was cached.
-      console.warn('Could not cache draft locally', e);
-      setSaveStatus('unsaved');
-      return;
-    }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
     setSaveStatus('saved');
     setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-  }, [recallQuoteId, idUnlocked, quoteId, isRecorded, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, currency, markup,
+  }, [recallQuoteId, idUnlocked, quoteId, isRecorded, date, expiryDate, subject, subjectAr, items, discount, discountRate, discountMode, vatRate, markup,
     authorName, authorId, selectedCustomerId, selectedCustomer, customerSearch,
     note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
     manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
     bankDetails, bankDetailsAr, footer, footerAr, customFields,
     showNote, showPayment, showWarranty, showManpower, showMobilization, showDuration, showBankDetails, showCustomField,
-    subtotal, tax, grandTotal]);
+    subtotal, tax, grandTotal, version, status, type, sharedWith]);
+
+  // Existing (opened) quote: keep unsaved changes in this browser, debounced; flushed on leave/unload
+  useEffect(() => {
+    const qid = lastInitRecallRef.current;
+    if (!qid) return;
+    let pending = true;
+    const t = setTimeout(() => { pending = false; persistEditDraft(qid); }, 500);
+    return () => {
+      clearTimeout(t);
+      if (pending) persistEditDraft(qid);   // flush the last keystrokes when switching page/quote
+    };
+  }, [cacheDraftLocally, recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!isInitialLoadRef.current && !isClearingRef.current && recallQuoteId) setHasUnsavedRecalledEdits(true);
-    if (isInitialLoadRef.current || isClearingRef.current || recallQuoteId) return;
+    const flush = () => persistEditDraft(lastInitRecallRef.current || null);
+    window.addEventListener('beforeunload', flush);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [recallQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (isInitialLoadRef.current || isClearingRef.current || recallQuoteId || lastInitRecallRef.current) return;
 
     setSaveStatus('unsaved');
     if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);
     cacheTimerRef.current = setTimeout(() => {
-      if (!isClearingRef.current && !recallQuoteId) {
+      if (!isClearingRef.current && !recallQuoteId && !lastInitRecallRef.current) {
         cacheDraftLocally();
       }
     }, 500);
@@ -2040,24 +2120,19 @@ export default function QuoteForm() {
 
   // Flush local cache on unload or tab close
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId) {
+    const handleBeforeUnload = () => {
+      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId && !lastInitRecallRef.current) {
         cacheDraftLocally();
-      }
-      // Edits to a recalled quote exist only in memory: ask before the tab closes / reloads.
-      if (recallQuoteId && hasUnsavedRecalledEdits) {
-        e.preventDefault();
-        e.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId) {
+      if (!isInitialLoadRef.current && !isClearingRef.current && !recallQuoteId && !lastInitRecallRef.current) {
         cacheDraftLocally();
       }
     };
-  }, [cacheDraftLocally, recallQuoteId, hasUnsavedRecalledEdits]);
+  }, [cacheDraftLocally, recallQuoteId]);
 
   // ── TEMPLATES ─────────────────────────────────────────────────────────────────
   const loadTemplates = () => {
@@ -2068,7 +2143,7 @@ export default function QuoteForm() {
   };
 
   const saveTemplate = () => {
-    if (!templateName.trim()) return toast('Please enter a template name.');
+    if (!templateName.trim()) return alert('Please enter a template name.');
     const data = {
       note, noteAr, noteHeader, payment, paymentAr, warranty, warrantyAr,
       manpower, manpowerAr, mobilization, mobilizationAr, duration, durationAr,
@@ -2079,11 +2154,11 @@ export default function QuoteForm() {
     setTemplates(newTemplates);
     setShowTemplateModal(false);
     setTemplateName('');
-    toast(`Template "${templateName.trim()}" saved!`);
+    alert(`Template "${templateName.trim()}" saved!`);
   };
 
-  const deleteTemplate = async (name: string) => {
-    if (!await confirmAsync(`Are you sure you want to delete the template "${name}"?`)) return;
+  const deleteTemplate = (name: string) => {
+    if (!confirm(`Are you sure you want to delete the template "${name}"?`)) return;
     const newTemplates = templates.filter(t => t.name !== name);
     localStorage.setItem('quote_templates', JSON.stringify(newTemplates));
     setTemplates(newTemplates);
@@ -2113,17 +2188,23 @@ export default function QuoteForm() {
 
   // ── DUPLICATE QUOTE ───────────────────────────────────────────────────────────
   const handleDuplicate = async () => {
-    if (!await confirmAsync('This will copy the current quote into a new unrecorded draft with today\'s date. Proceed?')) return;
+    if (!confirm('This will copy the current quote into a new unrecorded draft with today\'s date. Proceed?')) return;
     setQuoteId('');
     setIsRecorded(false);
-    // Clear the recall param so it saves as a new quote
+    const openedId = recallQuoteId || lastInitRecallRef.current;
+    if (openedId) localStorage.removeItem(editDraftKey(openedId));
+    editBaselineRef.current = null;
+    setEditDraftNotice(null);
+    // Clear the recall param so it saves as a new quote (keep the copied content — the old code's
+    // init effect reset the items to blank rows here)
+    skipNextInitRef.current = !!recallQuoteId;
     setSearchParams({});
-    setDate(new Date().toISOString().split('T')[0]);
+    setDate(localDate());
     setStatus('Draft');
     const exp = new Date();
     exp.setDate(exp.getDate() + 30);
-    setExpiryDate(exp.toISOString().split('T')[0]);
-    toast('Quote duplicated! A new Quote ID will be assigned when you click Record.');
+    setExpiryDate(localDate(exp));
+    alert('Quote duplicated! A new Quote ID will be assigned when you click Record.');
   };
 
   const handleCreateRevision = () => {
@@ -2143,18 +2224,18 @@ export default function QuoteForm() {
     setQuoteId(newId);
     setStatus('Draft');
     setType('Quotation');
-    toast(`Revision created as ${newId}. You can now make changes and hit Record.`);
+    alert(`Revision created as ${newId}. You can now make changes and hit Record.`);
   };
 
   const handleConvertToInvoice = () => {
     setType('Tax Invoice');
     setStatus('Draft');
-    toast('Document converted to Tax Invoice! Remember to Record the document to save changes.');
+    alert('Document converted to Tax Invoice! Remember to Record the document to save changes.');
   };
 
   const handleSendEmail = async () => {
     if (!recallQuoteId) {
-      toast('You must Record this quote before you can email it.');
+      alert('You must Record this quote before you can email it.');
       return;
     }
 
@@ -2179,13 +2260,13 @@ export default function QuoteForm() {
 
       if (res.ok) {
         setStatus('Sent');
-        toast('Email sent successfully via SMTP!');
+        alert('Email sent successfully via SMTP!');
       } else {
         const error = await res.json();
-        toast(`Failed to send email: ${error.error}`);
+        alert(`Failed to send email: ${error.error}`);
       }
     } catch (err) {
-      toast('Error connecting to email service.');
+      alert('Error connecting to email service.');
     } finally {
       setIsSending(false);
     }
@@ -2284,7 +2365,7 @@ export default function QuoteForm() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
-      toast(`PDF Generation error: ${err.message}`);
+      alert(`PDF Generation error: ${err.message}`);
     } finally {
       setIsGeneratingServerPDF(false);
     }
@@ -2305,6 +2386,7 @@ export default function QuoteForm() {
     const prevNoteIndex = expandedNoteIndex;
     setExpandedNoteIndex(null);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (editorScrollRef.current) editorScrollRef.current.scrollLeft = 0;
 
     try {
       // Store original values and styles to use in onclone
@@ -2332,6 +2414,8 @@ export default function QuoteForm() {
         useCORS: true,
         logging: false,
         onclone: (clonedDoc) => {
+          // Exported PDF is always on white paper, even when the app is in Night mode
+          clonedDoc.documentElement.classList.remove('dark');
           const hideSelectors = [
             '[data-html2canvas-ignore="true"]',
             '[class*="print:hidden"]',
@@ -2608,7 +2692,7 @@ export default function QuoteForm() {
       setTimeout(() => URL.revokeObjectURL(url), 100);
     } catch (error) {
       console.error('Error generating PDF:', error);
-      toast('Failed to generate PDF');
+      alert('Failed to generate PDF');
     } finally {
       setExpandedNoteIndex(prevNoteIndex);
     }
@@ -2620,6 +2704,7 @@ export default function QuoteForm() {
     const prevNoteIndex = expandedNoteIndex;
     setExpandedNoteIndex(null);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (editorScrollRef.current) editorScrollRef.current.scrollLeft = 0;
 
     try {
       const originalElements = printRef.current.querySelectorAll('input, textarea, select');
@@ -2641,6 +2726,8 @@ export default function QuoteForm() {
         useCORS: true,
         logging: false,
         onclone: (clonedDoc) => {
+          // Exported PDF is always on white paper, even when the app is in Night mode
+          clonedDoc.documentElement.classList.remove('dark');
           const clonedElements = clonedDoc.querySelectorAll('input, textarea, select');
           clonedElements.forEach((el: any, index) => {
             const data = elementData[index];
@@ -2864,7 +2951,7 @@ export default function QuoteForm() {
       setTimeout(() => URL.revokeObjectURL(url), 100);
     } catch (error) {
       console.error('Error generating PDF with Stamp:', error);
-      toast('Failed to generate PDF with Stamp');
+      alert('Failed to generate PDF with Stamp');
     } finally {
       setExpandedNoteIndex(prevNoteIndex);
     }
@@ -2877,7 +2964,7 @@ export default function QuoteForm() {
       [type.toUpperCase()], // 2
       ['Quote ID:', quoteId || 'DRAFT'], // 3
       ['Date:', date], // 4
-      ['Valid For:', '', 'صالحة لـ'], // 5
+      ['Valid Until:', expiryDate || '', 'صالح لغاية'], // 5
       [], // 6
       ['CUSTOMER INFO'], // 7
       ['Customer Name:', selectedCustomer?.name || '', '', '', '', 'Mobile:', selectedCustomer?.mobile || ''], // 8
@@ -2891,23 +2978,7 @@ export default function QuoteForm() {
     const itemsData = [
       ['ITEM', 'DESCRIPTION (EN)', 'DESCRIPTION (AR)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'ITEM CODE', 'SUPPLIER NAME', '', markup.toString(), 'Manual', 'BASE', 'TOTAL'], // 14
       ...items.map((item, index) => {
-        const rule = getItemRule(item);
-        let displayBase = 0;
-        let displayTotal = 0;
-
-        if (rule === 'EXCL') {
-          displayBase = 0;
-          displayTotal = 0;
-        } else if (rule === 'ZM') {
-          displayBase = item.unit_price || 0;
-          displayTotal = item.net_price || 0;
-        } else {
-          if (rule === 'MAN') displayBase = item.manual_price || 0;
-          else if (rule === 'DB') displayBase = item.original_price || 0;
-          else displayBase = item.original_price || 0;
-          displayTotal = displayBase * item.qty;
-        }
-
+        const { displayBase, displayTotal } = analyzeItem(item, muFilters);
         const manualVal = item.manual_price !== undefined ? item.manual_price : item.unit_price;
 
         return [
@@ -3072,6 +3143,9 @@ export default function QuoteForm() {
       }
     }
 
+    // No "Price Analysis" permission → internal cost columns (markup, Manual, BASE, TOTAL, B.TOTAL, TTL PROFIT) are left out
+    if (!canSeeCost(user)) clearCostColumns(ws, 11, 14);
+
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
@@ -3125,9 +3199,12 @@ export default function QuoteForm() {
     setPendingExportType(null);
   };
 
+  // keep keyboard-shortcut handlers pointing at the latest closures (see KEYBOARD SHORTCUTS)
+  shortcutHandlersRef.current = { save: () => performSave(), print: () => handlePrint() };
+
   return (
     <div className="flex flex-col gap-6 dark:text-gray-100">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
+      <div className="flex flex-col md:flex-row md:flex-wrap justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm print:hidden">
         <div className="flex items-center gap-4">
           <div className="bg-indigo-100 dark:bg-indigo-900/40 p-3 rounded-xl text-indigo-700 dark:text-indigo-400">
             <FileText size={24} />
@@ -3161,8 +3238,23 @@ export default function QuoteForm() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors" title="Clear all fields to start a new blank quote" aria-label="Clear all fields to start a new blank quote">
+        {editDraftNotice && (
+          <div className={`w-full md:order-last flex flex-wrap items-center gap-3 px-4 py-2 rounded-xl border text-sm ${editDraftNotice.kind === 'restored' ? 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300' : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-300'}`} data-testid="edit-draft-notice">
+            <AlertTriangle size={16} />
+            {editDraftNotice.kind === 'restored' ? (
+              <span className="flex-1">Unsaved changes from {new Date(editDraftNotice.savedAt).toLocaleString()} were restored. Click <b>Record</b> to save them.</span>
+            ) : (
+              <span className="flex-1">You have unsaved changes from {new Date(editDraftNotice.savedAt).toLocaleString()}, but someone saved this quote after that.</span>
+            )}
+            {editDraftNotice.kind === 'outdated' && (
+              <button onClick={loadOutdatedEditDraft} className="px-3 py-1 rounded-lg bg-white border border-current font-medium">Load my changes</button>
+            )}
+            <button onClick={() => { if (confirm('Discard your unsaved changes and reload the saved version?')) discardEditDraft(); }} className="px-3 py-1 rounded-lg bg-white border border-current font-medium">Discard</button>
+          </div>
+        )}
+        {/* Toolbar wraps onto a 2nd line instead of squeezing labels into two lines */}
+        <div className="flex flex-wrap items-center justify-start md:justify-end gap-2 w-full md:w-auto [&>button]:whitespace-nowrap [&>button]:shrink-0">
+          <button onClick={clearForm} className="flex items-center gap-2 px-4 py-2 text-gray-600 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors" title="Clear all fields to start a new blank quote">
             <RefreshCw size={18} /> Clear
           </button>
           {workflowVisibility.updateTermsButton && (
@@ -3170,7 +3262,7 @@ export default function QuoteForm() {
               type="button"
               onClick={handleUpdateDocumentTermsOnly}
               className="flex items-center gap-2 px-3.5 py-2 text-slate-700 bg-slate-100 dark:bg-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium cursor-pointer"
-              title="Update only Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to latest defaults from Settings" aria-label="Update only Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to latest defaults from Settings"
+              title="Update only Notes and Terms below (Payment, Warranty, Manpower, Mobilization, Duration, Bank Details) to latest defaults from Settings"
             >
               <RefreshCw size={16} /> Update Terms
             </button>
@@ -3179,7 +3271,7 @@ export default function QuoteForm() {
             <button
               onClick={handleTranslateAll}
               className="flex items-center gap-1.5 px-3 py-2 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors font-medium text-sm"
-              title="Translate all Arabic fields based on English content" aria-label="Translate all Arabic fields based on English content"
+              title="Translate all Arabic fields based on English content"
             >
               <Languages size={17} /> Translate
             </button>
@@ -3187,7 +3279,7 @@ export default function QuoteForm() {
             <button
               onClick={toggleTranslationMode}
               className="px-2.5 py-2 text-xs font-semibold text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors flex items-center gap-1.5"
-              title={`Translation mode: ${translationMode === 'manual' ? 'Manual (Only translates when clicking Translate)' : 'Auto (Translates automatically)'}. Click to toggle.`} aria-label={`Translation mode: ${translationMode === 'manual' ? 'Manual (Only translates when clicking Translate)' : 'Auto (Translates automatically)'}. Click to toggle.`}
+              title={`Translation mode: ${translationMode === 'manual' ? 'Manual (Only translates when clicking Translate)' : 'Auto (Translates automatically)'}. Click to toggle.`}
             >
               <span className={`w-2 h-2 rounded-full ${translationMode === 'manual' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
               {translationMode === 'manual' ? 'Manual' : 'Auto'}
@@ -3195,14 +3287,14 @@ export default function QuoteForm() {
           </div>
           {recallQuoteId && (
             <>
-              <button onClick={handleDuplicate} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors" title="Copy all data to a new Quote ID" aria-label="Copy all data to a new Quote ID">
+              <button onClick={handleDuplicate} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors" title="Copy all data to a new Quote ID">
                 <Copy size={18} /> Duplicate
               </button>
-              <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID" aria-label="Clone exact form into new Revision ID">
+              <button onClick={handleCreateRevision} className="flex items-center gap-2 px-4 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors" title="Clone exact form into new Revision ID">
                 Create Revision
               </button>
               {type !== 'Tax Invoice' && (user.role === 'admin' || user.permissions?.canConvertInvoice) && workflowVisibility.invoice && (
-                <button onClick={handleConvertToInvoice} className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors" title="Switch type to Tax Invoice" aria-label="Switch type to Tax Invoice">
+                <button onClick={handleConvertToInvoice} className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors" title="Switch type to Tax Invoice">
                   To Invoice
                 </button>
               )}
@@ -3210,7 +3302,7 @@ export default function QuoteForm() {
           )}
           {/* ── TEMPLATE BUTTONS ───────────────────────────────────────────────────── */}
           {(user.role === 'admin' || user.permissions?.canSaveTemplate) && workflowVisibility.template && (
-            <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 border border-amber-200 dark:border-amber-800 rounded-lg transition-colors" title="Save current Terms as a reusable template" aria-label="Save current Terms as a reusable template">
+            <button onClick={() => setShowTemplateModal(true)} className="flex items-center gap-2 px-4 py-2 text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 border border-amber-200 dark:border-amber-800 rounded-lg transition-colors" title="Save current Terms as a reusable template">
               <Bookmark size={18} /> Save Template
             </button>
           )}
@@ -3228,7 +3320,7 @@ export default function QuoteForm() {
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteTemplate(t.name); }}
                       className="p-2 text-gray-400 hover:text-red-500 opacity-0 group-hover/item:opacity-100 transition-opacity"
-                      title="Delete Template" aria-label="Delete Template"
+                      title="Delete Template"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -3256,18 +3348,20 @@ export default function QuoteForm() {
           <button onClick={() => triggerExport('pdf')} className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             <Download size={18} /> Export PDF
           </button>
-          <button onClick={() => triggerExport('server-pdf')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)" aria-label="Download vector-based searchable PDF generated on the server (React PDF)">
+          <button onClick={() => triggerExport('server-pdf')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50" title="Download vector-based searchable PDF generated on the server (React PDF)">
             {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF (React)
           </button>
           {stampUrl && (
-            <button onClick={() => triggerExport('server-pdf-stamped')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors disabled:opacity-50 font-semibold" title="Download high-fidelity vector PDF with official company stamp" aria-label="Download high-fidelity vector PDF with official company stamp">
+            <button onClick={() => triggerExport('server-pdf-stamped')} disabled={isGeneratingServerPDF} className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors disabled:opacity-50 font-semibold" title="Download high-fidelity vector PDF with official company stamp">
               {isGeneratingServerPDF ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} Export PDF + Stamp
             </button>
           )}
         </div>
       </div>
 
-      <div className="flex flex-col xl:flex-row gap-6">
+      {/* The A4 document keeps its fixed print width; on smaller screens this area scrolls sideways
+          instead of pushing the whole page (header, toolbar) off-screen. */}
+      <div ref={editorScrollRef} className="flex flex-col xl:flex-row gap-6 pb-2 overflow-x-auto print:overflow-visible print:pb-0">
         {/* Printable Quote Form */}
         <div
           ref={printRef}
@@ -3331,9 +3425,9 @@ export default function QuoteForm() {
                     />
                     <button
                       type="button"
-                      onClick={async () => {
+                      onClick={() => {
                         if (!idUnlocked) {
-                          if (await confirmAsync('Quote IDs are automatically sequenced when you click Record. Are you sure you want to manually set a custom ID?')) {
+                          if (confirm('Quote IDs are automatically sequenced when you click Record. Are you sure you want to manually set a custom ID?')) {
                             setIdUnlocked(true);
                           }
                         } else {
@@ -3341,7 +3435,7 @@ export default function QuoteForm() {
                         }
                       }}
                       className="p-1 text-gray-400 hover:text-indigo-600 rounded transition-colors"
-                      title={idUnlocked ? 'Lock ID' : 'Unlock to manually customize Quote ID'} aria-label={idUnlocked ? 'Lock ID' : 'Unlock to manually customize Quote ID'}
+                      title={idUnlocked ? 'Lock ID' : 'Unlock to manually customize Quote ID'}
                     >
                       {idUnlocked ? <Unlock size={14} className="text-amber-600" /> : <Lock size={14} className="text-gray-400 hover:text-gray-600" />}
                     </button>
@@ -3538,14 +3632,14 @@ export default function QuoteForm() {
                         exit={{ opacity: 0, height: 0 }}
                         transition={{ duration: 0.2 }}
                         data-row-index={index}
-                        className="flex items-stretch print:block relative max-xl:pr-9 print:pr-0"
+                        className="flex items-stretch print:block relative"
                         onPointerDown={rowReorderMode === 'drag' ? (e) => onRowBodyPointerDown(e, index) : undefined}
                         onPointerMove={rowReorderMode === 'drag' ? onRowBodyPointerMove : undefined}
                         onPointerUp={rowReorderMode === 'drag' ? onRowBodyPointerUp : undefined}
                         onPointerCancel={rowReorderMode === 'drag' ? pointerCancelDrag : undefined}
                       >
                         <div
-                          ref={el => { rowRefs.current[index] = el; }}
+                          ref={el => rowRefs.current[index] = el}
                           className={`flex-1 grid grid-cols-[48px_1fr_64px_64px_110px_110px] border-b border-gray-300 last:border-b-0 [&_input]:text-[inherit] [&_textarea]:text-[inherit] items-stretch print:items-stretch transition-opacity
                           ${focusedDescriptionIndex === index ? 'relative z-50' : 'relative z-0'}
                           ${dragIndex === index ? 'opacity-30' : 'opacity-100'}
@@ -3738,7 +3832,7 @@ export default function QuoteForm() {
                         </div>
 
                         {/* Controls — always visible, note + trash, outside grid */}
-                        <div className="absolute right-0 top-0 bottom-0 w-8 print:hidden flex flex-col items-center justify-start pt-1 gap-1 xl:hidden" data-html2canvas-ignore="true">
+                        <div className="absolute -right-9 top-0 bottom-0 w-8 print:hidden flex flex-col items-center justify-start pt-1 gap-1 xl:hidden" data-html2canvas-ignore="true">
                           {workflowVisibility.internalNotes !== false && (
                             <div className="relative flex flex-col items-center">
                               <button
@@ -3747,7 +3841,7 @@ export default function QuoteForm() {
                                   : item.internal_note ? 'text-amber-500 hover:text-amber-700'
                                     : 'text-gray-400 hover:text-amber-500'
                                   }`}
-                                title={item.internal_note ? 'Edit private note' : 'Add private note'} aria-label={item.internal_note ? 'Edit private note' : 'Add private note'}
+                                title={item.internal_note ? 'Edit private note' : 'Add private note'}
                               >
                                 <StickyNote size={14} />
                               </button>
@@ -3772,7 +3866,7 @@ export default function QuoteForm() {
                               )}
                             </div>
                           )}
-                          <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item" aria-label="Remove Item">
+                          <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
                             <Trash2 size={14} />
                           </button>
                         </div>
@@ -3785,7 +3879,7 @@ export default function QuoteForm() {
                     <Plus size={16} /> Add Row
                   </button>
                   {(() => {
-                    const u = getStoredUser();
+                    const u = JSON.parse(localStorage.getItem('user') || '{}');
                     const canRFQ = u.role === 'admin' || !!u.permissions?.canUseRFQ;
                     return canRFQ ? (
                       <button
@@ -3818,7 +3912,7 @@ export default function QuoteForm() {
                     type="button"
                     onClick={handleUpdateDocumentTermsOnly}
                     className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-md border border-indigo-200 dark:border-indigo-800 transition-colors shadow-2xs cursor-pointer"
-                    title="Update Notes, Payment, Warranty, Manpower, Mobilization, Duration & Bank Details from Settings defaults without changing items or customer" aria-label="Update Notes, Payment, Warranty, Manpower, Mobilization, Duration & Bank Details from Settings defaults without changing items or customer"
+                    title="Update Notes, Payment, Warranty, Manpower, Mobilization, Duration & Bank Details from Settings defaults without changing items or customer"
                   >
                     <RefreshCw size={12} className="shrink-0" />
                     <span>Update Notes &amp; Terms to Defaults</span>
@@ -4010,7 +4104,7 @@ export default function QuoteForm() {
                           />
                         </div>
                         <div data-html2canvas-ignore="true" className="print:hidden flex items-center gap-1 mx-1 mt-1 shrink-0 absolute right-[-30px] top-0 md:static">
-                          <button onClick={() => removeCustomField(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Field" aria-label="Remove Field">
+                          <button onClick={() => removeCustomField(index)} className="text-red-400 hover:text-red-600 transition-colors" title="Remove Field">
                             <Trash2 size={16} />
                           </button>
                         </div>
@@ -4060,13 +4154,138 @@ export default function QuoteForm() {
                   → Simply change the text directly in the JSX below.
             ────────────────────────────────────────────────────────────────── */}
             <div className="w-full md:w-72 shrink-0 flex flex-col relative">
-              <TotalsPanel
-                currency={currency} setCurrency={setCurrency}
-                subtotal={subtotal} discount={discount} rawDiscount={rawDiscount} setDiscount={setDiscount}
-                discountMode={discountMode} setDiscountMode={setDiscountMode} discountRate={discountRate} setDiscountRate={setDiscountRate}
-                lastDiscountEditedRef={lastDiscountEditedRef}
-                vatRate={vatRate} setVatRate={setVatRate} tax={tax} grandTotal={grandTotal} themeColors={themeColors}
-              />
+              <div className="border-2 border-gray-800 w-full h-fit">
+                <div className="grid grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base text-up">
+                  <div className="font-bold">SUBTOTAL</div>
+                  <div className="flex justify-between items-center font-mono font-bold">
+                    <span>SAR</span>
+                    <span>{subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+                <div className={`border-b border-gray-300 p-2 pt-1.5 pb-2 text-base hover:bg-gray-50 transition-colors group ${!discount ? 'print:hidden' : ''}`}>
+                  {/* Screen View: 2 lines to give inputs full width and prevent overlapping */}
+                  <div className="print:hidden">
+                    {/* Line 1: Title and Mode Toggle Badge */}
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold flex items-center gap-1.5">
+                        <span>DISCOUNT</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextMode: 'amount' | 'percentage' | 'both' =
+                              discountMode === 'amount' ? 'percentage' :
+                              discountMode === 'percentage' ? 'both' : 'amount';
+                            setDiscountMode(nextMode);
+                            if (nextMode === 'percentage' || nextMode === 'both') {
+                              lastDiscountEditedRef.current = 'rate';
+                              const rate = subtotal > 0 ? Number(((discount / subtotal) * 100).toFixed(2)) : 0;
+                              setDiscountRate(rate);
+                            } else {
+                              lastDiscountEditedRef.current = 'amount';
+                              setDiscountRate(0);
+                            }
+                          }}
+                          className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-gray-200 hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
+                          title={
+                            discountMode === 'amount' ? "Switch to Percentage (%)" :
+                            discountMode === 'percentage' ? "Switch to Both (% & SAR)" :
+                            "Switch to Direct Amount (SAR)"
+                          }
+                        >
+                          {discountMode === 'amount' ? 'SAR' : discountMode === 'percentage' ? '%' : 'BOTH'}
+                        </button>
+                      </div>
+                      <span className="text-[11px] text-gray-400 font-normal">
+                        {discountMode === 'both' ? '(% & SAR)' : discountMode === 'percentage' ? '(Percentage %)' : '(Direct SAR)'}
+                      </span>
+                    </div>
+
+                    {/* Line 2: Percentage on the left, SAR on the right */}
+                    <div className="flex items-center justify-between font-mono mt-1.5">
+                      <div>
+                        {discountMode === 'percentage' || discountMode === 'both' ? (
+                          <div className="flex items-center text-sm">
+                            <input
+                              type="number"
+                              className="w-12 text-center outline-none bg-white border border-gray-300 rounded px-1 py-0.5 font-bold text-sm focus:border-indigo-500 shadow-sm"
+                              value={discountRate || ''}
+                              onChange={e => {
+                                lastDiscountEditedRef.current = 'rate';
+                                const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                setDiscountRate(val);
+                                setDiscount(Number(((subtotal * val) / 100).toFixed(2)));
+                              }}
+                              min="0"
+                              max="100"
+                              step="0.1"
+                              placeholder="0"
+                            />
+                            <span className="ml-1 font-bold text-gray-600">%</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">SAR only</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span>SAR</span>
+                        {discountMode === 'percentage' ? (
+                          <span className="font-bold">{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        ) : (
+                          <input
+                            type="number"
+                            className="w-24 text-right outline-none bg-white border border-gray-300 rounded px-1.5 py-0.5 font-bold text-sm focus:border-indigo-500 shadow-sm"
+                            value={discount || ''}
+                            onChange={e => {
+                              lastDiscountEditedRef.current = 'amount';
+                              const val = Math.max(0, parseFloat(e.target.value) || 0);
+                              setDiscount(val);
+                              setDiscountRate(subtotal > 0 ? Number(((val / subtotal) * 100).toFixed(2)) : 0);
+                            }}
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Print View: Clean single row matching Subtotal / VAT table layout */}
+                  <div className="hidden print:grid print:grid-cols-2 text-base items-center">
+                    <div className="font-bold">
+                      DISCOUNT {(discountMode === 'percentage' || discountMode === 'both') && discountRate > 0 ? `(${discountRate}%)` : ''}
+                    </div>
+                    <div className="flex justify-between items-center font-mono font-bold">
+                      <span>SAR</span>
+                      <span>{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
+                  <div className="font-bold flex items-center whitespace-nowrap">
+                    VAT
+                    <input
+                      type="number"
+                      className="w-9 text-center outline-none bg-transparent border-b border-gray-400 mx-1 print:border-none"
+                      value={vatRate}
+                      onChange={e => setVatRate(parseFloat(e.target.value) || 0)}
+                      min="0"
+                      max="100"
+                    />%
+                  </div>
+                  <div className="flex justify-between items-center font-mono">
+                    <span>SAR</span>
+                    <span>{tax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 border-gray-300 p-2 pt-0 pb-3 text-base" style={{ backgroundColor: themeColors.totalsBg }}>
+                  <div className="font-bold">TOTAL PACKAGE</div>
+                  <div className="flex justify-between items-center font-mono font-bold text-md rounded-md bg-green-400 text-black pt-0 pb-3">
+                    <span className="mr-2">SAR</span>
+                    <span>{grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+              </div>
 
               {/* ── STAMP — adjustable via settings (placed below totals box) ─────────────────────────── */}
               {stampUrl && (
@@ -4191,7 +4410,7 @@ export default function QuoteForm() {
                                       ? prev.canEditGroups.filter(id => id !== g.id)
                                       : [...prev.canEditGroups, g.id]
                                   }))}
-                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'} aria-label={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
+                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
                                   className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
                                     ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
                                     : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
@@ -4246,7 +4465,7 @@ export default function QuoteForm() {
                                       ? prev.canEditUsers.filter(id => id !== u.id)
                                       : [...prev.canEditUsers, u.id]
                                   }))}
-                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'} aria-label={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
+                                  title={canEdit ? 'Can edit — click to make read-only' : 'View only — click to allow editing'}
                                   className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold border transition-all ${canEdit
                                     ? 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
                                     : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
@@ -4304,7 +4523,7 @@ export default function QuoteForm() {
                         : item.internal_note ? 'text-amber-500 hover:text-amber-700'
                           : 'text-gray-400 hover:text-amber-500'
                         }`}
-                      title={item.internal_note ? 'Edit private note' : 'Add private note'} aria-label={item.internal_note ? 'Edit private note' : 'Add private note'}
+                      title={item.internal_note ? 'Edit private note' : 'Add private note'}
                     >
                       <StickyNote size={14} />
                     </button>
@@ -4330,7 +4549,7 @@ export default function QuoteForm() {
                   </div>
                 )}
 
-                <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item" aria-label="Remove Item">
+                <button onClick={() => removeItem(index)} className="text-red-400 hover:text-red-600 transition-colors p-0.5" title="Remove Item">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -4340,7 +4559,7 @@ export default function QuoteForm() {
 
         {/* ── ANALYSIS SIDEBAR (Floating outside the form) ────────────────── */}
         {(() => {
-          const u = getStoredUser();
+          const u = JSON.parse(localStorage.getItem('user') || '{}');
           const canOverride = u.role === 'admin' || !!u.permissions?.canOverridePrice;
           if (!canOverride) return null;
 
@@ -4367,9 +4586,7 @@ export default function QuoteForm() {
                   <input
                     type="number"
                     value={markup}
-                    onChange={e => setMarkup(Math.min(1000, Math.max(-99, parseFloat(e.target.value) || 0)))}
-                    min={-99}
-                    max={1000}
+                    onChange={e => setMarkup(parseFloat(e.target.value) || 0)}
                     className="w-16 p-1 bg-yellow-300 text-black font-bold outline-none text-center rounded border border-yellow-400"
                   />
                 </div>
@@ -4458,10 +4675,6 @@ export default function QuoteForm() {
                   <span className="text-green-800">MU</span>
                   <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
-                <div className="flex justify-between items-center px-1 text-sm">
-                  <span className="text-gray-600" title="Profit as a share of the sale price (after discount). Markup is profit as a share of cost.">Margin %</span>
-                  <span className="font-mono">{marginPercent(discountedSubtotal, markupProfit)}%</span>
-                </div>
 
                 <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">
                   <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-lg">TTL PROFIT</div>
@@ -4474,29 +4687,108 @@ export default function QuoteForm() {
           );
         })()}
 
+        {/* Overwrite Confirmation Modal */}
         {showOverwriteModal && (
-          <OverwriteModal
-            quoteId={quoteId}
-            onOverwrite={() => performSave(true)}
-            onNewId={handleCreateNewId}
-            onCancel={() => setShowOverwriteModal(false)}
-          />
+          <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+            <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Quote ID Exists</h3>
+              <p className="text-gray-600 mb-6">A quote with ID <span className="font-bold">{quoteId}</span> already exists. How would you like to proceed?</p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => performSave(true)}
+                  className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Overwrite Existing Quote ({quoteId})
+                </button>
+                <button
+                  onClick={handleCreateNewId}
+                  className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Generate New ID & Save
+                </button>
+                <button
+                  onClick={() => setShowOverwriteModal(false)}
+                  className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
+        {/* Version Conflict Modal */}
         {showConflictModal && (
-          <ConflictModal
-            onCancel={() => setShowConflictModal(false)}
-            onReload={() => window.location.reload()}
-            onSaveAsRevision={() => { setShowConflictModal(false); handleCreateRevision(); }}
-            onForce={() => performSave(true)}
-          />
+          <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+            <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Version Conflict</h3>
+              <p className="text-gray-600 mb-6">The server has a newer version of this quote. Another user may have modified it since you opened it.</p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => setShowConflictModal(false)}
+                  className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium rounded-lg transition-colors border border-gray-300"
+                >
+                  Cancel (Review my changes)
+                </button>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="w-full py-2 px-4 bg-blue-100 hover:bg-blue-200 text-blue-800 font-medium rounded-lg transition-colors"
+                >
+                  Reload from Server (Discard mine)
+                </button>
+                <button
+                  onClick={() => {
+                    setShowConflictModal(false);
+                    handleCreateRevision();
+                  }}
+                  className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Save as New Revision
+                </button>
+                <button
+                  onClick={() => performSave(true)}
+                  className="w-full py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Force Overwrite Server Version
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
 
       {/* Save Template Modal */}
       {showTemplateModal && (
-        <SaveTemplateModal name={templateName} setName={setTemplateName} onSave={saveTemplate} onCancel={() => setShowTemplateModal(false)} />
+        <div className="fixed inset-0 bg-black/50 z-[200] flex items-center justify-center print:hidden">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Save Terms as Template</h3>
+            <p className="text-gray-600 mb-4 text-sm">Save the current Note, Payment, Warranty, Duration, Mobilization, Manpower, Bank Details, and Footer as a reusable template.</p>
+            <input
+              type="text"
+              autoFocus
+              placeholder="E.g., Standard CCTV Terms"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 mb-6 text-gray-900 bg-white"
+              value={templateName}
+              onChange={e => setTemplateName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveTemplate()}
+            />
+            <div className="flex justify-end gap-3 font-medium">
+              <button
+                className="px-4 py-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-700"
+                onClick={() => setShowTemplateModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                onClick={saveTemplate}
+              >
+                Save Template
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Global Datalist for Unit Suggestions */}
@@ -4504,55 +4796,323 @@ export default function QuoteForm() {
         {UNIT_SUGGESTIONS.map(u => <option key={u} value={u} />)}
       </datalist>
 
-      {/* ── Add Product / Add Customer / Record-before-export dialogs (extracted to ./quote/) ── */}
+      {/* ── Add Product Modal ────────────────────────────────────────────── */}
       {addProductModal && (
-        <AddProductModal
-          modal={addProductModal}
-          setModal={setAddProductModal}
-          suppliers={suppliers}
-          translate={translateSingle}
-          onCreated={(newProd, rowIndex, allProducts) => {
-            setProducts(allProducts);
-            setItems(prev => {
-              const next = [...prev];
-              if (!next[rowIndex]) return prev;
-              // Same rounding as every other pricing path (src/lib/money.ts).
-              const calcPrice = round2(newProd.unit_price * (1 + markup / 100));
-              next[rowIndex] = {
-                ...next[rowIndex],
-                product_id: newProd.id,
-                original_price: newProd.unit_price,
-                description: newProd.description,
-                description_ar: newProd.description_ar || '',
-                unit: newProd.unit,
-                unit_price: calcPrice,
-                net_price: lineTotal(next[rowIndex].qty, calcPrice),
-              };
-              return next;
-            });
-          }}
-        />
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600">
+              <div className="flex items-center gap-2">
+                <Plus size={18} className="text-white" />
+                <h2 className="text-white font-bold text-base">Add to Product DB</h2>
+              </div>
+              <button onClick={() => setAddProductModal(null)} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Product Name</label>
+                <textarea
+                  autoFocus
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white resize-y"
+                  value={addProductModal.description}
+                  onChange={e => setAddProductModal(m => m ? { ...m, description: e.target.value } : m)}
+                  rows={Math.max(2, Math.min(6, Math.ceil((addProductModal.description || '').length / 45)))}
+                />
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Item Code</label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
+                    value={addProductModal.item_code}
+                    onChange={e => setAddProductModal(m => m ? { ...m, item_code: e.target.value } : m)}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Supplier Name</label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-gray-900"
+                    value={addProductModal.supplier_name}
+                    onChange={e => setAddProductModal(m => m ? { ...m, supplier_name: e.target.value } : m)}
+                  >
+                    <option value="">-- Select Supplier --</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.name}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit</label>
+                  <input
+                    type="text"
+                    list="unit-suggestions"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
+                    value={addProductModal.unit}
+                    onChange={e => setAddProductModal(m => m ? { ...m, unit: e.target.value } : m)}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Unit Price</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-gray-900 bg-white"
+                    value={addProductModal.price}
+                    onChange={e => setAddProductModal(m => m ? { ...m, price: e.target.value } : m)}
+                  />
+                </div>
+              </div>
+            </div>
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end bg-gray-50">
+              <button
+                className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg text-sm hover:bg-gray-100 transition-colors"
+                onClick={() => setAddProductModal(null)}
+              >Cancel</button>
+              <button
+                disabled={addProductModal.isSaving}
+                className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-70 flex items-center gap-2"
+                onClick={async () => {
+                  const { rowIndex, description, unit, price } = addProductModal;
+                  const unit_price = parseFloat(price) || 0;
+                  if (!description.trim()) return;
+
+                  setAddProductModal(m => m ? { ...m, isSaving: true } : m);
+
+                  try {
+                    // Pre-translate before saving to DB
+                    let description_ar = '';
+                    const trans = await translateSingle(description.trim());
+                    if (trans) description_ar = trans;
+
+                    const res = await fetch('/api/products', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        description: description.trim(),
+                        description_ar,
+                        unit: unit || 'Pc',
+                        unit_price,
+                        item_code: addProductModal.item_code,
+                        supplier_name: addProductModal.supplier_name
+                      }),
+                    });
+                    if (res.ok) {
+                      const { id } = await res.json();
+                      const refreshed = await fetch(`/api/products?_t=${Date.now()}`);
+                      if (refreshed.ok) {
+                        const data = await refreshed.json();
+                        if (Array.isArray(data)) {
+                          setProducts(data);
+                          const newProd = data.find((p: any) => p.id === id);
+                          if (newProd) {
+                            setItems(prev => {
+                              const next = [...prev];
+                              const calcPrice = newProd.unit_price * (1 + markup / 100);
+                              next[rowIndex] = {
+                                ...next[rowIndex],
+                                product_id: newProd.id,
+                                original_price: newProd.unit_price,
+                                description: newProd.description,
+                                description_ar: newProd.description_ar || '',
+                                unit: newProd.unit,
+                                unit_price: calcPrice,
+                                net_price: next[rowIndex].qty * calcPrice,
+                              };
+                              return next;
+                            });
+                          }
+                        }
+                      }
+                      setAddProductModal(null);
+                    } else {
+                      setAddProductModal(m => m ? { ...m, isSaving: false } : m);
+                    }
+                  } catch (e) {
+                    console.error('Failed to add product:', e);
+                    setAddProductModal(m => m ? { ...m, isSaving: false } : m);
+                  }
+                }}
+              >
+                {addProductModal.isSaving ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Saving...
+                  </>
+                ) : 'Save & Add to Quote'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
+      {/* ── Add Customer Modal ────────────────────────────────────────────── */}
       {addCustomerModal && (
-        <AddCustomerModal
-          modal={addCustomerModal}
-          setModal={setAddCustomerModal}
-          onCreated={(newCust, allCustomers) => {
-            setCustomers(allCustomers);
-            setSelectedCustomerId(newCust.id);
-            setSelectedCustomer(newCust);
-            setCustomerSearch(newCust.name);
-          }}
-        />
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-emerald-600 to-teal-600">
+              <div className="flex items-center gap-2">
+                <Users size={18} className="text-white" />
+                <h2 className="text-white font-bold text-base">Add to Customer DB</h2>
+              </div>
+              <button onClick={() => setAddCustomerModal(null)} className="text-white/70 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Customer Name</label>
+                <input
+                  type="text"
+                  autoFocus
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
+                  value={addCustomerModal.name}
+                  onChange={e => setAddCustomerModal({ ...addCustomerModal, name: e.target.value })}
+                  placeholder="Company or Individual Name"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Mobile</label>
+                  <input
+                    type="text"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
+                    value={addCustomerModal.mobile}
+                    onChange={e => setAddCustomerModal({ ...addCustomerModal, mobile: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Contact Person</label>
+                  <input
+                    type="text"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
+                    value={addCustomerModal.contact}
+                    onChange={e => setAddCustomerModal({ ...addCustomerModal, contact: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Email</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
+                  value={addCustomerModal.email}
+                  onChange={e => setAddCustomerModal({ ...addCustomerModal, email: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Address</label>
+                <textarea
+                  rows={2}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-emerald-500 text-sm text-gray-900 bg-white"
+                  value={addCustomerModal.address}
+                  onChange={e => setAddCustomerModal({ ...addCustomerModal, address: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
+              <button
+                onClick={() => setAddCustomerModal(null)}
+                className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-bold flex items-center gap-2"
+                disabled={addCustomerModal.isSaving}
+                onClick={async () => {
+                  if (!addCustomerModal.name.trim()) return alert('Name is required');
+                  setAddCustomerModal(m => m ? { ...m, isSaving: true } : m);
+                  try {
+                    const res = await fetch('/api/customers', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        name: addCustomerModal.name.trim(),
+                        mobile: addCustomerModal.mobile,
+                        address: addCustomerModal.address,
+                        contact: addCustomerModal.contact,
+                        email: addCustomerModal.email
+                      }),
+                    });
+                    if (res.ok) {
+                      const { id } = await res.json();
+                      const refreshed = await fetch(`/api/customers?_t=${Date.now()}`);
+                      if (refreshed.ok) {
+                        const data = await refreshed.json();
+                        if (Array.isArray(data)) {
+                          setCustomers(data);
+                          const newCust = data.find((c: any) => c.id === id);
+                          if (newCust) {
+                            setSelectedCustomerId(newCust.id);
+                            setSelectedCustomer(newCust);
+                            setCustomerSearch(newCust.name);
+                          }
+                        }
+                      }
+                      setAddCustomerModal(null);
+                    } else {
+                      setAddCustomerModal(m => m ? { ...m, isSaving: false } : m);
+                    }
+                  } catch (e) {
+                    setAddCustomerModal(m => m ? { ...m, isSaving: false } : m);
+                  }
+                }}
+              >
+                {addCustomerModal.isSaving ? 'Saving...' : 'Save & Select'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
+      {/* ── Confirm Record Before Export Modal ── */}
       {showExportRecordModal && (
-        <ExportRecordModal
-          onRecordAndExport={handleRecordAndExport}
-          onExportWithoutRecording={handleExportWithoutRecording}
-          onCancel={handleCancelExportPrompt}
-        />
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-4 mb-4">
+              <div className="p-3 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded-xl shrink-0">
+                <Save size={24} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Record Quotation?</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  This quotation has not been recorded to the system yet. Would you like to assign a Quote ID and record it before exporting?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5 mt-6">
+              <button
+                type="button"
+                onClick={handleRecordAndExport}
+                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              >
+                <Save size={16} />
+                Record & Export
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportWithoutRecording}
+                className="w-full py-2.5 px-4 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-medium rounded-xl text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                Export Without Recording
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCancelExportPrompt}
+                className="w-full py-2 px-4 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-xl text-sm transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

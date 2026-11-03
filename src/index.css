@@ -27,8 +27,17 @@
 */
 @import "tailwindcss";
 
-/* Make every `dark:` utility follow the in-app toggle (.dark on <html>) instead of only the OS setting. */
+/* Day/Night mode is controlled ONLY by the moon/sun toggle (".dark" on <html>).
+   Without this line Tailwind v4 bound every `dark:` class to the operating-system setting, so a PC in
+   Windows dark mode got a half-dark app (dark page, dark text on dark header) even in Day mode. */
 @custom-variant dark (&:where(.dark, .dark *));
+
+:root { color-scheme: light; }
+:root.dark { color-scheme: dark; }
+
+/* Hide scrollbars but keep scrolling (used by the top navigation) */
+.scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
 
 @theme {
   --color-*: initial;
@@ -280,10 +289,21 @@
 }
 
 @media print {
-  body {
+  html, body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
     background: white !important;
+    color: #111827 !important;
+    color-scheme: light !important;
+  }
+
+  /* Safety net if the page is printed while still in Night mode: paper is always white */
+  [data-pdf-root], [data-pdf-root] * {
+    color-scheme: light !important;
+  }
+  [data-pdf-root] {
+    background: #ffffff !important;
+    color: #111827 !important;
   }
 
   @page {
@@ -308,14 +328,6 @@
    ============================================================================= */
 
 /* ── Base ─────────────────────────────────────────────────────────────────── */
-html.dark {
-  color-scheme: dark;
-}
-
-html:not(.dark) {
-  color-scheme: light;
-}
-
 .dark body {
   background-color: var(--color-slate-950);
   color: var(--color-slate-100);
@@ -377,7 +389,7 @@ html:not(.dark) {
 }
 
 .dark .text-gray-300 {
-  color: #cbd5e1 !important;
+  color: #3f4f6c !important;
 }
 
 /* ── Hover states ─────────────────────────────────────────────────────────── */
@@ -421,7 +433,8 @@ html:not(.dark) {
   background-color: #1a2133 !important;
 }
 
-.dark tbody tr:hover {
+.dark tbody tr:hover,
+.dark .hover\:bg-gray-50 {
   background-color: #1f2d47 !important;
 }
 
@@ -855,27 +868,176 @@ html:not(.dark) {
     color: #111827 !important;
   }
 }
-/* ── Dark-mode gaps found in the audit (colours that had no override) ──────── */
-.dark .bg-slate-50 { background-color: #151c2c !important; }
-.dark .bg-slate-100 { background-color: #1a2133 !important; }
-.dark .bg-teal-100 { background-color: rgba(20, 184, 166, 0.22) !important; color: #5eead4 !important; }
-.dark .bg-purple-100 { background-color: rgba(168, 85, 247, 0.22) !important; color: #d8b4fe !important; }
-.dark .text-purple-800 { color: #d8b4fe !important; }
-.dark .text-indigo-900 { color: #c7d2fe !important; }
-.dark .text-teal-800 { color: #5eead4 !important; }
-
-/* Respect the OS "reduce motion" setting (framer-motion transitions and CSS animations). */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
+/* =============================================================================
+   NIGHT MODE — readable coloured text, tinted badges and borders (generated)
+   Dark coloured text (…-600 … -900) on dark cards was unreadable; badges with
+   light tints (…-50/-100) stayed bright white. Paper (data-pdf-root) and the
+   analysis sidebar (data-light-panel) are excluded — they always stay light.
+   ============================================================================= */
+@layer base {
+  /* Tailwind v4 draws a plain `border` in currentColor → light lines in Night mode */
+  .dark *, .dark ::before, .dark ::after { border-color: #2a3550; }
+  .dark [data-pdf-root], .dark [data-pdf-root] *, .dark [data-light-panel] *,
+  .dark [data-pdf-root] ::before, .dark [data-pdf-root] ::after { border-color: currentColor; }
 }
 
-/* Visible keyboard focus everywhere that has no custom focus style. */
-:where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-indigo-500, #6366f1);
-  outline-offset: 2px;
+.dark .text-indigo-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-indigo-400) !important; }
+.dark .text-indigo-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-indigo-300) !important; }
+.dark .text-indigo-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-indigo-300) !important; }
+.dark .text-indigo-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-indigo-300) !important; }
+.dark .bg-indigo-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-indigo-500) 12%, transparent) !important; }
+.dark .bg-indigo-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-indigo-500) 22%, transparent) !important; }
+.dark .border-indigo-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-indigo-500) 40%, transparent) !important; }
+.dark .border-indigo-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-indigo-500) 40%, transparent) !important; }
+.dark .border-indigo-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-indigo-500) 40%, transparent) !important; }
+.dark .text-blue-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-blue-400) !important; }
+.dark .text-blue-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-blue-300) !important; }
+.dark .text-blue-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-blue-300) !important; }
+.dark .text-blue-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-blue-300) !important; }
+.dark .bg-blue-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-blue-500) 12%, transparent) !important; }
+.dark .bg-blue-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-blue-500) 22%, transparent) !important; }
+.dark .border-blue-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-blue-500) 40%, transparent) !important; }
+.dark .border-blue-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-blue-500) 40%, transparent) !important; }
+.dark .border-blue-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-blue-500) 40%, transparent) !important; }
+.dark .text-purple-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-purple-400) !important; }
+.dark .text-purple-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-purple-300) !important; }
+.dark .text-purple-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-purple-300) !important; }
+.dark .text-purple-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-purple-300) !important; }
+.dark .bg-purple-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-purple-500) 12%, transparent) !important; }
+.dark .bg-purple-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-purple-500) 22%, transparent) !important; }
+.dark .border-purple-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-purple-500) 40%, transparent) !important; }
+.dark .border-purple-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-purple-500) 40%, transparent) !important; }
+.dark .border-purple-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-purple-500) 40%, transparent) !important; }
+.dark .text-violet-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-violet-400) !important; }
+.dark .text-violet-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-violet-300) !important; }
+.dark .text-violet-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-violet-300) !important; }
+.dark .text-violet-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-violet-300) !important; }
+.dark .bg-violet-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-violet-500) 12%, transparent) !important; }
+.dark .bg-violet-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-violet-500) 22%, transparent) !important; }
+.dark .border-violet-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-violet-500) 40%, transparent) !important; }
+.dark .border-violet-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-violet-500) 40%, transparent) !important; }
+.dark .border-violet-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-violet-500) 40%, transparent) !important; }
+.dark .text-green-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-green-400) !important; }
+.dark .text-green-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-green-300) !important; }
+.dark .text-green-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-green-300) !important; }
+.dark .text-green-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-green-300) !important; }
+.dark .bg-green-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-green-500) 12%, transparent) !important; }
+.dark .bg-green-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-green-500) 22%, transparent) !important; }
+.dark .border-green-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-green-500) 40%, transparent) !important; }
+.dark .border-green-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-green-500) 40%, transparent) !important; }
+.dark .border-green-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-green-500) 40%, transparent) !important; }
+.dark .text-emerald-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-emerald-400) !important; }
+.dark .text-emerald-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-emerald-300) !important; }
+.dark .text-emerald-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-emerald-300) !important; }
+.dark .text-emerald-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-emerald-300) !important; }
+.dark .bg-emerald-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-emerald-500) 12%, transparent) !important; }
+.dark .bg-emerald-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-emerald-500) 22%, transparent) !important; }
+.dark .border-emerald-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-emerald-500) 40%, transparent) !important; }
+.dark .border-emerald-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-emerald-500) 40%, transparent) !important; }
+.dark .border-emerald-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-emerald-500) 40%, transparent) !important; }
+.dark .text-red-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-red-400) !important; }
+.dark .text-red-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-red-300) !important; }
+.dark .text-red-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-red-300) !important; }
+.dark .text-red-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-red-300) !important; }
+.dark .bg-red-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-red-500) 12%, transparent) !important; }
+.dark .bg-red-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-red-500) 22%, transparent) !important; }
+.dark .border-red-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-red-500) 40%, transparent) !important; }
+.dark .border-red-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-red-500) 40%, transparent) !important; }
+.dark .border-red-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-red-500) 40%, transparent) !important; }
+.dark .text-amber-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-amber-400) !important; }
+.dark .text-amber-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-amber-300) !important; }
+.dark .text-amber-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-amber-300) !important; }
+.dark .text-amber-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-amber-300) !important; }
+.dark .bg-amber-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-amber-500) 12%, transparent) !important; }
+.dark .bg-amber-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-amber-500) 22%, transparent) !important; }
+.dark .border-amber-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-amber-500) 40%, transparent) !important; }
+.dark .border-amber-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-amber-500) 40%, transparent) !important; }
+.dark .border-amber-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-amber-500) 40%, transparent) !important; }
+.dark .text-orange-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-orange-400) !important; }
+.dark .text-orange-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-orange-300) !important; }
+.dark .text-orange-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-orange-300) !important; }
+.dark .text-orange-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-orange-300) !important; }
+.dark .bg-orange-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-orange-500) 12%, transparent) !important; }
+.dark .bg-orange-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-orange-500) 22%, transparent) !important; }
+.dark .border-orange-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-orange-500) 40%, transparent) !important; }
+.dark .border-orange-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-orange-500) 40%, transparent) !important; }
+.dark .border-orange-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-orange-500) 40%, transparent) !important; }
+.dark .text-teal-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-teal-400) !important; }
+.dark .text-teal-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-teal-300) !important; }
+.dark .text-teal-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-teal-300) !important; }
+.dark .text-teal-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-teal-300) !important; }
+.dark .bg-teal-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-teal-500) 12%, transparent) !important; }
+.dark .bg-teal-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-teal-500) 22%, transparent) !important; }
+.dark .border-teal-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-teal-500) 40%, transparent) !important; }
+.dark .border-teal-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-teal-500) 40%, transparent) !important; }
+.dark .border-teal-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-teal-500) 40%, transparent) !important; }
+.dark .text-yellow-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-yellow-400) !important; }
+.dark .text-yellow-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-yellow-300) !important; }
+.dark .text-yellow-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-yellow-300) !important; }
+.dark .text-yellow-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-yellow-300) !important; }
+.dark .bg-yellow-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-yellow-500) 12%, transparent) !important; }
+.dark .bg-yellow-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-yellow-500) 22%, transparent) !important; }
+.dark .border-yellow-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-yellow-500) 40%, transparent) !important; }
+.dark .border-yellow-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-yellow-500) 40%, transparent) !important; }
+.dark .border-yellow-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-yellow-500) 40%, transparent) !important; }
+.dark .text-pink-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-pink-400) !important; }
+.dark .text-pink-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-pink-300) !important; }
+.dark .text-pink-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-pink-300) !important; }
+.dark .text-pink-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-pink-300) !important; }
+.dark .bg-pink-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-pink-500) 12%, transparent) !important; }
+.dark .bg-pink-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-pink-500) 22%, transparent) !important; }
+.dark .border-pink-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-pink-500) 40%, transparent) !important; }
+.dark .border-pink-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-pink-500) 40%, transparent) !important; }
+.dark .border-pink-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-pink-500) 40%, transparent) !important; }
+.dark .text-sky-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-sky-400) !important; }
+.dark .text-sky-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-sky-300) !important; }
+.dark .text-sky-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-sky-300) !important; }
+.dark .text-sky-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-sky-300) !important; }
+.dark .bg-sky-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-sky-500) 12%, transparent) !important; }
+.dark .bg-sky-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-sky-500) 22%, transparent) !important; }
+.dark .border-sky-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-sky-500) 40%, transparent) !important; }
+.dark .border-sky-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-sky-500) 40%, transparent) !important; }
+.dark .border-sky-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-sky-500) 40%, transparent) !important; }
+.dark .text-cyan-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-cyan-400) !important; }
+.dark .text-cyan-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-cyan-300) !important; }
+.dark .text-cyan-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-cyan-300) !important; }
+.dark .text-cyan-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-cyan-300) !important; }
+.dark .bg-cyan-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-cyan-500) 12%, transparent) !important; }
+.dark .bg-cyan-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-cyan-500) 22%, transparent) !important; }
+.dark .border-cyan-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-cyan-500) 40%, transparent) !important; }
+.dark .border-cyan-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-cyan-500) 40%, transparent) !important; }
+.dark .border-cyan-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-cyan-500) 40%, transparent) !important; }
+.dark .text-rose-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-rose-400) !important; }
+.dark .text-rose-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-rose-300) !important; }
+.dark .text-rose-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-rose-300) !important; }
+.dark .text-rose-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-rose-300) !important; }
+.dark .bg-rose-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-rose-500) 12%, transparent) !important; }
+.dark .bg-rose-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-rose-500) 22%, transparent) !important; }
+.dark .border-rose-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-rose-500) 40%, transparent) !important; }
+.dark .border-rose-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-rose-500) 40%, transparent) !important; }
+.dark .border-rose-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-rose-500) 40%, transparent) !important; }
+.dark .text-lime-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-lime-400) !important; }
+.dark .text-lime-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-lime-300) !important; }
+.dark .text-lime-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-lime-300) !important; }
+.dark .text-lime-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-lime-300) !important; }
+.dark .bg-lime-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-lime-500) 12%, transparent) !important; }
+.dark .bg-lime-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-lime-500) 22%, transparent) !important; }
+.dark .border-lime-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-lime-500) 40%, transparent) !important; }
+.dark .border-lime-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-lime-500) 40%, transparent) !important; }
+.dark .border-lime-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-lime-500) 40%, transparent) !important; }
+.dark .text-fuchsia-600:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-fuchsia-400) !important; }
+.dark .text-fuchsia-700:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-fuchsia-300) !important; }
+.dark .text-fuchsia-800:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-fuchsia-300) !important; }
+.dark .text-fuchsia-900:not([data-pdf-root] *):not([data-light-panel] *) { color: var(--color-fuchsia-300) !important; }
+.dark .bg-fuchsia-50:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-fuchsia-500) 12%, transparent) !important; }
+.dark .bg-fuchsia-100:not([data-pdf-root] *):not([data-light-panel] *) { background-color: color-mix(in srgb, var(--color-fuchsia-500) 22%, transparent) !important; }
+.dark .border-fuchsia-100:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-fuchsia-500) 40%, transparent) !important; }
+.dark .border-fuchsia-200:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-fuchsia-500) 40%, transparent) !important; }
+.dark .border-fuchsia-300:not([data-pdf-root] *):not([data-light-panel] *) { border-color: color-mix(in srgb, var(--color-fuchsia-500) 40%, transparent) !important; }
+.dark .text-slate-700:not([data-pdf-root] *):not([data-light-panel] *), .dark .text-slate-800:not([data-pdf-root] *):not([data-light-panel] *) { color: #c2cde8 !important; }
+/* Tailwind v4 `divide-*` colours every non-last child (old rule skipped the first row → bright line) */
+.dark .divide-gray-100 > *:not([data-pdf-root] *),
+.dark .divide-gray-200 > *:not([data-pdf-root] *),
+.dark .divide-gray-300 > *:not([data-pdf-root] *) {
+  border-color: #2a3550 !important;
 }

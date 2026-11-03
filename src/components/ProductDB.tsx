@@ -1,7 +1,3 @@
-import { getStoredUser } from '../lib/storage';
-import CsvImportModal from './CsvImportModal';
-import { productKey } from '../lib/importDedupe';
-import { toast, confirmAsync } from '../lib/notify';
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Save, X, Search, Bot, Upload, CheckCircle2, AlertTriangle, Loader2, CheckSquare, Square, Languages } from 'lucide-react';
 
@@ -31,10 +27,7 @@ export default function ProductDB() {
   const [syncData, setSyncData] = useState<{ id?: number; description: string; current_price: number; new_price: number; match_type: 'exact' | 'fuzzy' | 'none' }[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
-  const [showImport, setShowImport] = useState(false);
-  const user = getStoredUser();
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([]);
   const [showAddSupplier, setShowAddSupplier] = useState(false);
@@ -79,10 +72,10 @@ export default function ProductDB() {
         setShowAddSupplier(false);
       } else {
         const d = await res.json();
-        toast(d.error || 'Failed to add supplier');
+        alert(d.error || 'Failed to add supplier');
       }
     } catch (e) {
-      toast('Network error');
+      alert('Network error');
     } finally {
       setIsSavingSupplier(false);
     }
@@ -90,16 +83,12 @@ export default function ProductDB() {
 
   const fetchProducts = async () => {
     try {
-      setLoadError('');
       const res = await fetch('/api/products');
-      if (!res.ok) { setLoadError('Could not load products. Please try again.'); return; }
+      if (!res.ok) return;
       const data = await res.json();
       if (Array.isArray(data)) setProducts(data);
     } catch (e) {
       console.error('Failed to fetch products', e);
-      setLoadError('Network error: could not load products.');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -129,8 +118,9 @@ export default function ProductDB() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!await confirmAsync('Are you sure you want to delete this product?')) return;
-    await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    if (!confirm('Are you sure you want to delete this product?')) return;
+    const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`Could not delete product: ${d.error || `HTTP ${res.status}`}`); }
     fetchProducts();
   };
 
@@ -148,23 +138,13 @@ export default function ProductDB() {
     else setSelectedIds(new Set(currentItems.map(p => p.id)));
   };
   const handleBulkDelete = async () => {
-    if (!await confirmAsync(`Delete ${selectedIds.size} selected product(s)? This cannot be undone.`)) return;
-    // One request / one transaction (the old loop sent a DELETE per row and could stop half-way silently).
-    try {
-      const res = await fetch('/api/products/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: Array.from(selectedIds) }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        toast(body.error || 'Bulk delete failed. Nothing was deleted.');
-        return;
-      }
-    } catch {
-      toast('Network error. Nothing was deleted.');
-      return;
+    if (!confirm(`Delete ${selectedIds.size} selected product(s)? This cannot be undone.`)) return;
+    let failed = 0; let lastErr = '';
+    for (const id of selectedIds) {
+      const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
+      if (!res.ok) { failed++; const d = await res.json().catch(() => ({})); lastErr = d.error || `HTTP ${res.status}`; }
     }
+    if (failed) alert(`${failed} product(s) could not be deleted: ${lastErr}`);
     setSelectedIds(new Set());
     fetchProducts();
   };
@@ -270,29 +250,6 @@ export default function ProductDB() {
           )}
         </div>
       )}
-      {showImport && (
-        <CsvImportModal
-          title="Import products from CSV"
-          templateName="products-template.csv"
-          columns={[
-            { key: 'description', label: 'Description', required: true, aliases: ['name', 'item', 'product', 'item description', 'الوصف'] },
-            { key: 'unit_price', label: 'Unit Price', required: true, aliases: ['price', 'cost', 'unit cost', 'rate', 'السعر'] },
-            { key: 'unit', label: 'Unit', aliases: ['uom', 'measure'] },
-            { key: 'item_code', label: 'Item Code', aliases: ['code', 'sku', 'part number', 'part no', 'part'] },
-            { key: 'supplier_name', label: 'Supplier', aliases: ['supplier name', 'vendor', 'brand'] },
-            { key: 'description_ar', label: 'Description (Arabic)', aliases: ['arabic', 'description ar', 'arabic description'] },
-          ]}
-          sample={[['CAT6 UTP cable 305m', '420.50', 'Roll', 'CAB-C6-305', 'Acme Cables', '']]}
-          existingKeys={new Set(products.map(p => productKey(p)))}
-          keysOf={r => [productKey(r)]}
-          validate={r => { const n = parseFloat(String(r.unit_price).replace(/[^0-9.\-]/g, '')); return Number.isFinite(n) && n >= 0 ? null : 'Price is not a number'; }}
-          toPayload={r => ({ description: r.description, description_ar: r.description_ar, unit: r.unit, unit_price: parseFloat(String(r.unit_price).replace(/[^0-9.\-]/g, '')), item_code: r.item_code, supplier_name: r.supplier_name })}
-          endpoint="/api/products/import"
-          duplicateOptions={{ label: 'If the product already exists:', field: 'onDuplicate', default: 'skip', options: [{ value: 'skip', label: 'Skip it' }, { value: 'update', label: 'Update its price' }] }}
-          onDone={fetchProducts}
-          onClose={() => setShowImport(false)}
-        />
-      )}
       <div className="p-6 border-b border-gray-200 bg-gray-50">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
@@ -326,12 +283,6 @@ export default function ProductDB() {
                 <Bot size={18} /> Smart Update
               </button>
             )}
- <button
-              onClick={() => setShowImport(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap"
-            >
-              <Upload size={18} /> Import CSV
-            </button>
             <button
               onClick={() => { 
                 setIsAdding(true); 
@@ -400,7 +351,7 @@ export default function ProductDB() {
             {filtered.length === 0 && !isAdding && (
               <tr>
                 <td colSpan={9} className="p-8 text-center text-gray-400">
-                  {loading ? 'Loading products…' : loadError ? loadError : search ? `No products match "${search}"` : 'No products found. Add one to get started.'}
+                  {search ? `No products match "${search}"` : 'No products found. Add one to get started.'}
                 </td>
               </tr>
             )}
@@ -450,7 +401,7 @@ export default function ProductDB() {
 
       {/* ── Price Sync Modal ────────────────────────────────────────────── */}
       {showPriceSync && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto">
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-purple-600 to-indigo-600">
@@ -499,10 +450,10 @@ export default function ProductDB() {
                           setSyncData(data);
                         } else {
                           const err = await res.json();
-                          toast(err.error || 'Failed to extract data');
+                          alert(err.error || 'Failed to extract data');
                         }
                       } catch (err) {
-                        toast('Network error during AI extraction');
+                        alert('Network error during AI extraction');
                       } finally {
                         setIsSyncing(false);
                       }
@@ -603,15 +554,15 @@ export default function ProductDB() {
                           body: JSON.stringify({ updates: syncData.filter(d => d.id) })
                         });
                         if (res.ok) {
-                          toast('Prices updated successfully!');
+                          alert('Prices updated successfully!');
                           setShowPriceSync(false);
                           setSyncData([]);
                           fetchProducts();
                         } else {
-                          toast('Failed to apply updates');
+                          alert('Failed to apply updates');
                         }
                       } catch (err) {
-                        toast('Network error during sync');
+                        alert('Network error during sync');
                       } finally {
                         setIsSyncing(false);
                       }
@@ -629,7 +580,7 @@ export default function ProductDB() {
       )}
       {/* ── Product Modal (Add / Edit) ────────────────────────────────────────────── */}
       {(isAdding || isEditing !== null) && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center print:hidden" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             {/* Header */}
             <div className={`px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r ${isAdding ? 'from-indigo-600 to-purple-600' : 'from-blue-600 to-cyan-600'}`}>
@@ -663,7 +614,7 @@ export default function ProductDB() {
                     type="button"
                     onClick={() => handleAutoTranslate(editForm.description || '')}
                     className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 hover:underline"
-                    title="Translate English product name to Arabic" aria-label="Translate English product name to Arabic"
+                    title="Translate English product name to Arabic"
                   >
                     <Languages size={12} /> Translate
                   </button>
