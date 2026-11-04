@@ -1,6 +1,7 @@
 // =============================================================================
 // App.tsx — Root Application Layout
 // =============================================================================
+import { createPortal } from 'react-dom';
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { readJson, clearSessionStorage } from './lib/storage';
@@ -536,9 +537,13 @@ function ProfileDropdown({ user, handleLogout }: { user: any; handleLogout: () =
         )}
       </div>
 
-      {showProfile && <ProfileModal user={user} onClose={() => setShowProfile(false)} />}
-      {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
-      {showSecurity && <SecurityModal onClose={() => setShowSecurity(false)} />}
+      {/* Rendered into <body>: the header is sticky with backdrop-blur, which made `position: fixed` dialogs
+          stick to the header (2FA / devices dialog was cut off at the top of the page). */}
+      {createPortal(<>
+        {showProfile && <ProfileModal user={user} onClose={() => setShowProfile(false)} />}
+        {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
+        {showSecurity && <SecurityModal onClose={() => setShowSecurity(false)} />}
+      </>, document.body)}
     </>
   );
 }
