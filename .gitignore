@@ -139,3 +139,9 @@ e2e/shots/
 
 # Local safety copies made before switching branches
 _pre_merge_backup/
+
+# Internal project docs and test scripts (kept locally, not published)
+/0*_*.md
+/progress.md
+/docs/ai/
+/tests/
