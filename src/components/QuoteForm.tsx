@@ -31,7 +31,7 @@ import { useSearchParams, useLocation } from 'react-router-dom';
 import { Plus, Trash2, Save, Printer, RefreshCw, RotateCcw, Download, FileSpreadsheet, Send, Loader2, ArrowUp, ArrowDown, Copy, Bookmark, BookOpen, Languages, ChevronDown, Search, Bot, GripVertical, AlertTriangle, Users, FileText, StickyNote, X, Lock, Unlock, CheckCircle, Clock } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { localDate, localDatePlusDays, normalizeDate } from '../lib/dates';
-import { getItemRule as sharedGetItemRule, analyzeItem, analyzeItems, refreshItemCost, canSeeCost, clearCostColumns } from '../lib/pricing';
+import { getItemRule as sharedGetItemRule, analyzeItem, analyzeItems, refreshItemCost, canSeeCost, clearCostColumns, ttlProfit } from '../lib/pricing';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
@@ -1813,9 +1813,11 @@ export default function QuoteForm() {
   const discount = totals.discount;
 
   // B.TOTAL / TTL PROFIT — same function as every Excel export (src/lib/pricing.ts).
-  // TTL PROFIT = before discount & VAT, identical to the Excel exports the user verified.
+  // MU = before discount & VAT; TTL PROFIT (totalProfit) = MU − discount — same in sidebar and every Excel export.
   // (PR #5 subtracted the discount here only → sidebar and Excel disagreed. Open decision, see progress.md.)
   const { baseTotal, markupProfit } = analyzeItems(items, muFilters);
+  // TTL PROFIT = MU − discount (the discount comes out of the profit, not only out of the total)
+  const totalProfit = ttlProfit(markupProfit, discount);
 
   useEffect(() => {
     if (discountMode === 'percentage') {
@@ -3074,7 +3076,7 @@ export default function QuoteForm() {
       ['', '', '', '', '', 'SUBTOTAL', subtotal, '', '', '', '', '', 'B.TOTAL', baseTotal],
       ['', '', '', '', '', (discountMode === 'percentage' || discountMode === 'both') && discountRate > 0 ? `DISCOUNT (${discountRate}%)` : 'DISCOUNT', discount],
       ['', '', '', '', '', `VAT (${vatRate}%)`, tax],
-      ['', '', '', '', '', 'TOTAL PACKAGE', grandTotal, '', '', '', '', '', 'TTL PROFIT', markupProfit],
+      ['', '', '', '', '', 'TOTAL PACKAGE', grandTotal, '', '', '', '', '', 'TTL PROFIT', totalProfit],
       [''],
       ['TERMS & CONDITIONS'],
       ...(showNote ? [[noteHeader, note, noteAr]] : []),
@@ -4628,14 +4630,14 @@ export default function QuoteForm() {
                   <span className="font-mono text-green-700">{markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
                 <div className="flex justify-between items-center px-1 text-sm">
-                  <span className="text-gray-600" title="Profit as a share of the sale price (both before discount & VAT, like TTL PROFIT). Markup is profit as a share of cost.">Margin %</span>
-                  <span className="font-mono">{marginPercent(subtotal, markupProfit)}%</span>
+                  <span className="text-gray-600" title="TTL PROFIT as a share of the sale price after discount (VAT excluded).">Margin %</span>
+                  <span className="font-mono">{marginPercent(discountedSubtotal, totalProfit)}%</span>
                 </div>
 
                 <div className="grid grid-cols-2 mt-2 border-2 border-gray-800 rounded overflow-hidden shadow-sm">
                   <div className="bg-white px-2 py-1 flex items-center border-r border-gray-800 text-lg">TTL PROFIT</div>
                   <div className="bg-yellow-400 px-2 py-1 flex items-center justify-center font-mono text-lg">
-                    {markupProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {totalProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                 </div>
               </div>

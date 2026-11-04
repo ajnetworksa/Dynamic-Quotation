@@ -14,7 +14,8 @@
 //   DB    has a database (original) price                  → base = original price
 //   --    nothing known                                     → base 0 (whole sale counts as profit)
 // B.TOTAL    = Σ base totals
-// TTL PROFIT = Σ (net price − base total) over all non-EXCL lines  (before discount & VAT)
+// MU         = Σ (net price − base total) over all non-EXCL lines  (before discount & VAT)
+// TTL PROFIT = MU − discount   (ttlProfit(); the discount is given away from the profit, VAT is not profit)
 // =============================================================================
 
 export type MuFilters = { zeroMarkup: string[]; excluded: string[] };
@@ -89,6 +90,11 @@ export function analyzeItem(item: PricedItemLike, filters: MuFilters): ItemAnaly
   else if (rule === 'DB') unitBase = Number(item.original_price) || 0;
   const total = unitBase * qty;
   return { rule, displayBase: unitBase, displayTotal: total, baseContribution: total, profitContribution: sale - total, manualValue };
+}
+
+/** TTL PROFIT = markup profit minus the discount given to the customer (2026-11-04, user decision). */
+export function ttlProfit(markupProfit: number, discount: any): number {
+  return Math.round((markupProfit - (Number(discount) || 0)) * 100) / 100;
 }
 
 export function analyzeItems(items: PricedItemLike[], filters: MuFilters) {

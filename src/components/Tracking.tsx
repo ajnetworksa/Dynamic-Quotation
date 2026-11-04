@@ -14,7 +14,7 @@ import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import QuoteDiffViewer from './QuoteDiffViewer';
 import { localDate, normalizeDate } from '../lib/dates';
-import { analyzeItem, analyzeItems, normalizeMuFilters, prepareItemsLikeEditor, canSeeCost, clearCostColumns, type MuFilters } from '../lib/pricing';
+import { analyzeItem, analyzeItems, normalizeMuFilters, prepareItemsLikeEditor, ttlProfit, canSeeCost, clearCostColumns, type MuFilters } from '../lib/pricing';
 
 interface Quote {
   id: number;
@@ -344,7 +344,8 @@ export default function Tracking() {
           [] // 13
         ];
 
-        const { baseTotal, markupProfit } = analyzeItems(analysisItems, muFilters);
+        const { baseTotal, markupProfit: muProfit } = analyzeItems(analysisItems, muFilters);
+        const markupProfit = ttlProfit(muProfit, quote.discount); // TTL PROFIT = MU − discount (same as the editor)
 
         const itemsData = [
           ['ITEM', 'DESCRIPTION (EN)', 'DESCRIPTION (AR)', 'QTY', 'UNIT', 'UNIT PRICE', 'NET PRICE', 'ITEM CODE', 'SUPPLIER NAME', '', String(quote.markup || 0), 'Manual', 'BASE', 'TOTAL'], // 14
@@ -851,7 +852,8 @@ export default function Tracking() {
 
         // 4. Item Rows
         // B.TOTAL / TTL PROFIT exactly as in the Quote editor (was: no 'materials' rule, profit from TOTAL PACKAGE incl. VAT)
-        const { baseTotal, markupProfit } = analyzeItems(analysisItems, muFilters);
+        const { baseTotal, markupProfit: muProfit } = analyzeItems(analysisItems, muFilters);
+        const markupProfit = ttlProfit(muProfit, quote.discount); // TTL PROFIT = MU − discount (same as the editor)
         items.forEach((item: any, index: number) => {
           const { displayBase, displayTotal, manualValue: manualVal } = analyzeItem(analysisItems[index], muFilters);
 
