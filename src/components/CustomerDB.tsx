@@ -1,9 +1,10 @@
 import { getStoredUser } from '../lib/storage';
 import { toast, confirmAsync } from '../lib/notify';
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square, Upload } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, Search, UserPlus, CheckSquare, Square, Upload, Download } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import CsvImportModal from './CsvImportModal';
+import { exportToXlsx } from '../lib/exportXlsx';
 import { customerKeys } from '../lib/importDedupe';
 
 interface Customer {
@@ -129,9 +130,13 @@ export default function CustomerDB() {
   const toggleSelect = (id: number) => {
     setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
+  // Header checkbox = this page: ticks / unticks the rows on this page and keeps the rest of the selection
+  const pageAllSelected = () => currentItems.length > 0 && currentItems.every(x => selectedIds.has(x.id));
   const toggleSelectAll = () => {
-    if (selectedIds.size === currentItems.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(currentItems.map(c => c.id)));
+    const next = new Set(selectedIds);
+    if (pageAllSelected()) currentItems.forEach(x => next.delete(x.id));
+    else currentItems.forEach(x => next.add(x.id));
+    setSelectedIds(next);
   };
   const handleBulkDelete = async () => {
     if (!await confirmAsync(`Delete ${selectedIds.size} selected customer(s)? This cannot be undone.`)) return;
@@ -182,6 +187,16 @@ export default function CustomerDB() {
   const safePage = Math.min(currentPage, totalPages);
   const currentItems = filtered.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
+  // Export: the selected customers, or (nothing selected) every customer in the list with the search applied
+  const handleExport = async () => {
+    const list = selectedIds.size ? customers.filter(c => selectedIds.has(c.id)) : filtered;
+    if (!list.length) return toast('Nothing to export.');
+    await exportToXlsx('Customers', 'Customers',
+      [{ header: 'ID', width: 8 }, { header: 'Name', width: 35 }, { header: 'Address', width: 40 }, { header: 'Contact', width: 25 }, { header: 'Mobile', width: 18 }, { header: 'Email', width: 30 }],
+      list.map(c => [c.id, c.name, c.address, c.contact, c.mobile, c.email]));
+    toast(`Exported ${list.length} customer${list.length === 1 ? '' : 's'}.`, 'success');
+  };
+
   return (
     <>
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -191,7 +206,15 @@ export default function CustomerDB() {
           <div className="flex items-center gap-3">
             <span className="text-sm font-bold text-red-700">{selectedIds.size} customer{selectedIds.size !== 1 && 's'} selected</span>
             <button onClick={() => setSelectedIds(new Set())} className="text-xs text-red-400 hover:text-red-600 underline">Clear</button>
+            {selectedIds.size < filtered.length && (
+              <button onClick={() => setSelectedIds(new Set(filtered.map(x => x.id)))} className="text-xs font-semibold text-indigo-600 hover:underline">
+                Select all {filtered.length}{search ? ' matching' : ''} customers
+              </button>
+            )}
           </div>
+          <button onClick={handleExport} className="ml-auto mr-3 flex items-center gap-2 px-4 py-1.5 bg-white border border-gray-300 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-colors">
+            <Download size={15} /> Export {selectedIds.size} Selected
+          </button>
           {(user.role === 'admin' || user.permissions?.canDeleteData) && (
             <button onClick={handleBulkDelete}
               className="flex items-center gap-2 px-4 py-1.5 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 transition-colors">
@@ -252,6 +275,13 @@ export default function CustomerDB() {
               <Upload size={18} /> Import CSV
             </button>
             <button
+              onClick={handleExport}
+              title={selectedIds.size ? `Export the ${selectedIds.size} selected customers to Excel` : 'Export the customers in the list (search applied) to Excel'}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors whitespace-nowrap"
+            >
+              <Download size={18} /> Export
+            </button>
+            <button
               onClick={() => { setIsAdding(true); setEditForm({}); }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap"
             >
@@ -266,8 +296,8 @@ export default function CustomerDB() {
           <thead>
             <tr className="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider">
               <th className="p-4 border-b w-10">
-                <button onClick={toggleSelectAll} className={selectedIds.size === currentItems.length && currentItems.length > 0 ? 'text-indigo-600' : 'text-gray-300 hover:text-indigo-400'}>
-                  {selectedIds.size === currentItems.length && currentItems.length > 0 ? <CheckSquare size={16} /> : <Square size={16} />}
+                <button onClick={toggleSelectAll} className={pageAllSelected() ? 'text-indigo-600' : 'text-gray-300 hover:text-indigo-400'}>
+                  {pageAllSelected() ? <CheckSquare size={16} /> : <Square size={16} />}
                 </button>
               </th>
               <th className="p-4 border-b">ID</th>
