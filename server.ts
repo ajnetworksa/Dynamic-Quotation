@@ -2864,7 +2864,12 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
     // Owner, the original creator (even after "Prepared By" was reassigned), or users who can see all quotes.
     if (!canSeeAll && quote.author_id !== currentUser.id && !isQuoteCreator(req.params.quote_id, currentUser)) {
-      return res.status(403).json({ error: 'Access denied: only the owner/creator of this quote (or a user with "View All Quotes") can delete it.' });
+      // Say WHO may delete it, so the user knows whom to ask (before: a generic message, which confused creators of
+      // old quotes that have no owner or no "Created" entry in the history).
+      const owner = quote.author_id ? (db.prepare('SELECT username FROM users WHERE id = ?').get(quote.author_id) as any)?.username : null;
+      const creatorRow = db.prepare("SELECT actor FROM activity_log WHERE quote_id = ? AND action IN ('Created', 'Draft Created (Autosave)') ORDER BY id ASC LIMIT 1").get(req.params.quote_id) as any;
+      const who = [owner && `owner: ${owner}`, creatorRow?.actor && creatorRow.actor !== owner && `created by: ${creatorRow.actor}`].filter(Boolean).join(', ');
+      return res.status(403).json({ error: `You cannot delete ${req.params.quote_id}: only its owner or creator, or a user with "View All Quotes", can delete it (${who || 'this older quote has no owner or creator recorded'}). Ask an admin to delete it or to set you as "Prepared By".` });
     }
     // SOFT delete: the quote (and its items and history) moves to the Recycle Bin and can be restored.
     // It is purged for good after `recycleBinDays` (Settings) unless pinned, or by an explicit permanent delete.
