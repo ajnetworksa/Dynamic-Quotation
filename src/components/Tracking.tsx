@@ -31,6 +31,7 @@ interface Quote {
   followup_note?: string;
   author_username?: string;
   author_name?: string;
+  created_by?: string | null;
   quote_note?: string;
   lost_reason?: string | null;
   paid_total?: number;
@@ -50,6 +51,9 @@ export default function Tracking() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [creatorFilter, setCreatorFilter] = useState('');
+  // Owner = the user ACCOUNT the quote belongs to (Prepared By). The printed name (author_name, e.g. "Sameh" or
+  // "Eric Laredo") differs in spelling from quote to quote, which showed the same person twice in the filter.
+  const ownerOf = (q: { author_username?: string | null; author_name?: string | null }) => q.author_username || q.author_name || '';
 
   // Date Range
   const [dateFrom, setDateFrom] = useState('');
@@ -1061,7 +1065,7 @@ export default function Tracking() {
   const exportCSV = () => {
     if (filtered.length === 0) return toast('No records to export');
     const header = showCreatedBy
-      ? ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified', 'Created By']
+      ? ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified', 'Prepared By (account)', 'Created By']
       : ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified'];
     // Quote every cell, escape quotes, and neutralise spreadsheet formulas (cells starting with = + - @).
     const cell = (v: any) => {
@@ -1072,7 +1076,7 @@ export default function Tracking() {
     const rows = filtered.map(q => [
       q.quote_id, q.type || 'Quotation', q.status || 'Draft', q.date, q.customer_name || '',
       q.subject || '', q.grand_total, q.updated_at ? new Date(q.updated_at).toLocaleString() : '',
-      ...(showCreatedBy ? [q.author_name || q.author_username || '—'] : [])
+      ...(showCreatedBy ? [ownerOf(q) || '—', q.created_by || '—'] : [])
     ]);
     const csvContent = [header, ...rows].map(r => r.map(cell).join(",")).join("\r\n");
     // UTF-8 BOM so Excel shows Arabic text correctly.
@@ -1091,7 +1095,7 @@ export default function Tracking() {
 
   // Collect unique creator names for the dropdown (only for users who can see creator info)
   const creatorOptions = showCreatedBy
-    ? Array.from(new Set(quotes.map(q => q.author_name || q.author_username).filter(Boolean))).sort() as string[]
+    ? Array.from(new Set(quotes.map(q => ownerOf(q)).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b))) as string[]
     : [];
 
   let filtered = quotes.filter(quote => {
@@ -1121,7 +1125,7 @@ export default function Tracking() {
     const qDay = ymdOf(quote.date);
     const matchDateFrom = !dateFrom || (!!qDay && qDay >= dateFrom);
     const matchDateTo = !dateTo || (!!qDay && qDay <= dateTo);
-    const matchCreator = !creatorFilter || (quote.author_name || quote.author_username) === creatorFilter;
+    const matchCreator = !creatorFilter || ownerOf(quote) === creatorFilter;
     return matchSearch && matchStatus && matchType && matchDateFrom && matchDateTo && matchCreator;
   });
 
@@ -1307,7 +1311,7 @@ export default function Tracking() {
               <th className="p-4 border-b">Subject</th>
               <th className={thClass} onClick={() => handleSort('grand_total')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('grand_total'); } }} aria-sort={sortKey === 'grand_total' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Total Amount <SortIcon col="grand_total" /></th>
               <th className={thClass} onClick={() => handleSort('updated_at')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('updated_at'); } }} aria-sort={sortKey === 'updated_at' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Last Modified <SortIcon col="updated_at" /></th>
-              {showCreatedBy && <th className={thClass} onClick={() => handleSort('author_username')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('author_username'); } }} aria-sort={sortKey === 'author_username' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Created By <SortIcon col="author_username" /></th>}
+              {showCreatedBy && <th className={thClass} onClick={() => handleSort('author_username')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('author_username'); } }} aria-sort={sortKey === 'author_username' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'} title="Owner of the quote (Prepared By). Below it: who created it, when that is someone else.">Prepared By <SortIcon col="author_username" /></th>}
               <th className="p-4 border-b text-right">Actions</th>
             </tr>
           </thead>
@@ -1394,21 +1398,26 @@ export default function Tracking() {
                   </td>
                   {showCreatedBy && (
                     <td className="p-4">
-                      {quote.author_name || quote.author_username ? (
+                      {ownerOf(quote) ? (
+                        <>
                         <button
-                          onClick={e => { e.stopPropagation(); setCreatorFilter(creatorFilter === (quote.author_name || quote.author_username) ? '' : (quote.author_name || quote.author_username || '')); }}
-                          title={`Filter by ${quote.author_name || quote.author_username}`} aria-label={`Filter by ${quote.author_name || quote.author_username}`}
+                          onClick={e => { e.stopPropagation(); setCreatorFilter(creatorFilter === ownerOf(quote) ? '' : ownerOf(quote)); }}
+                          title={`Filter by ${ownerOf(quote)}${quote.author_name && quote.author_name !== ownerOf(quote) ? ` (printed as "${quote.author_name}")` : ''}`} aria-label={`Filter by ${ownerOf(quote)}`}
                           className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                            creatorFilter === (quote.author_name || quote.author_username)
+                            creatorFilter === ownerOf(quote)
                               ? 'bg-indigo-600 text-white border-indigo-600'
                               : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                           }`}
                         >
                           <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 flex items-center justify-center font-bold text-[10px] shrink-0">
-                            {(quote.author_name || quote.author_username || '?').charAt(0).toUpperCase()}
+                            {(ownerOf(quote) || '?').charAt(0).toUpperCase()}
                           </span>
-                          {quote.author_name || quote.author_username}
+                          {ownerOf(quote)}
                         </button>
+                        {quote.created_by && quote.created_by !== quote.author_username && (
+                          <span className="block mt-1 text-[10px] text-gray-500" title="The user who created this quote (can also delete it)">created by {quote.created_by}</span>
+                        )}
+                        </>
                       ) : (
                         <span className="text-xs text-gray-400">—</span>
                       )}
@@ -1639,12 +1648,12 @@ export default function Tracking() {
                   <p className="font-semibold text-gray-900">{timelineQuote.type || 'Quotation'}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] font-bold uppercase text-indigo-400 mb-0.5">Created By</p>
+                  <p className="text-[10px] font-bold uppercase text-indigo-400 mb-0.5">Prepared By (owner)</p>
                   <div className="flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 text-[10px] font-bold flex items-center justify-center shrink-0">
                       {(timelineQuote.author_name || timelineQuote.author_username || '?').charAt(0).toUpperCase()}
                     </span>
-                    <span className="font-semibold text-gray-900">{timelineQuote.author_name || timelineQuote.author_username || 'Unknown'}</span>
+                    <span className="font-semibold text-gray-900">{timelineQuote.author_username || timelineQuote.author_name || 'Unknown'}</span>
                   </div>
                 </div>
                 <div>

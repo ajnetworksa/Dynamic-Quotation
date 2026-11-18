@@ -1776,7 +1776,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 
     const quotes = canSeeAll
       ? db.prepare(`
-          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
+          SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name, (SELECT a.actor FROM activity_log a WHERE a.quote_id = q.quote_id AND a.action IN ('Created', 'Draft Created (Autosave)') ORDER BY a.id LIMIT 1) as created_by,
                  (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
           FROM quotes q 
           LEFT JOIN customers c ON q.customer_id = c.id
@@ -1789,7 +1789,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           const placeholders = visibleAuthorIds.map(() => '?').join(',');
 
           const owned = db.prepare(`
-              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name, (SELECT a.actor FROM activity_log a WHERE a.quote_id = q.quote_id AND a.action IN ('Created', 'Draft Created (Autosave)') ORDER BY a.id LIMIT 1) as created_by,
                      (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
               FROM quotes q 
               LEFT JOIN customers c ON q.customer_id = c.id
@@ -1800,7 +1800,7 @@ app.get('/api/quotes', requireAuth, (req, res) => {
 
           // Also fetch quotes shared with this user
           const all = db.prepare(`
-              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name,
+              SELECT q.*, c.name as customer_name, u.username as author_username, COALESCE(q.author_name, u.name) as author_name, (SELECT a.actor FROM activity_log a WHERE a.quote_id = q.quote_id AND a.action IN ('Created', 'Draft Created (Autosave)') ORDER BY a.id LIMIT 1) as created_by,
                      (SELECT ROUND(COALESCE(SUM(amount), 0), 2) FROM quote_payments WHERE quote_id = q.quote_id) AS paid_total
               FROM quotes q 
               LEFT JOIN customers c ON q.customer_id = c.id
