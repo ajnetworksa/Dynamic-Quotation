@@ -102,7 +102,7 @@ export default function Tracking() {
     return () => { document.body.style.paddingBottom = prev; };
   }, [selectedIds.size > 0, bulkBarHeight]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [sortKey, setSortKey] = useState<SortKey>('quote_id');
+  const [sortKey, setSortKey] = useState<SortKey>('date'); // newest date first by default
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -1065,7 +1065,7 @@ export default function Tracking() {
   const exportCSV = () => {
     if (filtered.length === 0) return toast('No records to export');
     const header = showCreatedBy
-      ? ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified', 'Prepared By (account)', 'Created By']
+      ? ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified', 'Prepared By']
       : ['Document ID', 'Type', 'Status', 'Date', 'Customer', 'Subject', 'Total Amount', 'Last Modified'];
     // Quote every cell, escape quotes, and neutralise spreadsheet formulas (cells starting with = + - @).
     const cell = (v: any) => {
@@ -1076,7 +1076,7 @@ export default function Tracking() {
     const rows = filtered.map(q => [
       q.quote_id, q.type || 'Quotation', q.status || 'Draft', q.date, q.customer_name || '',
       q.subject || '', q.grand_total, q.updated_at ? new Date(q.updated_at).toLocaleString() : '',
-      ...(showCreatedBy ? [ownerOf(q) || '—', q.created_by || '—'] : [])
+      ...(showCreatedBy ? [ownerOf(q) || '—'] : [])
     ]);
     const csvContent = [header, ...rows].map(r => r.map(cell).join(",")).join("\r\n");
     // UTF-8 BOM so Excel shows Arabic text correctly.
@@ -1311,7 +1311,7 @@ export default function Tracking() {
               <th className="p-4 border-b">Subject</th>
               <th className={thClass} onClick={() => handleSort('grand_total')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('grand_total'); } }} aria-sort={sortKey === 'grand_total' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Total Amount <SortIcon col="grand_total" /></th>
               <th className={thClass} onClick={() => handleSort('updated_at')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('updated_at'); } }} aria-sort={sortKey === 'updated_at' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Last Modified <SortIcon col="updated_at" /></th>
-              {showCreatedBy && <th className={thClass} onClick={() => handleSort('author_username')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('author_username'); } }} aria-sort={sortKey === 'author_username' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'} title="Owner of the quote (Prepared By). Below it: who created it, when that is someone else.">Prepared By <SortIcon col="author_username" /></th>}
+              {showCreatedBy && <th className={thClass} onClick={() => handleSort('author_username')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort('author_username'); } }} aria-sort={sortKey === 'author_username' && sortDir ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>Prepared By <SortIcon col="author_username" /></th>}
               <th className="p-4 border-b text-right">Actions</th>
             </tr>
           </thead>
@@ -1414,9 +1414,6 @@ export default function Tracking() {
                           </span>
                           {ownerOf(quote)}
                         </button>
-                        {quote.created_by && quote.created_by !== quote.author_username && (
-                          <span className="block mt-1 text-[10px] text-gray-500" title="The user who created this quote (can also delete it)">created by {quote.created_by}</span>
-                        )}
                         </>
                       ) : (
                         <span className="text-xs text-gray-400">—</span>
@@ -1480,7 +1477,7 @@ export default function Tracking() {
                               const delRes = await fetch(`/api/quotes/${encodeURIComponent(quote.quote_id)}`, { method: 'DELETE' });
                               if (!delRes.ok) {
                                 const errData = await delRes.json().catch(() => ({}));
-                                toast(`Could not delete ${quote.quote_id}: ${errData.error || `HTTP ${delRes.status}`}`);
+                                toast(errData.error || `Could not delete ${quote.quote_id}.`);
                               }
                             } catch (err: any) {
                               toast(`Network error while deleting: ${err?.message || err}`);
@@ -1648,7 +1645,7 @@ export default function Tracking() {
                   <p className="font-semibold text-gray-900">{timelineQuote.type || 'Quotation'}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] font-bold uppercase text-indigo-400 mb-0.5">Prepared By (owner)</p>
+                  <p className="text-[10px] font-bold uppercase text-indigo-400 mb-0.5">Prepared By</p>
                   <div className="flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-200 text-indigo-800 text-[10px] font-bold flex items-center justify-center shrink-0">
                       {(timelineQuote.author_name || timelineQuote.author_username || '?').charAt(0).toUpperCase()}

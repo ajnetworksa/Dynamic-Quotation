@@ -815,7 +815,7 @@ const requirePermission = (perm: string) => (req: express.Request, res: express.
   const user = (req as any).user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!hasPermission(user, perm)) {
-    return res.status(403).json({ error: `Forbidden: Missing ${perm} permission` });
+    return res.status(403).json({ error: "You don't have access to this." });
   }
   next();
 };
@@ -1854,7 +1854,7 @@ app.get('/api/quotes/:quote_id', requireAuth, (req, res) => {
 
   // Ownership / visibility check
   if (!isQuoteVisibleToUser(quote, currentUser)) {
-    return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
+    return res.status(403).json({ error: "You can't open this quote." });
   }
 
   const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id);
@@ -1878,7 +1878,7 @@ const quotePdfHandler = async (req: express.Request, res: express.Response) => {
 
     // Ownership / visibility check
     if (!isQuoteVisibleToUser(quote, currentUser)) {
-      return res.status(403).json({ error: 'Access denied: you do not have permission to view this quotation.' });
+      return res.status(403).json({ error: "You can't open this quote." });
     }
 
     const items = db.prepare('SELECT * FROM quote_items WHERE quote_id = ?').all(req.params.quote_id) as any[];
@@ -2655,9 +2655,9 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
 
         if (!canEditAsShared) {
           if (isAllowedAuthor) {
-            return res.status(403).json({ error: 'View-only access: You have permission to view this quotation, but need "Edit Shared Quotes" permission to save changes.' });
+            return res.status(403).json({ error: "You can view this quote but you can't save changes to it." });
           }
-          return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
+          return res.status(403).json({ error: "You can't edit this quote." });
         }
       }
     }
@@ -2670,7 +2670,7 @@ app.post('/api/quotes', requireAuth, validate(QuoteSchema), (req, res) => {
     // Convert to Invoice: only users with canConvertInvoice may turn a Quotation into a Tax Invoice
     if (type === 'Tax Invoice' && !hasPermission(currentUser, 'canConvertInvoice')
         && existing?.type !== 'Tax Invoice' && revSource?.type !== 'Tax Invoice') {
-      return res.status(403).json({ error: 'You do not have the "Convert to Invoice" permission.' });
+      return res.status(403).json({ error: "You can't convert quotes to invoices." });
     }
     // Sharing: users without Share / Edit Shared permission cannot change who a quote is shared with
     // (the existing sharing is kept unchanged instead of failing the save)
@@ -2864,12 +2864,8 @@ app.delete('/api/quotes/:quote_id', requireAuth, requirePermission('canDeleteDat
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
     // Owner, the original creator (even after "Prepared By" was reassigned), or users who can see all quotes.
     if (!canSeeAll && quote.author_id !== currentUser.id && !isQuoteCreator(req.params.quote_id, currentUser)) {
-      // Say WHO may delete it, so the user knows whom to ask (before: a generic message, which confused creators of
-      // old quotes that have no owner or no "Created" entry in the history).
       const owner = quote.author_id ? (db.prepare('SELECT username FROM users WHERE id = ?').get(quote.author_id) as any)?.username : null;
-      const creatorRow = db.prepare("SELECT actor FROM activity_log WHERE quote_id = ? AND action IN ('Created', 'Draft Created (Autosave)') ORDER BY id ASC LIMIT 1").get(req.params.quote_id) as any;
-      const who = [owner && `owner: ${owner}`, creatorRow?.actor && creatorRow.actor !== owner && `created by: ${creatorRow.actor}`].filter(Boolean).join(', ');
-      return res.status(403).json({ error: `You cannot delete ${req.params.quote_id}: only its owner or creator, or a user with "View All Quotes", can delete it (${who || 'this older quote has no owner or creator recorded'}). Ask an admin to delete it or to set you as "Prepared By".` });
+      return res.status(403).json({ error: `You can't delete ${req.params.quote_id}.${owner ? ` Owner: ${owner}.` : ''}` });
     }
     // SOFT delete: the quote (and its items and history) moves to the Recycle Bin and can be restored.
     // It is purged for good after `recycleBinDays` (Settings) unless pinned, or by an explicit permanent delete.
@@ -3091,7 +3087,7 @@ app.get('/api/quotes/:quote_id/recurring', requireAuth, (req, res) => {
 app.post('/api/quotes/:quote_id/recurring', requireAuth, validate(RecurringSchema), (req, res) => {
   const q = db.prepare('SELECT quote_id, author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(req.params.quote_id) as any;
   if (!q) return res.status(404).json({ error: 'Quote not found' });
-  if (!canEditQuote(q, (req as any).user)) return res.status(403).json({ error: 'You do not have permission to change this quote.' });
+  if (!canEditQuote(q, (req as any).user)) return res.status(403).json({ error: "You can't change this quote." });
   const { frequency, start_date, end_date } = req.body;
   if (end_date && end_date < start_date) return res.status(400).json({ error: 'The end date is before the start date.' });
   const info = db.prepare('INSERT INTO recurring_schedules (source_quote_id, frequency, anchor_day, next_run, end_date, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -3153,7 +3149,7 @@ app.delete('/api/quotes/:quote_id/payments/:id', requireAuth, (req, res) => {
 // ── Audit log viewer ─────────────────────────────────────────────────────────
 const requireAuditAccess = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const u = (req as any).user;
-  return (u.role === 'admin' || u.permissions?.canViewAuditLog) ? next() : res.status(403).json({ error: 'Access denied: audit log permission required.' });
+  return (u.role === 'admin' || u.permissions?.canViewAuditLog) ? next() : res.status(403).json({ error: "You don't have access to this." });
 };
 app.get('/api/audit-log', requireAuth, requireAuditAccess, (req, res) => {
   const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
@@ -3182,7 +3178,7 @@ setInterval(pruneAuditLog, 24 * 60 * 60 * 1000);
 // ── Recycle Bin ──────────────────────────────────────────────────────────────
 const canUseRecycleBin = (user: any) => user.role === 'admin' || !!user.permissions?.canManageRecycleBin;
 const requireRecycleBin = (req: express.Request, res: express.Response, next: express.NextFunction) =>
-  canUseRecycleBin((req as any).user) ? next() : res.status(403).json({ error: 'Access denied: Recycle Bin permission required.' });
+  canUseRecycleBin((req as any).user) ? next() : res.status(403).json({ error: "You don't have access to this." });
 
 const purgeQuote = (quoteId: string) => db.transaction(() => {
   db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quoteId);
@@ -3276,7 +3272,7 @@ app.get('/api/quotes/:quote_id/timeline', requireAuth, (req, res) => {
     // First, check if they are even allowed to view history
     const canViewHistory = currentUser.role === 'admin' || !!currentUser.permissions?.canViewHistory;
     if (!canViewHistory) {
-      return res.status(403).json({ error: 'Access denied: You do not have permission to view quote history.' });
+      return res.status(403).json({ error: "You don't have access to this quote's history." });
     }
 
     const quote = db.prepare(`
@@ -3315,13 +3311,13 @@ app.post('/api/quotes/:quote_id/undo/:log_id', requireAuth, (req, res) => {
 
     const canUndo = currentUser.role === 'admin' || !!currentUser.permissions?.canUndoQuote;
     if (!canUndo) {
-      return res.status(403).json({ error: 'Access denied: you do not have permission to undo timeline actions.' });
+      return res.status(403).json({ error: "You can't roll back quotes." });
     }
 
     const existing = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ? AND deleted_at IS NULL').get(quote_id) as any;
     if (!existing) return res.status(404).json({ error: 'Quote not found' });
     if (!canEditQuote(existing, currentUser)) {
-      return res.status(403).json({ error: 'Access denied: you do not have permission to edit this quotation.' });
+      return res.status(403).json({ error: "You can't edit this quote." });
     }
 
     const logEntry = db.prepare('SELECT previous_state, timestamp, actor FROM activity_log WHERE id = ? AND quote_id = ?').get(log_id, quote_id) as any;
@@ -3397,7 +3393,7 @@ app.patch('/api/quotes/bulk-status', requireAuth, validate(BulkStatusSchema), (r
     for (const id of ids) {
       const row = lookup.get(id) as any;
       if (row && !canEditQuote(row, currentUser)) {
-        return res.status(403).json({ error: `You do not have permission to change quote ${id}.` });
+        return res.status(403).json({ error: `You can't change ${id}.` });
       }
     }
     db.transaction(() => {
@@ -3433,7 +3429,7 @@ const handleSingleQuoteStatus = (req: express.Request, res: express.Response) =>
     if (!existing) return res.status(404).json({ error: 'Quote not found' });
     // SECURITY: changing the status needs EDIT rights (a view-only share is not enough).
     if (!canEditQuote(existing, (req as any).user)) {
-      return res.status(403).json({ error: 'You do not have permission to change this quote.' });
+      return res.status(403).json({ error: "You can't change this quote." });
     }
     const targetQuoteId = existing.quote_id;
 
@@ -3457,7 +3453,7 @@ app.patch('/api/quotes/:quote_id/followup', requireAuth, validate(FollowupSchema
     const row = db.prepare('SELECT author_id, shared_with FROM quotes WHERE quote_id = ?').get(req.params.quote_id) as any;
     if (!row) return res.status(404).json({ error: 'Quote not found' });
     if (!canEditQuote(row, (req as any).user)) {
-      return res.status(403).json({ error: 'You do not have permission to change this quote.' });
+      return res.status(403).json({ error: "You can't change this quote." });
     }
     db.prepare('UPDATE quotes SET followup_date = ?, followup_note = ? WHERE quote_id = ?').run(followup_date || null, followup_note || null, req.params.quote_id);
     res.json({ success: true });
@@ -4076,7 +4072,7 @@ app.get('/api/settings/:key', requireAuth, (req, res) => {
   const key = req.params.key;
 
   if (sensitiveKeys.includes(key) && !hasPermission((req as any).user, 'canManageSettings')) {
-    return res.status(403).json({ error: 'Forbidden: Access to sensitive settings is restricted.' });
+    return res.status(403).json({ error: "You don't have access to this." });
   }
 
   try {

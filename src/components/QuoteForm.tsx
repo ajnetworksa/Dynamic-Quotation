@@ -1384,11 +1384,14 @@ export default function QuoteForm() {
 
       // Update search field if customer found
       const c = customersList.find(cust => cust.id === custId);
+      // Always replace the customer of the previously opened quote (a quote saved without a customer
+      // used to show the customer of the quote opened before it)
       if (c) {
         setSelectedCustomer(c);
         setCustomerSearch(c.name);
-      } else if (data.customer_name) {
-        setCustomerSearch(data.customer_name);
+      } else {
+        setSelectedCustomer(null);
+        setCustomerSearch(data.customer_name || '');
       }
 
       setSubject(pick(parsedDraft?.subject, data.subject, ''));
@@ -2276,6 +2279,11 @@ export default function QuoteForm() {
     setSearchParams({});
     setDate(localDate());
     setStatus('Draft');
+    // A duplicate is a NEW quote of the person making it — it must not keep the original's owner / sharing
+    // (that is how some quotes made by eric or saud ended up under sameh's name)
+    setAuthorId(null);
+    setAuthorName(user.name || user.username);
+    setSharedWith({ users: [], groups: [], canEditUsers: [], canEditGroups: [] });
     const exp = new Date();
     exp.setDate(exp.getDate() + 30);
     setExpiryDate(localDate(exp));
