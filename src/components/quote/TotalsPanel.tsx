@@ -24,7 +24,8 @@ interface Props {
   themeColors: { totalsBg?: string } & Record<string, any>;
 }
 
-export const CURRENCIES = ['SAR', 'AED', 'QAR', 'KWD', 'BHD', 'OMR', 'EGP', 'JOD', 'USD', 'EUR', 'GBP'];
+// Only Saudi Riyal is used (all quotes are SAR); the currency picker was removed.
+export const CURRENCIES = ['SAR'];
 
 /** The boxed SUBTOTAL / DISCOUNT / CURRENCY / VAT / TOTAL PACKAGE block of a quote. Purely presentational. */
 export default function TotalsPanel({
@@ -143,17 +144,6 @@ export default function TotalsPanel({
             <span>{discount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
         </div>
-      </div>
-      <div className="print:hidden flex items-center justify-between border-b border-gray-300 p-2 text-sm">
-        <label htmlFor="quote-currency" className="font-bold">CURRENCY</label>
-        <select
-          id="quote-currency"
-          value={currency}
-          onChange={e => setCurrency(e.target.value)}
-          className="border border-gray-300 rounded px-1.5 py-0.5 bg-white font-mono"
-        >
-          {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
       </div>
       <div className={`grid grid-cols-[auto_1fr] md:grid-cols-2 border-b border-gray-300 p-2 pt-0 pb-3 text-base items-center hover:bg-gray-50 transition-colors group ${!vatRate ? 'print:hidden' : ''}`}>
         <div className="font-bold flex items-center whitespace-nowrap">
